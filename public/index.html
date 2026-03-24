@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ragas Evaluator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #818cf8, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    header p {
+      color: #94a3b8;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #a5b4fc;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.8rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      margin-bottom: 0.35rem;
+      font-weight: 500;
+    }
+
+    textarea, input[type="text"] {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.75rem;
+      color: #e2e8f0;
+      font-family: inherit;
+      font-size: 0.9rem;
+      resize: vertical;
+      margin-bottom: 1rem;
+      transition: border-color 0.2s;
+    }
+
+    textarea:focus, input[type="text"]:focus {
+      outline: none;
+      border-color: #818cf8;
+    }
+
+    textarea { min-height: 80px; }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.5rem;
+    }
+
+    .metric-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.5rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 0.85rem;
+    }
+
+    .metric-item:hover { background: #334155; }
+
+    .metric-item input[type="checkbox"] {
+      accent-color: #818cf8;
+      width: 16px;
+      height: 16px;
+    }
+
+    .metric-item span { color: #cbd5e1; }
+
+    .select-btns {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .select-btns button {
+      background: none;
+      border: none;
+      color: #818cf8;
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    .select-btns button:hover { color: #a5b4fc; }
+
+    .category-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 0.75rem;
+      margin-bottom: 0.25rem;
+      grid-column: 1 / -1;
+    }
+
+    .btn-primary {
+      width: 100%;
+      padding: 0.85rem;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.5rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .results-table th, .results-table td {
+      text-align: left;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid #334155;
+      font-size: 0.9rem;
+    }
+
+    .results-table th {
+      color: #94a3b8;
+      font-weight: 500;
+      font-size: 0.8rem;
+    }
+
+    .results-table td:last-child {
+      text-align: right;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-weight: 600;
+    }
+
+    .score-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      justify-content: flex-end;
+    }
+
+    .bar-track {
+      width: 80px;
+      height: 6px;
+      background: #334155;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .error-msg {
+      background: #3b1a1a;
+      border: 1px solid #7f1d1d;
+      color: #fca5a5;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    .status-text {
+      text-align: center;
+      color: #94a3b8;
+      padding: 1rem;
+      font-size: 0.9rem;
+    }
+
+    .context-hint {
+      font-size: 0.75rem;
+      color: #64748b;
+      margin-top: -0.75rem;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Ragas Evaluator</h1>
+      <p>Evaluate RAG pipeline quality with Ragas metrics</p>
+    </header>
+
+    <div class="card">
+      <h2>Input</h2>
+      <label for="question">Question</label>
+      <input type="text" id="question" placeholder="e.g. Where is the Eiffel Tower located?">
+
+      <label for="answer">Answer</label>
+      <textarea id="answer" placeholder="e.g. The Eiffel Tower is located in Paris, France."></textarea>
+
+      <label for="contexts">Retrieved Contexts</label>
+      <textarea id="contexts" rows="4" placeholder="Paste retrieved context passages, separated by ||"></textarea>
+      <p class="context-hint">Separate multiple contexts with <strong>||</strong></p>
+    </div>
+
+    <div class="card">
+      <h2>Metrics</h2>
+      <div class="select-btns">
+        <button onclick="selectAll()">Select all</button>
+        <button onclick="selectNone()">Clear all</button>
+        <button onclick="selectRAG()">RAG only</button>
+      </div>
+      <div class="metrics-grid" id="metrics-grid"></div>
+    </div>
+
+    <button class="btn-primary" id="run-btn" onclick="runEvaluation()">
+      Run Evaluation
+    </button>
+
+    <div class="card" id="results-card" style="display:none; margin-top:1.5rem;">
+      <h2>Results</h2>
+      <div id="results-body"></div>
+    </div>
+  </div>
+
+  <script>
+    const METRICS = {
+      'RAG': [
+        'faithfulness', 'answer_relevancy', 'context_precision',
+        'context_recall', 'context_entities_recall', 'noise_sensitivity'
+      ],
+      'NL Comparison': [
+        'factual_correctness', 'semantic_similarity', 'non_llm_string_similarity',
+        'bleu_score', 'rouge_score', 'chrf_score', 'exact_match', 'string_presence'
+      ],
+      'General Purpose': [
+        'aspect_critic', 'rubrics_score', 'summarization_score'
+      ],
+      'NVIDIA': [
+        'answer_accuracy', 'context_relevance', 'response_groundedness'
+      ]
+    };
+
+    const RAG_METRICS = METRICS['RAG'];
+
+    function buildMetricsGrid() {
+      const grid = document.getElementById('metrics-grid');
+      for (const [category, metrics] of Object.entries(METRICS)) {
+        const catLabel = document.createElement('div');
+        catLabel.className = 'category-label';
+        catLabel.textContent = category;
+        grid.appendChild(catLabel);
+        for (const m of metrics) {
+          const label = document.createElement('label');
+          label.className = 'metric-item';
+          const isRAG = RAG_METRICS.includes(m);
+          label.innerHTML = `<input type="checkbox" value="${m}" ${isRAG ? 'checked' : ''}><span>${m.replace(/_/g, ' ')}</span>`;
+          grid.appendChild(label);
+        }
+      }
+    }
+
+    function getCheckedMetrics() {
+      return [...document.querySelectorAll('.metrics-grid input:checked')].map(c => c.value);
+    }
+
+    function selectAll() {
+      document.querySelectorAll('.metrics-grid input').forEach(c => c.checked = true);
+    }
+    function selectNone() {
+      document.querySelectorAll('.metrics-grid input').forEach(c => c.checked = false);
+    }
+    function selectRAG() {
+      document.querySelectorAll('.metrics-grid input').forEach(c => {
+        c.checked = RAG_METRICS.includes(c.value);
+      });
+    }
+
+    function getScoreColor(val) {
+      if (val === null || val === undefined) return '#64748b';
+      if (val >= 0.7) return '#4ade80';
+      if (val >= 0.4) return '#fbbf24';
+      return '#f87171';
+    }
+
+    async function runEvaluation() {
+      const question = document.getElementById('question').value.trim();
+      const answer = document.getElementById('answer').value.trim();
+      const contextsRaw = document.getElementById('contexts').value.trim();
+      const metrics = getCheckedMetrics();
+
+      if (!question || !answer || !contextsRaw) {
+        alert('Please fill in all fields.');
+        return;
+      }
+      if (metrics.length === 0) {
+        alert('Please select at least one metric.');
+        return;
+      }
+
+      const contexts = contextsRaw.split('||').map(s => s.trim()).filter(Boolean);
+
+      const btn = document.getElementById('run-btn');
+      const resultsCard = document.getElementById('results-card');
+      const resultsBody = document.getElementById('results-body');
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Evaluating...';
+      resultsCard.style.display = 'block';
+      resultsBody.innerHTML = '<p class="status-text">Running evaluation, this may take a minute...</p>';
+
+      try {
+        const resp = await fetch('/api/evaluate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question,
+            answer,
+            retrieve_context: contexts,
+            metrics
+          })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.text();
+          throw new Error(err || `HTTP ${resp.status}`);
+        }
+
+        const data = await resp.json();
+
+        let rows = '';
+        for (const m of metrics) {
+          const val = data[m];
+          const display = val !== null && val !== undefined ? parseFloat(val).toFixed(4) : 'N/A';
+          const pct = val !== null && val !== undefined ? Math.round(val * 100) : 0;
+          const color = getScoreColor(val);
+          rows += `<tr>
+            <td>${m.replace(/_/g, ' ')}</td>
+            <td><div class="score-bar">
+              <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+              <span style="color:${color}">${display}</span>
+            </div></td>
+          </tr>`;
+        }
+
+        resultsBody.innerHTML = `<table class="results-table">
+          <thead><tr><th>Metric</th><th style="text-align:right">Score</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+
+      } catch (e) {
+        resultsBody.innerHTML = `<div class="error-msg">Error: ${e.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run Evaluation';
+      }
+    }
+
+    buildMetricsGrid();
+  </script>
+</body>
+</html>
