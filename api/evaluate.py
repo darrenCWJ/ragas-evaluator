@@ -1,10 +1,13 @@
-import argparse
 import asyncio
-import csv
-from datetime import datetime
-from pathlib import Path
+import json
+import os
+import sys
 
-from dotenv import load_dotenv
+from http.server import BaseHTTPRequestHandler
+
+# Add project root to path so ragas_test package is importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from openai import AsyncOpenAI
 from ragas.llms import llm_factory
 from ragas.embeddings.base import embedding_factory
@@ -32,46 +35,17 @@ from ragas_test import (
     response_groundedness,
 )
 
-load_dotenv()
-
-BASE_DIR = Path(__file__).parent
-INPUT_DIR = BASE_DIR / "input"
-OUTPUT_DIR = BASE_DIR / "output"
-
-CONTEXT_SEPARATOR = "||"
-
-# Metrics that work with the CSV format (Question, Answer, Retrieve Context)
-# Grouped by what parameters they need:
-#   rag: question, answer, contexts
-#   nlp: answer, reference (uses answer as both response and reference for demo)
-#   context_only: question, contexts
-
 ALL_METRICS = [
-    "faithfulness",
-    "answer_relevancy",
-    "context_precision",
-    "context_recall",
-    "context_entities_recall",
-    "noise_sensitivity",
-    "factual_correctness",
-    "semantic_similarity",
-    "non_llm_string_similarity",
-    "bleu_score",
-    "rouge_score",
-    "chrf_score",
-    "exact_match",
-    "string_presence",
-    "summarization_score",
-    "aspect_critic",
-    "rubrics_score",
-    "answer_accuracy",
-    "context_relevance",
-    "response_groundedness",
+    "faithfulness", "answer_relevancy", "context_precision",
+    "context_recall", "context_entities_recall", "noise_sensitivity",
+    "factual_correctness", "semantic_similarity", "non_llm_string_similarity",
+    "bleu_score", "rouge_score", "chrf_score", "exact_match", "string_presence",
+    "summarization_score", "aspect_critic", "rubrics_score",
+    "answer_accuracy", "context_relevance", "response_groundedness",
 ]
 
 
-def setup_scorers(metrics: list[str] = None):
-    selected = metrics or ALL_METRICS
+def _setup_scorers(selected):
     client = AsyncOpenAI()
     llm = llm_factory("gpt-4o-mini", client=client, max_tokens=16384)
     embeddings = embedding_factory("openai", model="text-embedding-3-small", client=client)
@@ -118,13 +92,11 @@ def setup_scorers(metrics: list[str] = None):
             scorers[m] = context_relevance.create_scorer(llm)
         elif m == "response_groundedness":
             scorers[m] = response_groundedness.create_scorer(llm)
-
     return scorers
 
 
-async def evaluate_row(scorers, question: str, answer: str, contexts: list[str]) -> dict:
+async def _evaluate(scorers, question, answer, contexts):
     results = {}
-
     for name, scorer in scorers.items():
         try:
             if name == "faithfulness":
@@ -168,118 +140,51 @@ async def evaluate_row(scorers, question: str, answer: str, contexts: list[str])
             elif name == "response_groundedness":
                 results[name] = await response_groundedness.score(scorer, answer, contexts)
         except Exception as e:
-            print(f"  Warning: {name} failed: {e}")
             results[name] = None
-
     return results
 
 
-def parse_contexts(raw: str) -> list[str]:
-    return [c.strip() for c in raw.split(CONTEXT_SEPARATOR) if c.strip()]
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
 
+        try:
+            data = json.loads(body)
+            question = data["question"]
+            answer = data["answer"]
+            contexts = data["retrieve_context"]
+            metrics = data.get("metrics", ALL_METRICS)
 
-async def process_csv(input_file: str, metrics: list[str] = None):
-    input_path = INPUT_DIR / input_file
-    if not input_path.exists():
-        print(f"Error: {input_path} not found")
-        return
+            # Filter to valid metrics
+            selected = [m for m in metrics if m in ALL_METRICS]
+            if not selected:
+                self._send_json(400, {"error": "No valid metrics selected"})
+                return
 
-    selected = metrics or ALL_METRICS
-    scorers = setup_scorers(selected)
-    rows = []
+            scorers = _setup_scorers(selected)
+            results = asyncio.run(_evaluate(scorers, question, answer, contexts))
 
-    with open(input_path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
+            self._send_json(200, {"question": question, "answer": answer, **results})
 
-    results = []
-    for i, row in enumerate(rows):
-        question = row["Question"]
-        answer = row["Answer"]
-        contexts = parse_contexts(row["Retrieve Context"])
+        except KeyError as e:
+            self._send_json(400, {"error": f"Missing field: {e}"})
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
 
-        print(f"Evaluating row {i + 1}/{len(rows)}: {question[:50]}...")
-        scores = await evaluate_row(scorers, question, answer, contexts)
-        results.append({
-            "Question": question,
-            "Answer": answer,
-            "Retrieve Context": row["Retrieve Context"],
-            **scores,
-        })
+    def do_GET(self):
+        self._send_json(200, {"metrics": ALL_METRICS})
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stem = Path(input_file).stem
-    output_path = OUTPUT_DIR / f"{stem}_results_{timestamp}.csv"
+    def _send_json(self, status, data):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
 
-    fieldnames = ["Question", "Answer", "Retrieve Context"] + list(scorers.keys())
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-
-    print(f"Results saved to {output_path}")
-
-
-def run_api(host: str = "0.0.0.0", port: int = 8000):
-    try:
-        import uvicorn
-        from fastapi import FastAPI
-        from pydantic import BaseModel
-    except ImportError:
-        print("API mode requires fastapi and uvicorn.")
-        print("Install with: pip install fastapi uvicorn")
-        return
-
-    app = FastAPI(title="Ragas Evaluator")
-    scorers = setup_scorers()
-
-    class EvalRequest(BaseModel):
-        question: str
-        answer: str
-        retrieve_context: list[str]
-        metrics: list[str] | None = None
-
-    @app.post("/evaluate")
-    async def evaluate(req: EvalRequest):
-        selected_scorers = scorers
-        if req.metrics:
-            selected_scorers = {k: v for k, v in scorers.items() if k in req.metrics}
-        scores = await evaluate_row(selected_scorers, req.question, req.answer, req.retrieve_context)
-        return {
-            "question": req.question,
-            "answer": req.answer,
-            **scores,
-        }
-
-    @app.get("/metrics")
-    async def list_metrics():
-        return {"available_metrics": ALL_METRICS}
-
-    uvicorn.run(app, host=host, port=port)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ragas Evaluation Tool")
-    subparsers = parser.add_subparsers(dest="mode", required=True)
-
-    csv_parser = subparsers.add_parser("csv", help="Evaluate from a CSV file in input/")
-    csv_parser.add_argument("file", help="CSV filename in the input/ directory")
-    csv_parser.add_argument(
-        "--metrics",
-        nargs="+",
-        choices=ALL_METRICS,
-        default=None,
-        help="Specific metrics to run (default: all)",
-    )
-
-    api_parser = subparsers.add_parser("api", help="Run as a REST API server")
-    api_parser.add_argument("--host", default="0.0.0.0")
-    api_parser.add_argument("--port", type=int, default=8000)
-
-    args = parser.parse_args()
-
-    if args.mode == "csv":
-        asyncio.run(process_csv(args.file, getattr(args, "metrics", None)))
-    elif args.mode == "api":
-        run_api(args.host, args.port)
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
