@@ -242,6 +242,55 @@
       margin-top: -0.75rem;
       margin-bottom: 1rem;
     }
+
+    .help-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #334155;
+      color: #94a3b8;
+      font-size: 0.65rem;
+      font-weight: 700;
+      cursor: help;
+      position: relative;
+      flex-shrink: 0;
+      margin-left: auto;
+    }
+
+    .help-icon:hover { background: #475569; color: #e2e8f0; }
+
+    .help-icon .tooltip {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      right: -8px;
+      width: 260px;
+      background: #1e293b;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      padding: 0.6rem 0.75rem;
+      font-size: 0.78rem;
+      font-weight: 400;
+      color: #cbd5e1;
+      line-height: 1.45;
+      z-index: 100;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+
+    .help-icon .tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      right: 12px;
+      border: 6px solid transparent;
+      border-top-color: #475569;
+    }
+
+    .help-icon:hover .tooltip { display: block; }
   </style>
 </head>
 <body>
@@ -302,6 +351,29 @@
       ]
     };
 
+    const METRIC_HELP = {
+      faithfulness: 'Measures how factually consistent a response is with the retrieved context. Scores the proportion of claims in the response that are supported by the context.',
+      answer_relevancy: 'Measures how directly the answer addresses the original question. Higher scores indicate the response is more relevant and complete.',
+      context_precision: 'Evaluates the retriever\'s ability to rank relevant chunks higher than irrelevant ones. Computes mean precision@k across retrieved chunks.',
+      context_recall: 'Measures how many of the relevant documents were successfully retrieved. Higher scores mean fewer relevant documents were missed.',
+      context_entities_recall: 'Evaluates how well the retrieved context captures named entities from the reference. Useful for fact-based applications.',
+      noise_sensitivity: 'Measures how often a system makes incorrect claims. Calculated as incorrect claims divided by total claims — lower is better.',
+      factual_correctness: 'Evaluates how well a response aligns factually with a reference by decomposing both into claims and measuring overlap via precision, recall, and F1.',
+      semantic_similarity: 'Measures the semantic resemblance between the generated response and the reference answer using cosine similarity of embeddings.',
+      non_llm_string_similarity: 'Computes string-level similarity between response and reference without using an LLM. Based on traditional string distance metrics.',
+      bleu_score: 'A traditional NLP metric that measures n-gram overlap between the generated response and a reference translation.',
+      rouge_score: 'Measures overlap of n-grams, word sequences, and word pairs between generated and reference text. Common for summarization evaluation.',
+      chrf_score: 'Character n-gram F-score that measures character-level overlap between generated and reference text.',
+      exact_match: 'Checks whether the generated response is an exact string match with the reference answer.',
+      string_presence: 'Checks whether a specific expected string is present within the generated response.',
+      aspect_critic: 'A flexible LLM-based metric that evaluates responses against custom-defined aspects or criteria you specify.',
+      rubrics_score: 'Scores responses using a custom rubric with defined scoring levels, enabling fine-grained evaluation on any criteria.',
+      summarization_score: 'Evaluates how well a summary captures key information by extracting keyphrases and checking if the summary covers them.',
+      answer_accuracy: 'NVIDIA metric that evaluates the factual accuracy of the generated answer against the ground truth.',
+      context_relevance: 'NVIDIA metric that measures how relevant the retrieved context is to the user\'s query.',
+      response_groundedness: 'NVIDIA metric that checks whether the response is grounded in (supported by) the retrieved context.'
+    };
+
     const RAG_METRICS = METRICS['RAG'];
 
     function buildMetricsGrid() {
@@ -315,7 +387,8 @@
           const label = document.createElement('label');
           label.className = 'metric-item';
           const isRAG = RAG_METRICS.includes(m);
-          label.innerHTML = `<input type="checkbox" value="${m}" ${isRAG ? 'checked' : ''}><span>${m.replace(/_/g, ' ')}</span>`;
+          const helpText = METRIC_HELP[m] || '';
+          label.innerHTML = `<input type="checkbox" value="${m}" ${isRAG ? 'checked' : ''}><span>${m.replace(/_/g, ' ')}</span>${helpText ? `<span class="help-icon" onclick="event.preventDefault()">?<span class="tooltip">${helpText}</span></span>` : ''}`;
           grid.appendChild(label);
         }
       }
