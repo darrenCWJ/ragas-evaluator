@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Set Annotation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-deep: #080c14;
+      --bg-base: #0f172a;
+      --bg-card: #1a2236;
+      --bg-elevated: #1e293b;
+      --bg-input: #0d1424;
+      --border: #283348;
+      --border-focus: #6366f1;
+      --text-primary: #e2e8f0;
+      --text-secondary: #8896b0;
+      --text-muted: #5a6a84;
+      --accent: #818cf8;
+      --accent-glow: rgba(129, 140, 248, 0.15);
+      --status-pending: #f59e0b;
+      --status-pending-bg: rgba(245, 158, 11, 0.08);
+      --status-pending-border: rgba(245, 158, 11, 0.25);
+      --status-approved: #22c55e;
+      --status-approved-bg: rgba(34, 197, 94, 0.08);
+      --status-approved-border: rgba(34, 197, 94, 0.25);
+      --status-rejected: #ef4444;
+      --status-rejected-bg: rgba(239, 68, 68, 0.08);
+      --status-rejected-border: rgba(239, 68, 68, 0.25);
+      --status-edited: #3b82f6;
+      --status-edited-bg: rgba(59, 130, 246, 0.08);
+      --status-edited-border: rgba(59, 130, 246, 0.25);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* === HEADER === */
+    .page-header {
+      background: var(--bg-base);
+      border-bottom: 1px solid var(--border);
+      padding: 1.5rem 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+    }
+
+    .header-inner {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+
+    .header-title {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+
+    .header-title h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+
+    .header-title h1 span {
+      background: linear-gradient(135deg, #818cf8, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-subtitle {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .back-link {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      transition: color 0.2s;
+      padding: 0.4rem 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .back-link:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* === PROGRESS BAR === */
+    .progress-section {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .progress-track {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e, #4ade80);
+      border-radius: 3px;
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+      min-width: 0;
+    }
+
+    .progress-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--status-approved);
+      min-width: 52px;
+      text-align: right;
+    }
+
+    .progress-note {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 0.4rem;
+      font-style: italic;
+    }
+
+    /* === FILTER TABS === */
+    .filter-bar {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1rem 2rem;
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+
+    .filter-tab {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 500;
+      padding: 0.45rem 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .filter-tab:hover {
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+
+    .filter-tab.active {
+      background: var(--accent-glow);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .filter-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: var(--bg-elevated);
+      padding: 0.1rem 0.45rem;
+      border-radius: 10px;
+      min-width: 20px;
+      text-align: center;
+    }
+
+    .filter-tab.active .filter-count {
+      background: rgba(129, 140, 248, 0.2);
+    }
+
+    /* === QUESTION CARDS === */
+    .questions-container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 2rem 8rem;
+    }
+
+    .question-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 0.75rem;
+      transition: border-color 0.3s, box-shadow 0.3s;
+      overflow: hidden;
+    }
+
+    .question-card:hover {
+      border-color: rgba(129, 140, 248, 0.3);
+    }
+
+    .question-card.status-approved { border-left: 3px solid var(--status-approved); }
+    .question-card.status-rejected { border-left: 3px solid var(--status-rejected); }
+    .question-card.status-edited   { border-left: 3px solid var(--status-edited); }
+    .question-card.status-pending  { border-left: 3px solid var(--status-pending); }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem 0.6rem;
+      gap: 0.75rem;
+    }
+
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .card-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .tag {
+      font-size: 0.68rem;
+      font-weight: 500;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      letter-spacing: 0.02em;
+    }
+
+    .status-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .status-badge.pending  { background: var(--status-pending-bg);  color: var(--status-pending);  border: 1px solid var(--status-pending-border); }
+    .status-badge.approved { background: var(--status-approved-bg); color: var(--status-approved); border: 1px solid var(--status-approved-border); }
+    .status-badge.rejected { background: var(--status-rejected-bg); color: var(--status-rejected); border: 1px solid var(--status-rejected-border); }
+    .status-badge.edited   { background: var(--status-edited-bg);   color: var(--status-edited);   border: 1px solid var(--status-edited-border); }
+
+    .card-body { padding: 0 1.25rem 1rem; }
+
+    .question-text {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 0.75rem;
+      line-height: 1.55;
+    }
+
+    .field-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.3rem;
+    }
+
+    .reference-answer {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.7rem 0.85rem;
+      margin-bottom: 0.6rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .contexts-toggle {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 0.3rem 0.7rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .contexts-toggle:hover { border-color: var(--accent); color: var(--text-secondary); }
+
+    .contexts-list {
+      display: none;
+      margin-bottom: 0.6rem;
+    }
+
+    .contexts-list.open { display: block; }
+
+    .context-block {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      background: var(--bg-input);
+      border-left: 2px solid var(--border);
+      padding: 0.6rem 0.85rem;
+      margin-bottom: 0.4rem;
+      border-radius: 0 6px 6px 0;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    /* === EDIT MODE === */
+    .edit-area { display: none; margin-top: 0.6rem; }
+    .edit-area.open { display: block; }
+
+    .edit-textarea {
+      width: 100%;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88rem;
+      color: var(--text-primary);
+      background: var(--bg-input);
+      border: 1px solid var(--border-focus);
+      border-radius: 6px;
+      padding: 0.7rem 0.85rem;
+      resize: vertical;
+      min-height: 70px;
+      line-height: 1.55;
+      margin-bottom: 0.5rem;
+    }
+
+    .edit-textarea:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-glow); }
+
+    .notes-input {
+      width: 100%;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.82rem;
+      color: var(--text-primary);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.55rem 0.85rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .notes-input:focus { outline: none; border-color: var(--border-focus); }
+    .notes-input::placeholder { color: var(--text-muted); }
+
+    /* === ACTION BUTTONS === */
+    .card-actions {
+      display: flex;
+      gap: 0.4rem;
+      padding: 0.6rem 1.25rem 1rem;
+      flex-wrap: wrap;
+    }
+
+    .action-btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.4rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-approve {
+      background: var(--status-approved-bg);
+      border-color: var(--status-approved-border);
+      color: var(--status-approved);
+    }
+    .btn-approve:not(:disabled):hover { background: rgba(34, 197, 94, 0.18); }
+
+    .btn-reject {
+      background: var(--status-rejected-bg);
+      border-color: var(--status-rejected-border);
+      color: var(--status-rejected);
+    }
+    .btn-reject:not(:disabled):hover { background: rgba(239, 68, 68, 0.18); }
+
+    .btn-edit {
+      background: var(--status-edited-bg);
+      border-color: var(--status-edited-border);
+      color: var(--status-edited);
+    }
+    .btn-edit:not(:disabled):hover { background: rgba(59, 130, 246, 0.18); }
+
+    .btn-save {
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.3);
+      color: #4ade80;
+    }
+    .btn-save:not(:disabled):hover { background: rgba(34, 197, 94, 0.22); }
+
+    .btn-cancel {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--text-muted);
+    }
+    .btn-cancel:hover { border-color: var(--text-secondary); color: var(--text-secondary); }
+
+    /* === BULK ACTION BAR === */
+    .bulk-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bg-base);
+      border-top: 1px solid var(--border);
+      padding: 0.9rem 2rem;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+    }
+
+    .bulk-inner {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .bulk-info {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .bulk-info strong {
+      color: var(--status-pending);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .bulk-actions { display: flex; gap: 0.5rem; }
+
+    .bulk-btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: 1px solid;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .bulk-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .bulk-approve {
+      background: var(--status-approved-bg);
+      border-color: var(--status-approved-border);
+      color: var(--status-approved);
+    }
+    .bulk-approve:not(:disabled):hover { background: rgba(34, 197, 94, 0.18); }
+
+    .bulk-reject {
+      background: var(--status-rejected-bg);
+      border-color: var(--status-rejected-border);
+      color: var(--status-rejected);
+    }
+    .bulk-reject:not(:disabled):hover { background: rgba(239, 68, 68, 0.18); }
+
+    /* === MODAL === */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      max-width: 420px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .modal-body {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      margin-bottom: 1.25rem;
+      line-height: 1.55;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: flex-end;
+    }
+
+    .modal-btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .modal-btn-cancel {
+      background: transparent;
+      color: var(--text-secondary);
+    }
+
+    .modal-btn-confirm {
+      background: var(--status-approved-bg);
+      border-color: var(--status-approved-border);
+      color: var(--status-approved);
+    }
+
+    .modal-btn-confirm.reject {
+      background: var(--status-rejected-bg);
+      border-color: var(--status-rejected-border);
+      color: var(--status-rejected);
+    }
+
+    /* === EMPTY STATE === */
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state p {
+      font-size: 0.95rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .empty-state small {
+      font-size: 0.8rem;
+    }
+
+    /* === LOADING === */
+    .loading-spinner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4rem;
+    }
+
+    .spinner-ring {
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* === TOAST === */
+    .toast {
+      position: fixed;
+      bottom: 5rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.6rem 1.2rem;
+      font-size: 0.82rem;
+      color: var(--text-primary);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 80;
+      pointer-events: none;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 640px) {
+      .page-header { padding: 1rem; }
+      .filter-bar { padding: 0.75rem 1rem; }
+      .questions-container { padding: 0 1rem 8rem; }
+      .bulk-bar { padding: 0.7rem 1rem; }
+      .header-top { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <div class="page-header">
+    <div class="header-inner">
+      <div class="header-top">
+        <div class="header-title">
+          <h1><span>Annotation</span> &mdash; <span id="testset-name">Loading...</span></h1>
+          <div class="header-subtitle" id="project-name"></div>
+        </div>
+        <a class="back-link" id="back-link" href="#">&larr; Back</a>
+      </div>
+      <div class="progress-section">
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="progress-label" id="progress-label">0%</div>
+      </div>
+      <div class="progress-note">Only approved and edited questions count toward completion — rejected questions are excluded as they won't be used in experiments.</div>
+    </div>
+  </div>
+
+  <!-- FILTER TABS -->
+  <div class="filter-bar" id="filter-bar">
+    <button class="filter-tab active" data-filter="all">All <span class="filter-count" id="count-all">0</span></button>
+    <button class="filter-tab" data-filter="pending">Pending <span class="filter-count" id="count-pending">0</span></button>
+    <button class="filter-tab" data-filter="approved">Approved <span class="filter-count" id="count-approved">0</span></button>
+    <button class="filter-tab" data-filter="rejected">Rejected <span class="filter-count" id="count-rejected">0</span></button>
+    <button class="filter-tab" data-filter="edited">Edited <span class="filter-count" id="count-edited">0</span></button>
+  </div>
+
+  <!-- QUESTIONS -->
+  <div class="questions-container" id="questions-container">
+    <div class="loading-spinner" id="loading"><div class="spinner-ring"></div></div>
+  </div>
+
+  <!-- BULK ACTION BAR -->
+  <div class="bulk-bar">
+    <div class="bulk-inner">
+      <div class="bulk-info">
+        <strong id="pending-count">0</strong> pending questions remaining
+      </div>
+      <div class="bulk-actions">
+        <button class="bulk-btn bulk-approve" id="bulk-approve-btn" onclick="confirmBulk('approve_all')">Approve All Pending</button>
+        <button class="bulk-btn bulk-reject" id="bulk-reject-btn" onclick="confirmBulk('reject_all')">Reject All Pending</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIRMATION MODAL -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal-box">
+      <div class="modal-title" id="modal-title">Confirm Action</div>
+      <div class="modal-body" id="modal-body">Are you sure?</div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" onclick="closeModal()">Cancel</button>
+        <button class="modal-btn modal-btn-confirm" id="modal-confirm" onclick="executeBulk()">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // --- State ---
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project_id');
+    const testSetId = params.get('test_set_id');
+    let questions = [];
+    let summary = {};
+    let activeFilter = 'all';
+    let pendingBulkAction = null;
+
+    const API = `/api/projects/${projectId}/test-sets/${testSetId}`;
+
+    // --- Init ---
+    async function init() {
+      if (!projectId || !testSetId) {
+        document.getElementById('questions-container').innerHTML =
+          '<div class="empty-state"><p>Missing project_id or test_set_id in URL</p><small>Usage: annotation.html?project_id=X&test_set_id=Y</small></div>';
+        return;
+      }
+
+      document.getElementById('back-link').href = '#';
+
+      try {
+        await Promise.all([loadSummary(), loadQuestions(), loadTestSetInfo()]);
+        renderQuestions();
+      } catch (err) {
+        document.getElementById('questions-container').innerHTML =
+          '<div class="empty-state"><p>Failed to load data</p><small>' + escapeHtml(err.message) + '</small></div>';
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function loadTestSetInfo() {
+      const resp = await fetch(`/api/projects/${projectId}/test-sets`);
+      if (!resp.ok) throw new Error('Failed to load test sets');
+      const data = await resp.json();
+      const ts = data.test_sets.find(t => t.id === parseInt(testSetId));
+      if (ts) {
+        document.getElementById('testset-name').textContent = ts.name;
+      }
+
+      const projResp = await fetch(`/api/projects/${projectId}`);
+      if (projResp.ok) {
+        const proj = await projResp.json();
+        document.getElementById('project-name').textContent = proj.name || `Project ${projectId}`;
+      }
+    }
+
+    async function loadSummary() {
+      const resp = await fetch(`${API}/summary`);
+      if (!resp.ok) throw new Error('Failed to load summary');
+      summary = await resp.json();
+      updateSummaryUI();
+    }
+
+    async function loadQuestions() {
+      const resp = await fetch(`${API}/questions`);
+      if (!resp.ok) throw new Error('Failed to load questions');
+      const data = await resp.json();
+      questions = data.questions;
+    }
+
+    function updateSummaryUI() {
+      const fill = document.getElementById('progress-fill');
+      const label = document.getElementById('progress-label');
+      fill.style.width = summary.completion_pct + '%';
+      label.textContent = summary.completion_pct + '%';
+
+      document.getElementById('count-all').textContent = summary.total;
+      document.getElementById('count-pending').textContent = summary.pending;
+      document.getElementById('count-approved').textContent = summary.approved;
+      document.getElementById('count-rejected').textContent = summary.rejected;
+      document.getElementById('count-edited').textContent = summary.edited;
+      document.getElementById('pending-count').textContent = summary.pending;
+
+      const bulkApprove = document.getElementById('bulk-approve-btn');
+      const bulkReject = document.getElementById('bulk-reject-btn');
+      bulkApprove.disabled = summary.pending === 0;
+      bulkReject.disabled = summary.pending === 0;
+    }
+
+    // --- Render ---
+    function renderQuestions() {
+      const container = document.getElementById('questions-container');
+      const filtered = activeFilter === 'all'
+        ? questions
+        : questions.filter(q => q.status === activeFilter);
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div class="empty-state"><p>No questions match this filter</p></div>';
+        return;
+      }
+
+      container.innerHTML = '';
+      filtered.forEach(q => container.appendChild(buildCard(q)));
+    }
+
+    function buildCard(q) {
+      const card = document.createElement('div');
+      card.className = `question-card status-${q.status}`;
+      card.id = `card-${q.id}`;
+
+      // Header
+      const header = document.createElement('div');
+      header.className = 'card-header';
+
+      const meta = document.createElement('div');
+      meta.className = 'card-meta';
+
+      const idEl = document.createElement('span');
+      idEl.className = 'card-id';
+      idEl.textContent = `#${q.id}`;
+      meta.appendChild(idEl);
+
+      if (q.persona) {
+        const personaTag = document.createElement('span');
+        personaTag.className = 'tag';
+        personaTag.textContent = q.persona;
+        meta.appendChild(personaTag);
+      }
+
+      if (q.question_type) {
+        const typeTag = document.createElement('span');
+        typeTag.className = 'tag';
+        typeTag.textContent = q.question_type;
+        meta.appendChild(typeTag);
+      }
+
+      const badge = document.createElement('span');
+      badge.className = `status-badge ${q.status}`;
+      badge.textContent = q.status;
+      badge.id = `badge-${q.id}`;
+
+      header.appendChild(meta);
+      header.appendChild(badge);
+      card.appendChild(header);
+
+      // Body
+      const body = document.createElement('div');
+      body.className = 'card-body';
+
+      const qText = document.createElement('div');
+      qText.className = 'question-text';
+      qText.textContent = q.question;
+      body.appendChild(qText);
+
+      // Reference answer
+      const ansLabel = document.createElement('div');
+      ansLabel.className = 'field-label';
+      ansLabel.textContent = 'Reference Answer';
+      body.appendChild(ansLabel);
+
+      const ansBlock = document.createElement('div');
+      ansBlock.className = 'reference-answer';
+      ansBlock.id = `answer-${q.id}`;
+      ansBlock.textContent = q.user_edited_answer || q.reference_answer;
+      body.appendChild(ansBlock);
+
+      // Contexts toggle
+      const contexts = q.reference_contexts || [];
+      if (contexts.length > 0) {
+        const toggle = document.createElement('button');
+        toggle.className = 'contexts-toggle';
+        toggle.innerHTML = `<span class="toggle-arrow">&#9654;</span> ${contexts.length} context${contexts.length > 1 ? 's' : ''}`;
+        toggle.onclick = function() {
+          const list = document.getElementById(`contexts-${q.id}`);
+          const isOpen = list.classList.toggle('open');
+          this.querySelector('.toggle-arrow').innerHTML = isOpen ? '&#9660;' : '&#9654;';
+        };
+        body.appendChild(toggle);
+
+        const ctxList = document.createElement('div');
+        ctxList.className = 'contexts-list';
+        ctxList.id = `contexts-${q.id}`;
+        contexts.forEach(c => {
+          const block = document.createElement('div');
+          block.className = 'context-block';
+          block.textContent = c;
+          ctxList.appendChild(block);
+        });
+        body.appendChild(ctxList);
+      }
+
+      // User notes display
+      if (q.user_notes) {
+        const notesLabel = document.createElement('div');
+        notesLabel.className = 'field-label';
+        notesLabel.textContent = 'Notes';
+        notesLabel.style.marginTop = '0.5rem';
+        body.appendChild(notesLabel);
+
+        const notesBlock = document.createElement('div');
+        notesBlock.className = 'reference-answer';
+        notesBlock.style.fontSize = '0.82rem';
+        notesBlock.style.fontStyle = 'italic';
+        notesBlock.textContent = q.user_notes;
+        body.appendChild(notesBlock);
+      }
+
+      // Edit area (hidden by default)
+      const editArea = document.createElement('div');
+      editArea.className = 'edit-area';
+      editArea.id = `edit-${q.id}`;
+
+      const editLabel = document.createElement('div');
+      editLabel.className = 'field-label';
+      editLabel.textContent = 'Edit Reference Answer';
+      editArea.appendChild(editLabel);
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'edit-textarea';
+      textarea.id = `textarea-${q.id}`;
+      textarea.value = q.user_edited_answer || q.reference_answer;
+      editArea.appendChild(textarea);
+
+      const notesInput = document.createElement('input');
+      notesInput.className = 'notes-input';
+      notesInput.id = `notes-${q.id}`;
+      notesInput.type = 'text';
+      notesInput.placeholder = 'Add a note (optional)';
+      notesInput.value = q.user_notes || '';
+      editArea.appendChild(notesInput);
+
+      body.appendChild(editArea);
+      card.appendChild(body);
+
+      // Actions
+      const actions = document.createElement('div');
+      actions.className = 'card-actions';
+      actions.id = `actions-${q.id}`;
+
+      const approveBtn = document.createElement('button');
+      approveBtn.className = 'action-btn btn-approve';
+      approveBtn.textContent = 'Approve';
+      approveBtn.onclick = () => annotate(q.id, 'approved');
+
+      const rejectBtn = document.createElement('button');
+      rejectBtn.className = 'action-btn btn-reject';
+      rejectBtn.textContent = 'Reject';
+      rejectBtn.onclick = () => annotate(q.id, 'rejected');
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'action-btn btn-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick = () => toggleEdit(q.id);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'action-btn btn-save';
+      saveBtn.id = `save-${q.id}`;
+      saveBtn.textContent = 'Save Edit';
+      saveBtn.style.display = 'none';
+      saveBtn.onclick = () => saveEdit(q.id);
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'action-btn btn-cancel';
+      cancelBtn.id = `cancel-${q.id}`;
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.display = 'none';
+      cancelBtn.onclick = () => toggleEdit(q.id, false);
+
+      actions.appendChild(approveBtn);
+      actions.appendChild(rejectBtn);
+      actions.appendChild(editBtn);
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+      card.appendChild(actions);
+
+      return card;
+    }
+
+    // --- Actions ---
+    async function annotate(qId, status, editedAnswer, notes) {
+      const body = { status };
+      if (editedAnswer !== undefined) body.user_edited_answer = editedAnswer;
+      if (notes !== undefined) body.user_notes = notes;
+
+      try {
+        const resp = await fetch(`${API}/questions/${qId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          showToast('Error: ' + (err.detail || 'Unknown error'), true);
+          return;
+        }
+
+        const updated = await resp.json();
+
+        // Update local state
+        const idx = questions.findIndex(q => q.id === qId);
+        if (idx >= 0) questions[idx] = updated;
+
+        // Refresh card in place
+        const oldCard = document.getElementById(`card-${qId}`);
+        if (oldCard) {
+          const newCard = buildCard(updated);
+          oldCard.replaceWith(newCard);
+        }
+
+        // Refresh summary
+        await loadSummary();
+        showToast(`Question #${qId} ${status}`);
+
+      } catch (err) {
+        showToast('Network error', true);
+      }
+    }
+
+    function toggleEdit(qId, forceOpen) {
+      const editArea = document.getElementById(`edit-${qId}`);
+      const saveBtn = document.getElementById(`save-${qId}`);
+      const cancelBtn = document.getElementById(`cancel-${qId}`);
+      const isOpen = forceOpen !== undefined ? forceOpen : !editArea.classList.contains('open');
+
+      editArea.classList.toggle('open', isOpen);
+      saveBtn.style.display = isOpen ? 'inline-flex' : 'none';
+      cancelBtn.style.display = isOpen ? 'inline-flex' : 'none';
+    }
+
+    async function saveEdit(qId) {
+      const textarea = document.getElementById(`textarea-${qId}`);
+      const notesInput = document.getElementById(`notes-${qId}`);
+      const editedAnswer = textarea.value.trim();
+      const notes = notesInput.value.trim() || undefined;
+
+      if (!editedAnswer) {
+        showToast('Edited answer cannot be empty', true);
+        return;
+      }
+
+      await annotate(qId, 'edited', editedAnswer, notes);
+    }
+
+    // --- Bulk ---
+    function confirmBulk(action) {
+      pendingBulkAction = action;
+      const count = summary.pending;
+      const isApprove = action === 'approve_all';
+
+      document.getElementById('modal-title').textContent = isApprove ? 'Approve All Pending' : 'Reject All Pending';
+      document.getElementById('modal-body').textContent = `This will ${isApprove ? 'approve' : 'reject'} ${count} pending question${count !== 1 ? 's' : ''}. This action cannot be undone.`;
+
+      const confirmBtn = document.getElementById('modal-confirm');
+      confirmBtn.textContent = isApprove ? 'Approve All' : 'Reject All';
+      confirmBtn.className = 'modal-btn modal-btn-confirm' + (isApprove ? '' : ' reject');
+
+      document.getElementById('modal').classList.add('open');
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('open');
+      pendingBulkAction = null;
+    }
+
+    async function executeBulk() {
+      if (!pendingBulkAction) return;
+      const action = pendingBulkAction;
+      closeModal();
+
+      try {
+        const resp = await fetch(`${API}/questions/bulk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: action }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          showToast('Error: ' + (err.detail || 'Unknown error'), true);
+          return;
+        }
+
+        const result = await resp.json();
+        showToast(`${result.updated_count} questions updated`);
+
+        // Reload everything
+        await Promise.all([loadSummary(), loadQuestions()]);
+        renderQuestions();
+
+      } catch (err) {
+        showToast('Network error', true);
+      }
+    }
+
+    // --- Filter tabs ---
+    document.getElementById('filter-bar').addEventListener('click', (e) => {
+      const tab = e.target.closest('.filter-tab');
+      if (!tab) return;
+      document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeFilter = tab.dataset.filter;
+      renderQuestions();
+    });
+
+    // --- Toast ---
+    function showToast(msg, isError) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.style.borderColor = isError ? 'var(--status-rejected-border)' : 'var(--status-approved-border)';
+      toast.classList.add('visible');
+      setTimeout(() => toast.classList.remove('visible'), 2500);
+    }
+
+    // --- Go ---
+    init();
+  </script>
+</body>
+</html>
