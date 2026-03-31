@@ -390,6 +390,124 @@ class HybridSearchRequest(BaseModel):
         return v
 
 
+VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
+VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
+ALLOWED_LLM_PARAMS = {"temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"}
+
+
+class RagConfigCreate(BaseModel):
+    name: str
+    embedding_config_id: int
+    chunk_config_id: int
+    search_type: str
+    llm_model: str
+    top_k: int = 5
+    system_prompt: str | None = None
+    llm_params: dict | None = None
+    sparse_config_id: int | None = None
+    alpha: float | None = None
+    response_mode: str = "single_shot"
+    max_steps: int = 3
+
+    @field_validator("search_type")
+    @classmethod
+    def validate_search_type(cls, v: str) -> str:
+        if v not in VALID_SEARCH_TYPES:
+            raise ValueError(f"search_type must be one of: {', '.join(sorted(VALID_SEARCH_TYPES))}")
+        return v
+
+    @field_validator("response_mode")
+    @classmethod
+    def validate_response_mode(cls, v: str) -> str:
+        if v not in VALID_RESPONSE_MODES:
+            raise ValueError(f"response_mode must be one of: {', '.join(sorted(VALID_RESPONSE_MODES))}")
+        return v
+
+    @field_validator("max_steps")
+    @classmethod
+    def validate_max_steps(cls, v: int) -> int:
+        if v < 1 or v > 10:
+            raise ValueError("max_steps must be between 1 and 10")
+        return v
+
+    @field_validator("llm_params")
+    @classmethod
+    def validate_llm_params(cls, v: dict | None) -> dict | None:
+        if v is not None:
+            unknown = set(v.keys()) - ALLOWED_LLM_PARAMS
+            if unknown:
+                raise ValueError(f"Unknown llm_params keys: {', '.join(sorted(unknown))}. Allowed: {', '.join(sorted(ALLOWED_LLM_PARAMS))}")
+        return v
+
+    def model_post_init(self, __context) -> None:
+        if self.search_type == "hybrid":
+            if self.sparse_config_id is None:
+                raise ValueError("sparse_config_id is required when search_type is 'hybrid'")
+            if self.alpha is None:
+                raise ValueError("alpha is required when search_type is 'hybrid'")
+            if self.alpha < 0.0 or self.alpha > 1.0:
+                raise ValueError("alpha must be between 0.0 and 1.0")
+
+
+class RagConfigUpdate(BaseModel):
+    name: str | None = None
+    embedding_config_id: int | None = None
+    chunk_config_id: int | None = None
+    search_type: str | None = None
+    llm_model: str | None = None
+    top_k: int | None = None
+    system_prompt: str | None = None
+    llm_params: dict | None = None
+    sparse_config_id: int | None = None
+    alpha: float | None = None
+    response_mode: str | None = None
+    max_steps: int | None = None
+
+    @field_validator("search_type")
+    @classmethod
+    def validate_search_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_SEARCH_TYPES:
+            raise ValueError(f"search_type must be one of: {', '.join(sorted(VALID_SEARCH_TYPES))}")
+        return v
+
+    @field_validator("response_mode")
+    @classmethod
+    def validate_response_mode(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_RESPONSE_MODES:
+            raise ValueError(f"response_mode must be one of: {', '.join(sorted(VALID_RESPONSE_MODES))}")
+        return v
+
+    @field_validator("max_steps")
+    @classmethod
+    def validate_max_steps(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > 10):
+            raise ValueError("max_steps must be between 1 and 10")
+        return v
+
+    @field_validator("llm_params")
+    @classmethod
+    def validate_llm_params(cls, v: dict | None) -> dict | None:
+        if v is not None:
+            unknown = set(v.keys()) - ALLOWED_LLM_PARAMS
+            if unknown:
+                raise ValueError(f"Unknown llm_params keys: {', '.join(sorted(unknown))}. Allowed: {', '.join(sorted(ALLOWED_LLM_PARAMS))}")
+        return v
+
+
+class RagQueryRequest(BaseModel):
+    query: str
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("query must not be empty")
+        if len(v) > 10000:
+            raise ValueError("query must not exceed 10000 characters")
+        return v
+
+
 # --- API Routes ---
 
 @app.post("/api/evaluate")
@@ -712,12 +830,23 @@ async def get_chunk_config(project_id: int, config_id: int):
 @app.delete("/api/projects/{project_id}/chunk-configs/{config_id}")
 async def delete_chunk_config(project_id: int, config_id: int):
     conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
     existing = conn.execute(
         "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
         (config_id, project_id),
     ).fetchone()
     if existing is None:
         raise HTTPException(status_code=404, detail="Chunk config not found")
+    # Referential integrity: check if any RAG configs reference this chunk config
+    rag_refs = conn.execute(
+        "SELECT COUNT(*) as cnt FROM rag_configs WHERE chunk_config_id = ?",
+        (config_id,),
+    ).fetchone()
+    if rag_refs["cnt"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Chunk config is referenced by {rag_refs['cnt']} RAG config(s)",
+        )
     conn.execute("DELETE FROM chunk_configs WHERE id = ?", (config_id,))
     conn.commit()
     return {"detail": "Chunk config deleted"}
@@ -854,6 +983,16 @@ async def delete_embedding_config(project_id: int, config_id: int):
     ).fetchone()
     if config_row is None:
         raise HTTPException(status_code=404, detail="Embedding config not found")
+    # Referential integrity: check if any RAG configs reference this embedding config
+    rag_refs = conn.execute(
+        "SELECT COUNT(*) as cnt FROM rag_configs WHERE embedding_config_id = ? OR sparse_config_id = ?",
+        (config_id, config_id),
+    ).fetchone()
+    if rag_refs["cnt"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Embedding config is referenced by {rag_refs['cnt']} RAG config(s)",
+        )
     # Cascade: clean up stored data based on type
     if config_row["type"] == "bm25_sparse":
         from embedding.bm25 import delete_index, get_index_path
@@ -989,6 +1128,209 @@ async def search_embeddings(project_id: int, config_id: int, req: SearchRequest)
             })
 
         return {"results": output, "query": req.query, "top_k": req.top_k}
+
+
+# --- RAG Config Routes ---
+
+def _parse_rag_config_row(row) -> dict:
+    d = dict(row)
+    lpj = d.pop("llm_params_json", None)
+    d["llm_params"] = json.loads(lpj) if lpj else None
+    return d
+
+
+@app.post("/api/projects/{project_id}/rag-configs", status_code=201)
+async def create_rag_config(project_id: int, req: RagConfigCreate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate embedding_config_id belongs to project
+    ec = conn.execute(
+        "SELECT id FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (req.embedding_config_id, project_id),
+    ).fetchone()
+    if ec is None:
+        raise HTTPException(status_code=404, detail="Embedding config not found")
+
+    # Validate chunk_config_id belongs to project
+    cc = conn.execute(
+        "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (req.chunk_config_id, project_id),
+    ).fetchone()
+    if cc is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+
+    # Validate sparse_config_id belongs to project (if hybrid)
+    if req.search_type == "hybrid" and req.sparse_config_id is not None:
+        sc = conn.execute(
+            "SELECT id FROM embedding_configs WHERE id = ? AND project_id = ?",
+            (req.sparse_config_id, project_id),
+        ).fetchone()
+        if sc is None:
+            raise HTTPException(status_code=404, detail="Sparse embedding config not found")
+
+    cursor = conn.execute(
+        """INSERT INTO rag_configs
+           (project_id, name, embedding_config_id, chunk_config_id, search_type,
+            sparse_config_id, alpha, llm_model, llm_params_json, top_k, system_prompt,
+            response_mode, max_steps)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (project_id, req.name, req.embedding_config_id, req.chunk_config_id, req.search_type,
+         req.sparse_config_id, req.alpha, req.llm_model,
+         json.dumps(req.llm_params) if req.llm_params else None,
+         req.top_k, req.system_prompt, req.response_mode, req.max_steps),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM rag_configs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _parse_rag_config_row(row)
+
+
+@app.get("/api/projects/{project_id}/rag-configs")
+async def list_rag_configs(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = conn.execute("SELECT * FROM rag_configs WHERE project_id = ?", (project_id,)).fetchall()
+    return [_parse_rag_config_row(r) for r in rows]
+
+
+@app.get("/api/projects/{project_id}/rag-configs/{config_id}")
+async def get_rag_config(project_id: int, config_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="RAG config not found")
+    return _parse_rag_config_row(row)
+
+
+@app.put("/api/projects/{project_id}/rag-configs/{config_id}")
+async def update_rag_config(project_id: int, config_id: int, req: RagConfigUpdate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    existing = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="RAG config not found")
+
+    # Project-scoped FK validation for changed reference fields
+    if req.embedding_config_id is not None:
+        ec = conn.execute(
+            "SELECT id FROM embedding_configs WHERE id = ? AND project_id = ?",
+            (req.embedding_config_id, project_id),
+        ).fetchone()
+        if ec is None:
+            raise HTTPException(status_code=404, detail="Embedding config not found")
+
+    if req.chunk_config_id is not None:
+        cc = conn.execute(
+            "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+            (req.chunk_config_id, project_id),
+        ).fetchone()
+        if cc is None:
+            raise HTTPException(status_code=404, detail="Chunk config not found")
+
+    if req.sparse_config_id is not None:
+        sc = conn.execute(
+            "SELECT id FROM embedding_configs WHERE id = ? AND project_id = ?",
+            (req.sparse_config_id, project_id),
+        ).fetchone()
+        if sc is None:
+            raise HTTPException(status_code=404, detail="Sparse embedding config not found")
+
+    # Determine effective search_type for hybrid validation
+    effective_search_type = req.search_type if req.search_type is not None else existing["search_type"]
+    if effective_search_type == "hybrid":
+        effective_sparse = req.sparse_config_id if req.sparse_config_id is not None else existing["sparse_config_id"]
+        effective_alpha = req.alpha if req.alpha is not None else existing["alpha"]
+        if effective_sparse is None:
+            raise HTTPException(status_code=422, detail="sparse_config_id is required when search_type is 'hybrid'")
+        if effective_alpha is None:
+            raise HTTPException(status_code=422, detail="alpha is required when search_type is 'hybrid'")
+        if effective_alpha < 0.0 or effective_alpha > 1.0:
+            raise HTTPException(status_code=422, detail="alpha must be between 0.0 and 1.0")
+
+    updates = []
+    params = []
+    field_map = {
+        "name": req.name,
+        "embedding_config_id": req.embedding_config_id,
+        "chunk_config_id": req.chunk_config_id,
+        "search_type": req.search_type,
+        "llm_model": req.llm_model,
+        "top_k": req.top_k,
+        "system_prompt": req.system_prompt,
+        "sparse_config_id": req.sparse_config_id,
+        "alpha": req.alpha,
+        "response_mode": req.response_mode,
+        "max_steps": req.max_steps,
+    }
+    for col, val in field_map.items():
+        if val is not None:
+            updates.append(f"{col} = ?")
+            params.append(val)
+    if req.llm_params is not None:
+        updates.append("llm_params_json = ?")
+        params.append(json.dumps(req.llm_params))
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    params.append(config_id)
+    conn.execute(f"UPDATE rag_configs SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    row = conn.execute("SELECT * FROM rag_configs WHERE id = ?", (config_id,)).fetchone()
+    return _parse_rag_config_row(row)
+
+
+@app.delete("/api/projects/{project_id}/rag-configs/{config_id}")
+async def delete_rag_config(project_id: int, config_id: int):
+    conn = get_db_conn()
+    existing = conn.execute(
+        "SELECT id FROM rag_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="RAG config not found")
+    conn.execute("DELETE FROM rag_configs WHERE id = ?", (config_id,))
+    conn.commit()
+    return {"detail": "RAG config deleted"}
+
+
+# --- RAG Query Route ---
+
+@app.post("/api/projects/{project_id}/rag-configs/{config_id}/query")
+async def rag_query(project_id: int, config_id: int, req: RagQueryRequest):
+    from rag.query import single_shot_query, multi_step_query
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(status_code=404, detail="RAG config not found")
+
+    response_mode = rag_config["response_mode"]
+    if response_mode == "multi_step":
+        result = await multi_step_query(req.query, rag_config, conn)
+    else:
+        result = await single_shot_query(req.query, rag_config, conn)
+    return result
 
 
 # --- Hybrid Search Route ---
