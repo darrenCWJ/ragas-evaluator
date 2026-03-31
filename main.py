@@ -1,13 +1,33 @@
 import argparse
 import asyncio
 import csv
+import io
+import json
+import logging
+import sqlite3
+import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
+from pydantic import BaseModel, field_validator
 from ragas.llms import llm_factory
 from ragas.embeddings.base import embedding_factory
+
+from chunking import chunk_text_pipeline
+from db.init import get_db as get_db_conn
+from embedding.engine import embed_texts_dispatch, embed_query_dispatch
+from embedding.vectorstore import (
+    delete_collection as delete_vector_collection,
+    upsert_embeddings,
+    search as vector_search,
+)
 
 from ragas_test import (
     faithfulness,
@@ -34,17 +54,13 @@ from ragas_test import (
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 BASE_DIR = Path(__file__).parent
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
 
 CONTEXT_SEPARATOR = "||"
-
-# Metrics that work with the CSV format (Question, Answer, Retrieve Context)
-# Grouped by what parameters they need:
-#   rag: question, answer, contexts
-#   nlp: answer, reference (uses answer as both response and reference for demo)
-#   context_only: question, contexts
 
 ALL_METRICS = [
     "faithfulness",
@@ -221,42 +237,866 @@ async def process_csv(input_file: str, metrics: list[str] = None):
     print(f"Results saved to {output_path}")
 
 
-def run_api(host: str = "0.0.0.0", port: int = 8000):
+# --- FastAPI Application (module-level) ---
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    from db.init import init_db
     try:
-        import uvicorn
-        from fastapi import FastAPI
-        from pydantic import BaseModel
-    except ImportError:
-        print("API mode requires fastapi and uvicorn.")
-        print("Install with: pip install fastapi uvicorn")
-        return
+        init_db()
+        logger.info("Database initialized at data/ragas.db")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        sys.exit(1)
+    yield
 
-    app = FastAPI(title="Ragas Evaluator")
-    scorers = setup_scorers()
 
-    class EvalRequest(BaseModel):
-        question: str
-        answer: str
-        retrieve_context: list[str]
-        metrics: list[str] | None = None
+app = FastAPI(title="Ragas Evaluator", version="0.1.0", lifespan=lifespan)
 
-    @app.post("/evaluate")
-    async def evaluate(req: EvalRequest):
-        selected_scorers = scorers
-        if req.metrics:
-            selected_scorers = {k: v for k, v in scorers.items() if k in req.metrics}
-        scores = await evaluate_row(selected_scorers, req.question, req.answer, req.retrieve_context)
-        return {
-            "question": req.question,
-            "answer": req.answer,
-            **scores,
-        }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    @app.get("/metrics")
-    async def list_metrics():
-        return {"available_metrics": ALL_METRICS}
+_scorers = None
 
-    uvicorn.run(app, host=host, port=port)
+
+def get_scorers():
+    global _scorers
+    if _scorers is None:
+        _scorers = setup_scorers()
+    return _scorers
+
+
+# --- Pydantic Models ---
+
+class EvalRequest(BaseModel):
+    question: str
+    answer: str
+    retrieve_context: list[str]
+    metrics: list[str] | None = None
+
+
+class TestGenRequest(BaseModel):
+    chunks: list[str]
+    testset_size: int = 10
+    num_personas: int = 3
+    custom_personas: list[dict] | None = None
+    use_personas: bool = True
+
+
+class PersonaGenRequest(BaseModel):
+    chunks: list[str]
+    num_personas: int = 3
+    custom_personas: list[dict] | None = None
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Project name must not be blank")
+        return v
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Project name must not be blank")
+        return v
+
+
+VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap"}
+
+
+class ChunkConfigCreate(BaseModel):
+    name: str
+    method: str
+    params: dict
+    step2_method: str | None = None
+    step2_params: dict | None = None
+
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, v: str) -> str:
+        if v not in VALID_CHUNK_METHODS:
+            raise ValueError(f"method must be one of: {', '.join(sorted(VALID_CHUNK_METHODS))}")
+        return v
+
+    @field_validator("step2_method")
+    @classmethod
+    def validate_step2_method(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_CHUNK_METHODS:
+            raise ValueError(f"step2_method must be one of: {', '.join(sorted(VALID_CHUNK_METHODS))}")
+        return v
+
+    def model_post_init(self, __context) -> None:
+        if (self.step2_method is None) != (self.step2_params is None):
+            raise ValueError("step2_method and step2_params must both be set or both be None")
+
+
+VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sparse"}
+
+
+class EmbeddingConfigCreate(BaseModel):
+    name: str
+    type: str
+    model_name: str
+    params: dict = {}
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        if v not in VALID_EMBEDDING_TYPES:
+            raise ValueError(f"type must be one of: {', '.join(sorted(VALID_EMBEDDING_TYPES))}")
+        return v
+
+
+class EmbedRequest(BaseModel):
+    chunk_config_id: int
+
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+class HybridSearchRequest(BaseModel):
+    query: str
+    dense_config_id: int
+    sparse_config_id: int
+    top_k: int = 5
+    alpha: float = 0.5
+
+    @field_validator("alpha")
+    @classmethod
+    def validate_alpha(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError("alpha must be between 0.0 and 1.0")
+        return v
+
+
+# --- API Routes ---
+
+@app.post("/api/evaluate")
+async def evaluate(req: EvalRequest):
+    all_scorers = get_scorers()
+    selected_scorers = all_scorers
+    if req.metrics:
+        selected_scorers = {k: v for k, v in all_scorers.items() if k in req.metrics}
+    scores = await evaluate_row(selected_scorers, req.question, req.answer, req.retrieve_context)
+    return {
+        "question": req.question,
+        "answer": req.answer,
+        **scores,
+    }
+
+
+@app.get("/api/metrics")
+async def list_metrics():
+    return {"available_metrics": ALL_METRICS}
+
+
+@app.get("/api/health")
+async def health_check():
+    try:
+        from db.init import get_db
+        conn = get_db()
+        conn.execute("SELECT 1")
+        return {"status": "ok", "version": "0.1.0", "database": "connected"}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "version": "0.1.0", "database": "disconnected"},
+        )
+
+
+@app.post("/api/generate-testset")
+async def generate_testset(req: TestGenRequest):
+    from ragas_test.testgen import (
+        generate_testset_from_chunks,
+        generate_testset_with_personas,
+    )
+
+    if req.use_personas:
+        result = await generate_testset_with_personas(
+            chunks=req.chunks,
+            testset_size=req.testset_size,
+            num_personas=req.num_personas,
+            custom_personas=req.custom_personas,
+        )
+        return result
+    else:
+        questions = await generate_testset_from_chunks(
+            chunks=req.chunks,
+            testset_size=req.testset_size,
+            custom_personas=req.custom_personas,
+        )
+        return {"personas": [], "questions": questions}
+
+
+@app.post("/api/generate-personas")
+async def gen_personas(req: PersonaGenRequest):
+    from ragas_test.testgen import generate_personas
+
+    personas = generate_personas(
+        chunks=req.chunks,
+        num_personas=req.num_personas,
+        custom_personas=req.custom_personas,
+    )
+    return {
+        "personas": [
+            {"name": p.name, "role_description": p.role_description}
+            for p in personas
+        ]
+    }
+
+
+@app.post("/api/upload-document")
+async def upload_document(file: UploadFile = File(...)):
+    content = await file.read()
+    text = content.decode("utf-8", errors="ignore")
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    return {
+        "filename": file.filename,
+        "chunks": paragraphs,
+        "num_chunks": len(paragraphs),
+    }
+
+
+# --- Project CRUD Routes ---
+
+@app.post("/api/projects", status_code=201)
+async def create_project(req: ProjectCreate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            "INSERT INTO projects (name, description) VALUES (?, ?)",
+            (req.name, req.description),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        return dict(row)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Project name already exists")
+
+
+@app.get("/api/projects")
+async def list_projects():
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, name, description, created_at, updated_at FROM projects"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return dict(row)
+
+
+@app.put("/api/projects/{project_id}")
+async def update_project(project_id: int, req: ProjectUpdate):
+    if req.name is None and req.description is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    existing = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    updates = []
+    params = []
+    if req.name is not None:
+        updates.append("name = ?")
+        params.append(req.name)
+    if req.description is not None:
+        updates.append("description = ?")
+        params.append(req.description)
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(project_id)
+    try:
+        conn.execute(
+            f"UPDATE projects SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Project name already exists")
+    row = conn.execute(
+        "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    return dict(row)
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: int):
+    conn = get_db_conn()
+    existing = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    conn.commit()
+    return {"detail": "Project deleted"}
+
+
+# --- Document Routes ---
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+ALLOWED_FILE_TYPES = {".txt", ".pdf"}
+
+
+@app.post("/api/projects/{project_id}/documents", status_code=201)
+async def upload_project_document(project_id: int, file: UploadFile = File(...)):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    filename = file.filename or ""
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_FILE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_FILE_TYPES))}",
+        )
+
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="File exceeds 50MB size limit")
+
+    if ext == ".txt":
+        text = content_bytes.decode("utf-8", errors="ignore")
+    elif ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content_bytes))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}")
+
+    cursor = conn.execute(
+        "INSERT INTO documents (project_id, filename, file_type, content) VALUES (?, ?, ?, ?)",
+        (project_id, filename, ext, text),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, filename, file_type, created_at FROM documents WHERE id = ?",
+        (cursor.lastrowid,),
+    ).fetchone()
+    return dict(row)
+
+
+@app.get("/api/projects/{project_id}/documents")
+async def list_project_documents(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = conn.execute(
+        "SELECT id, filename, file_type, created_at FROM documents WHERE project_id = ?",
+        (project_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/projects/{project_id}/documents/{document_id}")
+async def get_project_document(project_id: int, document_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, project_id, filename, file_type, content, created_at FROM documents WHERE id = ? AND project_id = ?",
+        (document_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return dict(row)
+
+
+@app.delete("/api/projects/{project_id}/documents/{document_id}")
+async def delete_project_document(project_id: int, document_id: int):
+    conn = get_db_conn()
+    existing = conn.execute(
+        "SELECT id FROM documents WHERE id = ? AND project_id = ?",
+        (document_id, project_id),
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+    conn.commit()
+    return {"detail": "Document deleted"}
+
+
+# --- Chunk Config Routes ---
+
+def _parse_chunk_config_row(row) -> dict:
+    d = dict(row)
+    d["params"] = json.loads(d.pop("params_json"))
+    s2m = d.pop("step2_method", None)
+    s2p = d.pop("step2_params_json", None)
+    d["step2_method"] = s2m
+    d["step2_params"] = json.loads(s2p) if s2p else None
+    return d
+
+
+@app.post("/api/projects/{project_id}/chunk-configs", status_code=201)
+async def create_chunk_config(project_id: int, req: ChunkConfigCreate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    cursor = conn.execute(
+        "INSERT INTO chunk_configs (project_id, name, method, params_json, step2_method, step2_params_json) VALUES (?, ?, ?, ?, ?, ?)",
+        (project_id, req.name, req.method, json.dumps(req.params),
+         req.step2_method, json.dumps(req.step2_params) if req.step2_params else None),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM chunk_configs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _parse_chunk_config_row(row)
+
+
+@app.get("/api/projects/{project_id}/chunk-configs")
+async def list_chunk_configs(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = conn.execute("SELECT * FROM chunk_configs WHERE project_id = ?", (project_id,)).fetchall()
+    return [_parse_chunk_config_row(r) for r in rows]
+
+
+@app.get("/api/projects/{project_id}/chunk-configs/{config_id}")
+async def get_chunk_config(project_id: int, config_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+    return _parse_chunk_config_row(row)
+
+
+@app.delete("/api/projects/{project_id}/chunk-configs/{config_id}")
+async def delete_chunk_config(project_id: int, config_id: int):
+    conn = get_db_conn()
+    existing = conn.execute(
+        "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+    conn.execute("DELETE FROM chunk_configs WHERE id = ?", (config_id,))
+    conn.commit()
+    return {"detail": "Chunk config deleted"}
+
+
+@app.post("/api/projects/{project_id}/chunk-configs/{config_id}/generate")
+async def generate_chunks(project_id: int, config_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    config_row = conn.execute(
+        "SELECT * FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if config_row is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+
+    method = config_row["method"]
+    params = json.loads(config_row["params_json"])
+    step2_method = config_row["step2_method"]
+    step2_params = json.loads(config_row["step2_params_json"]) if config_row["step2_params_json"] else None
+
+    # Delete existing chunks for this config (re-generation replaces prior)
+    conn.execute("DELETE FROM chunks WHERE chunk_config_id = ?", (config_id,))
+
+    documents = conn.execute(
+        "SELECT id, filename, content FROM documents WHERE project_id = ?",
+        (project_id,),
+    ).fetchall()
+
+    total_chunks = 0
+    doc_results = []
+    for doc in documents:
+        chunks = chunk_text_pipeline(doc["content"], method, params, step2_method, step2_params)
+        for chunk in chunks:
+            conn.execute(
+                "INSERT INTO chunks (document_id, chunk_config_id, content) VALUES (?, ?, ?)",
+                (doc["id"], config_id, chunk),
+            )
+        total_chunks += len(chunks)
+        doc_results.append({"document_id": doc["id"], "filename": doc["filename"], "chunk_count": len(chunks)})
+
+    conn.commit()
+    return {"total_chunks": total_chunks, "documents": doc_results}
+
+
+@app.post("/api/projects/{project_id}/chunk-configs/{config_id}/preview")
+async def preview_chunks(project_id: int, config_id: int, document_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    config_row = conn.execute(
+        "SELECT * FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if config_row is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+    doc = conn.execute(
+        "SELECT id, filename, content FROM documents WHERE id = ? AND project_id = ?",
+        (document_id, project_id),
+    ).fetchone()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    method = config_row["method"]
+    params = json.loads(config_row["params_json"])
+    step2_method = config_row["step2_method"]
+    step2_params = json.loads(config_row["step2_params_json"]) if config_row["step2_params_json"] else None
+
+    chunks = chunk_text_pipeline(doc["content"], method, params, step2_method, step2_params)
+    return {"document_id": doc["id"], "filename": doc["filename"], "chunks": chunks, "chunk_count": len(chunks)}
+
+
+# --- Embedding Config Routes ---
+
+def _parse_embedding_config_row(row) -> dict:
+    d = dict(row)
+    pj = d.pop("params_json", None)
+    d["params"] = json.loads(pj) if pj else {}
+    return d
+
+
+@app.post("/api/projects/{project_id}/embedding-configs", status_code=201)
+async def create_embedding_config(project_id: int, req: EmbeddingConfigCreate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    cursor = conn.execute(
+        "INSERT INTO embedding_configs (project_id, name, type, model_name, params_json) VALUES (?, ?, ?, ?, ?)",
+        (project_id, req.name, req.type, req.model_name, json.dumps(req.params)),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM embedding_configs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _parse_embedding_config_row(row)
+
+
+@app.get("/api/projects/{project_id}/embedding-configs")
+async def list_embedding_configs(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = conn.execute("SELECT * FROM embedding_configs WHERE project_id = ?", (project_id,)).fetchall()
+    return [_parse_embedding_config_row(r) for r in rows]
+
+
+@app.get("/api/projects/{project_id}/embedding-configs/{config_id}")
+async def get_embedding_config(project_id: int, config_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Embedding config not found")
+    return _parse_embedding_config_row(row)
+
+
+@app.delete("/api/projects/{project_id}/embedding-configs/{config_id}")
+async def delete_embedding_config(project_id: int, config_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    config_row = conn.execute(
+        "SELECT * FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if config_row is None:
+        raise HTTPException(status_code=404, detail="Embedding config not found")
+    # Cascade: clean up stored data based on type
+    if config_row["type"] == "bm25_sparse":
+        from embedding.bm25 import delete_index, get_index_path
+        delete_index(get_index_path(project_id, config_id))
+    else:
+        collection_name = f"project_{project_id}_embed_{config_id}"
+        delete_vector_collection(collection_name)
+    conn.execute("DELETE FROM embedding_configs WHERE id = ?", (config_id,))
+    conn.commit()
+    return {"detail": "Embedding config deleted"}
+
+
+@app.post("/api/projects/{project_id}/embedding-configs/{config_id}/embed")
+async def embed_chunks(project_id: int, config_id: int, req: EmbedRequest):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate embedding config belongs to project
+    config_row = conn.execute(
+        "SELECT * FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if config_row is None:
+        raise HTTPException(status_code=404, detail="Embedding config not found")
+
+    # Validate chunk config belongs to project
+    chunk_config = conn.execute(
+        "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (req.chunk_config_id, project_id),
+    ).fetchone()
+    if chunk_config is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+
+    # Fetch all chunks for this chunk config
+    chunks = conn.execute(
+        "SELECT id, document_id, content FROM chunks WHERE chunk_config_id = ?",
+        (req.chunk_config_id,),
+    ).fetchall()
+
+    # Empty state: 0 chunks → return early
+    if not chunks:
+        return {"total_embedded": 0, "collection": f"project_{project_id}_embed_{config_id}"}
+
+    embedding_type = config_row["type"]
+    model_name = config_row["model_name"]
+    params = json.loads(config_row["params_json"]) if config_row["params_json"] else {}
+
+    texts = [chunk["content"] for chunk in chunks]
+    metadatas = [{"document_id": chunk["document_id"], "chunk_id": chunk["id"]} for chunk in chunks]
+
+    if embedding_type == "bm25_sparse":
+        # BM25: build index and save to disk (not ChromaDB)
+        from embedding.bm25 import build_and_save_index, get_index_path
+        index_path = get_index_path(project_id, config_id)
+        try:
+            build_and_save_index(texts, metadatas, index_path)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"BM25 index build failed: {e}")
+        return {"total_embedded": len(chunks), "index": index_path}
+    else:
+        # Dense embedding: compute-then-swap into ChromaDB
+        try:
+            embeddings = await embed_texts_dispatch(texts, embedding_type, model_name, params)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}")
+
+        collection_name = f"project_{project_id}_embed_{config_id}"
+        delete_vector_collection(collection_name)
+
+        ids = [f"chunk_{chunk['id']}" for chunk in chunks]
+        documents = texts
+
+        upsert_embeddings(collection_name, ids, embeddings, documents, metadatas)
+
+        return {"total_embedded": len(chunks), "collection": collection_name}
+
+
+@app.post("/api/projects/{project_id}/embedding-configs/{config_id}/search")
+async def search_embeddings(project_id: int, config_id: int, req: SearchRequest):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate embedding config belongs to project
+    config_row = conn.execute(
+        "SELECT * FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if config_row is None:
+        raise HTTPException(status_code=404, detail="Embedding config not found")
+
+    embedding_type = config_row["type"]
+    model_name = config_row["model_name"]
+    params = json.loads(config_row["params_json"]) if config_row["params_json"] else {}
+
+    if embedding_type == "bm25_sparse":
+        # BM25: load index and search
+        from embedding.bm25 import load_index, search_bm25, get_index_path
+        index_path = get_index_path(project_id, config_id)
+        try:
+            index, texts, metadatas = load_index(index_path)
+        except FileNotFoundError:
+            return {"results": [], "query": req.query, "top_k": req.top_k}
+        results = search_bm25(index, texts, metadatas, req.query, req.top_k)
+        return {"results": results, "query": req.query, "top_k": req.top_k}
+    else:
+        # Dense: embed query and search ChromaDB
+        try:
+            query_embedding = await embed_query_dispatch(req.query, embedding_type, model_name, params)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}")
+
+        collection_name = f"project_{project_id}_embed_{config_id}"
+        results = vector_search(collection_name, query_embedding, req.top_k)
+
+        output = []
+        for r in results:
+            output.append({
+                "content": r["content"],
+                "document_id": r["metadata"].get("document_id"),
+                "chunk_id": r["metadata"].get("chunk_id"),
+                "score": 1.0 / (1.0 + r["distance"]) if r["distance"] is not None else None,
+                "distance": r["distance"],
+            })
+
+        return {"results": output, "query": req.query, "top_k": req.top_k}
+
+
+# --- Hybrid Search Route ---
+
+@app.post("/api/projects/{project_id}/hybrid-search")
+async def hybrid_search(project_id: int, req: HybridSearchRequest):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate dense config
+    dense_config = conn.execute(
+        "SELECT * FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (req.dense_config_id, project_id),
+    ).fetchone()
+    if dense_config is None:
+        raise HTTPException(status_code=404, detail="Dense embedding config not found")
+
+    # Validate sparse config
+    sparse_config = conn.execute(
+        "SELECT * FROM embedding_configs WHERE id = ? AND project_id = ?",
+        (req.sparse_config_id, project_id),
+    ).fetchone()
+    if sparse_config is None:
+        raise HTTPException(status_code=404, detail="Sparse embedding config not found")
+
+    # --- Dense search ---
+    dense_results = []
+    dense_type = dense_config["type"]
+    dense_model = dense_config["model_name"]
+    dense_params = json.loads(dense_config["params_json"]) if dense_config["params_json"] else {}
+
+    try:
+        query_embedding = await embed_query_dispatch(req.query, dense_type, dense_model, dense_params)
+        collection_name = f"project_{project_id}_embed_{req.dense_config_id}"
+        raw_dense = vector_search(collection_name, query_embedding, req.top_k)
+        for r in raw_dense:
+            dense_results.append({
+                "content": r["content"],
+                "chunk_id": r["metadata"].get("chunk_id"),
+                "document_id": r["metadata"].get("document_id"),
+                "score": 1.0 / (1.0 + r["distance"]) if r["distance"] is not None else 0.0,
+            })
+    except Exception:
+        # Dense search failed or collection missing — proceed with sparse only
+        pass
+
+    # --- Sparse (BM25) search ---
+    sparse_results = []
+    from embedding.bm25 import load_index, search_bm25, get_index_path
+    index_path = get_index_path(project_id, req.sparse_config_id)
+    try:
+        index, texts, metadatas = load_index(index_path)
+        sparse_results = search_bm25(index, texts, metadatas, req.query, req.top_k)
+    except FileNotFoundError:
+        pass
+
+    # --- Reciprocal Rank Fusion ---
+    RRF_K = 60
+    chunk_scores: dict[int, dict] = {}
+
+    for rank, r in enumerate(dense_results):
+        cid = r["chunk_id"]
+        if cid not in chunk_scores:
+            chunk_scores[cid] = {
+                "content": r["content"],
+                "chunk_id": cid,
+                "document_id": r["document_id"],
+                "dense_score": r["score"],
+                "sparse_score": None,
+                "combined_score": 0.0,
+            }
+        chunk_scores[cid]["dense_score"] = r["score"]
+        chunk_scores[cid]["combined_score"] += req.alpha * (1.0 / (RRF_K + rank + 1))
+
+    for rank, r in enumerate(sparse_results):
+        cid = r["chunk_id"]
+        if cid not in chunk_scores:
+            chunk_scores[cid] = {
+                "content": r["content"],
+                "chunk_id": cid,
+                "document_id": r["document_id"],
+                "dense_score": None,
+                "sparse_score": r["score"],
+                "combined_score": 0.0,
+            }
+        chunk_scores[cid]["sparse_score"] = r["score"]
+        chunk_scores[cid]["combined_score"] += (1.0 - req.alpha) * (1.0 / (RRF_K + rank + 1))
+
+    # Sort by combined score descending, take top_k
+    merged = sorted(chunk_scores.values(), key=lambda x: x["combined_score"], reverse=True)[:req.top_k]
+
+    return {"results": merged, "query": req.query, "top_k": req.top_k, "alpha": req.alpha}
+
+
+# Mount static files AFTER API routes
+app.mount("/", StaticFiles(directory="public", html=True), name="static")
+
+
+# --- CLI Entry Point ---
+
+def run_api(host: str = "0.0.0.0", port: int = 8000):
+    import uvicorn
+    uvicorn.run("main:app", host=host, port=port, reload=True)
 
 
 if __name__ == "__main__":
