@@ -864,6 +864,103 @@
       font-size: 0.72rem; color: var(--text-muted); cursor: pointer;
     }
     .suggestion-card.implemented { opacity: 0.55; }
+    .suggestion-card.applied { border-left: 3px solid var(--score-high); opacity: 0.65; }
+    .suggestion-actions {
+      display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; flex-shrink: 0; margin-top: 0.15rem;
+    }
+    .btn-apply {
+      font-family: 'DM Sans', sans-serif; font-size: 0.7rem; font-weight: 600;
+      padding: 0.3rem 0.7rem; border-radius: 5px; cursor: pointer;
+      background: rgba(129, 140, 248, 0.1); color: var(--accent); border: 1px solid rgba(129, 140, 248, 0.3);
+      transition: all 0.2s; white-space: nowrap;
+    }
+    .btn-apply:hover:not(:disabled) { background: rgba(129, 140, 248, 0.2); border-color: var(--accent); }
+    .btn-apply:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-apply.applied {
+      background: rgba(34, 197, 94, 0.08); color: var(--score-high); border-color: rgba(34, 197, 94, 0.25);
+      cursor: default;
+    }
+    .btn-export {
+      font-family: 'DM Sans', sans-serif; font-size: 0.72rem; font-weight: 600;
+      padding: 0.3rem 0.75rem; border-radius: 5px; cursor: pointer;
+      background: transparent; color: var(--text-secondary); border: 1px solid var(--border);
+      transition: all 0.2s;
+    }
+    .btn-export:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--accent-glow); }
+    .btn-export:disabled { opacity: 0.4; cursor: not-allowed; }
+    .export-group { display: flex; gap: 0.4rem; }
+
+    /* --- Delta Comparison --- */
+    .delta-section {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1.1rem 1.25rem; margin-bottom: 1.5rem;
+      border-left: 3px solid var(--accent);
+    }
+    .delta-section-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;
+    }
+    .delta-section-title {
+      font-size: 0.88rem; font-weight: 700; color: var(--accent);
+    }
+    .delta-baseline-name {
+      font-size: 0.75rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;
+    }
+    .config-changes-table {
+      width: 100%; border-collapse: separate; border-spacing: 0; margin-bottom: 1rem;
+    }
+    .config-changes-table th {
+      font-size: 0.7rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.06em; padding: 0.45rem 0.6rem; text-align: left;
+      border-bottom: 1px solid var(--border); background: var(--bg-elevated);
+    }
+    .config-changes-table td {
+      font-size: 0.78rem; padding: 0.45rem 0.6rem; border-bottom: 1px solid rgba(40, 51, 72, 0.4);
+      font-family: 'JetBrains Mono', monospace; color: var(--text-secondary);
+    }
+    .config-changes-table td.field-name { color: var(--text-primary); font-weight: 500; }
+    .config-changes-table td.old-val { color: var(--text-muted); text-decoration: line-through; }
+    .config-changes-table td.new-val { color: var(--accent); }
+    .delta-metric-row {
+      display: grid; grid-template-columns: 160px 1fr 1fr 70px; align-items: center; gap: 0.5rem;
+      margin-bottom: 0.4rem;
+    }
+    .delta-metric-label {
+      font-size: 0.75rem; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .delta-bar-track {
+      height: 14px; background: var(--bg-elevated); border-radius: 3px; overflow: hidden;
+    }
+    .delta-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+    .delta-bar-fill.baseline { background: var(--text-muted); opacity: 0.4; }
+    .delta-bar-fill.iteration { background: var(--accent); }
+    .delta-value {
+      font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 600; text-align: right;
+    }
+    .delta-value.pos { color: var(--delta-pos); }
+    .delta-value.neg { color: var(--delta-neg); }
+    .delta-value.zero { color: var(--text-muted); }
+    .delta-bar-labels {
+      display: flex; justify-content: space-between; font-size: 0.65rem; color: var(--text-muted);
+      margin-bottom: 0.6rem; padding: 0 0 0 160px;
+    }
+    .delta-bar-labels span { flex: 1; text-align: center; }
+    .delta-questions-table {
+      width: 100%; border-collapse: separate; border-spacing: 0;
+    }
+    .delta-questions-table thead th {
+      font-size: 0.7rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.06em; padding: 0.5rem 0.6rem; text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .delta-questions-table thead th.num { text-align: right; }
+    .delta-questions-table tbody td {
+      font-size: 0.78rem; padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid rgba(40, 51, 72, 0.4); vertical-align: middle;
+    }
+    .delta-questions-table tbody td.num {
+      text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+    }
 
     /* --- History Timeline --- */
     .history-timeline { display: flex; flex-direction: column; gap: 0.6rem; }
@@ -943,6 +1040,10 @@
           <div class="section-title">Aggregate Metrics</div>
           <div id="detail-metrics" class="metric-bars"></div>
         </div>
+        <!-- Delta vs Baseline section (conditionally shown) -->
+        <div id="delta-loading" class="loading" style="display:none;">Loading delta comparison...</div>
+        <div id="delta-section" class="delta-section" style="display:none;"></div>
+
         <div class="section-title">Per-Question Results</div>
         <div style="overflow-x:auto;">
           <table class="questions-table">
@@ -1136,6 +1237,8 @@
       document.getElementById('detail-empty').style.display = '';
       document.getElementById('detail-content').style.display = 'none';
       document.getElementById('detail-loading').style.display = 'none';
+      document.getElementById('delta-section').style.display = 'none';
+      document.getElementById('delta-loading').style.display = 'none';
     }
 
     async function loadDetailView(eid) {
@@ -1144,10 +1247,12 @@
       document.getElementById('detail-loading').style.display = '';
 
       try {
-        const [expResp, resultsResp, sugResp] = await Promise.all([
+        // Fetch experiment, results, suggestions, and delta in parallel
+        const [expResp, resultsResp, sugResp, deltaResp] = await Promise.all([
           fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid),
           fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid + '/results'),
           fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid + '/suggestions'),
+          fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid + '/delta').catch(() => null),
         ]);
 
         if (!expResp.ok || !resultsResp.ok) throw new Error('Failed to load experiment data');
@@ -1156,8 +1261,17 @@
         const results = await resultsResp.json();
         const sugData = sugResp.ok ? await sugResp.json() : { suggestions: [] };
 
+        // Delta: parse only on 200, hide on any error
+        let deltaData = null;
+        if (deltaResp && deltaResp.ok) {
+          try { deltaData = await deltaResp.json(); } catch (e2) { console.warn('Delta parse failed', e2); }
+        } else if (deltaResp && !deltaResp.ok && deltaResp.status !== 404 && deltaResp.status !== 409) {
+          console.warn('Delta endpoint returned', deltaResp.status);
+        }
+
         renderDetailHeader(exp);
         renderDetailMetrics(exp.aggregate_metrics);
+        renderDelta(deltaData);
         renderDetailQuestions(results);
         renderSuggestions(sugData.suggestions);
 
@@ -1181,6 +1295,19 @@
       nameSpan.className = 'exp-header-name';
       nameSpan.textContent = exp.name;
       topDiv.appendChild(nameSpan);
+
+      // Export buttons
+      const exportGroup = document.createElement('div');
+      exportGroup.className = 'export-group';
+      ['CSV', 'JSON'].forEach(fmt => {
+        const btn = document.createElement('button');
+        btn.className = 'btn-export';
+        btn.textContent = 'Export ' + fmt;
+        btn.addEventListener('click', () => onExport(exp.id, fmt.toLowerCase(), btn));
+        exportGroup.appendChild(btn);
+      });
+      topDiv.appendChild(exportGroup);
+
       el.appendChild(topDiv);
 
       const metaDiv = document.createElement('div');
@@ -1257,6 +1384,216 @@
         row.appendChild(score);
         el.appendChild(row);
       });
+    }
+
+    // --- Delta Comparison ---
+    function renderDelta(data) {
+      const section = document.getElementById('delta-section');
+      const loading = document.getElementById('delta-loading');
+      loading.style.display = 'none';
+      section.style.display = 'none';
+      section.innerHTML = '';
+
+      if (!data) return;
+
+      // Header
+      const header = document.createElement('div');
+      header.className = 'delta-section-header';
+      const title = document.createElement('span');
+      title.className = 'delta-section-title';
+      title.textContent = 'Delta vs Baseline';
+      header.appendChild(title);
+      const baselineName = document.createElement('span');
+      baselineName.className = 'delta-baseline-name';
+      baselineName.textContent = 'baseline: ' + (data.baseline_experiment_name || 'unknown');
+      header.appendChild(baselineName);
+      section.appendChild(header);
+
+      // Config changes
+      if (data.config_changes && data.config_changes.length > 0) {
+        const configTitle = document.createElement('div');
+        configTitle.className = 'section-title';
+        configTitle.textContent = 'Config Changes';
+        configTitle.style.marginBottom = '0.5rem';
+        section.appendChild(configTitle);
+
+        const table = document.createElement('table');
+        table.className = 'config-changes-table';
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['Field', 'Before', 'After'].forEach(t => {
+          const th = document.createElement('th');
+          th.textContent = t;
+          headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        data.config_changes.forEach(c => {
+          const tr = document.createElement('tr');
+          const tdField = document.createElement('td');
+          tdField.className = 'field-name';
+          tdField.textContent = c.field;
+          const tdOld = document.createElement('td');
+          tdOld.className = 'old-val';
+          tdOld.textContent = c.old_value != null ? String(c.old_value) : '(none)';
+          const tdNew = document.createElement('td');
+          tdNew.className = 'new-val';
+          tdNew.textContent = c.new_value != null ? String(c.new_value) : '(none)';
+          tr.appendChild(tdField);
+          tr.appendChild(tdOld);
+          tr.appendChild(tdNew);
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        section.appendChild(table);
+      }
+
+      // Metric deltas
+      if (data.metric_deltas && Object.keys(data.metric_deltas).length > 0) {
+        const metricsTitle = document.createElement('div');
+        metricsTitle.className = 'section-title';
+        metricsTitle.textContent = 'Metric Deltas';
+        metricsTitle.style.marginBottom = '0.5rem';
+        section.appendChild(metricsTitle);
+
+        // Bar labels
+        const labels = document.createElement('div');
+        labels.className = 'delta-bar-labels';
+        const lbl1 = document.createElement('span');
+        lbl1.textContent = 'Baseline';
+        const lbl2 = document.createElement('span');
+        lbl2.textContent = 'Iteration';
+        labels.appendChild(lbl1);
+        labels.appendChild(lbl2);
+        section.appendChild(labels);
+
+        const sorted = Object.entries(data.metric_deltas).sort((a, b) => a[0].localeCompare(b[0]));
+        sorted.forEach(([name, m]) => {
+          const row = document.createElement('div');
+          row.className = 'delta-metric-row';
+
+          const label = document.createElement('span');
+          label.className = 'delta-metric-label';
+          label.textContent = name;
+
+          // Baseline bar
+          const baseTrack = document.createElement('div');
+          baseTrack.className = 'delta-bar-track';
+          const baseFill = document.createElement('div');
+          baseFill.className = 'delta-bar-fill baseline';
+          baseFill.style.width = m.baseline != null ? (m.baseline * 100) + '%' : '0%';
+          baseTrack.appendChild(baseFill);
+
+          // Iteration bar
+          const iterTrack = document.createElement('div');
+          iterTrack.className = 'delta-bar-track';
+          const iterFill = document.createElement('div');
+          iterFill.className = 'delta-bar-fill iteration';
+          iterFill.style.width = m.iteration != null ? (m.iteration * 100) + '%' : '0%';
+          iterTrack.appendChild(iterFill);
+
+          // Delta value
+          const deltaEl = document.createElement('span');
+          deltaEl.className = 'delta-value';
+          if (m.delta != null) {
+            deltaEl.classList.add(m.delta > 0 ? 'pos' : m.delta < 0 ? 'neg' : 'zero');
+            deltaEl.textContent = (m.delta > 0 ? '+' : '') + m.delta.toFixed(4);
+          } else {
+            deltaEl.classList.add('zero');
+            deltaEl.textContent = 'N/A';
+          }
+
+          row.appendChild(label);
+          row.appendChild(baseTrack);
+          row.appendChild(iterTrack);
+          row.appendChild(deltaEl);
+          section.appendChild(row);
+        });
+      }
+
+      // Per-question deltas
+      if (data.per_question_deltas && data.per_question_deltas.length > 0) {
+        const qTitle = document.createElement('div');
+        qTitle.className = 'section-title';
+        qTitle.textContent = 'Per-Question Deltas';
+        qTitle.style.margin = '1rem 0 0.5rem';
+        section.appendChild(qTitle);
+
+        const table = document.createElement('table');
+        table.className = 'delta-questions-table';
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        [['#', '40px'], ['Question', ''], ['Baseline Avg', '100px'], ['Iteration Avg', '100px'], ['Delta', '80px']].forEach(([t, w]) => {
+          const th = document.createElement('th');
+          th.textContent = t;
+          if (w) th.style.width = w;
+          if (t !== '#' && t !== 'Question') th.className = 'num';
+          headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        data.per_question_deltas.forEach((q, i) => {
+          const tr = document.createElement('tr');
+
+          const tdNum = document.createElement('td');
+          tdNum.textContent = i + 1;
+          tr.appendChild(tdNum);
+
+          const tdQ = document.createElement('td');
+          const qSpan = document.createElement('span');
+          qSpan.className = 'question-text';
+          qSpan.textContent = q.question || '(unknown)';
+          tdQ.appendChild(qSpan);
+          tr.appendChild(tdQ);
+
+          // Compute avg baseline and iteration across all metrics for this question
+          const metricEntries = Object.values(q.metrics || {});
+          const bVals = metricEntries.map(m => m.baseline).filter(v => v != null);
+          const iVals = metricEntries.map(m => m.iteration).filter(v => v != null);
+          const bAvg = bVals.length > 0 ? bVals.reduce((a, b) => a + b, 0) / bVals.length : null;
+          const iAvg = iVals.length > 0 ? iVals.reduce((a, b) => a + b, 0) / iVals.length : null;
+          const qDelta = (bAvg != null && iAvg != null) ? iAvg - bAvg : null;
+
+          const tdBase = document.createElement('td');
+          tdBase.className = 'num';
+          tdBase.textContent = bAvg != null ? bAvg.toFixed(3) : 'N/A';
+          tdBase.style.color = bAvg != null ? 'var(--text-muted)' : 'var(--score-null)';
+          tr.appendChild(tdBase);
+
+          const tdIter = document.createElement('td');
+          tdIter.className = 'num';
+          tdIter.textContent = iAvg != null ? iAvg.toFixed(3) : 'N/A';
+          tdIter.style.color = iAvg != null ? scoreColor(iAvg) : 'var(--score-null)';
+          tr.appendChild(tdIter);
+
+          const tdDelta = document.createElement('td');
+          tdDelta.className = 'num';
+          if (qDelta != null) {
+            const badge = document.createElement('span');
+            badge.className = 'delta-badge ' + (qDelta > 0.0001 ? 'pos' : qDelta < -0.0001 ? 'neg' : 'zero');
+            badge.textContent = (qDelta > 0 ? '+' : '') + qDelta.toFixed(3);
+            tdDelta.appendChild(badge);
+          } else {
+            tdDelta.textContent = 'N/A';
+            tdDelta.style.color = 'var(--score-null)';
+          }
+          tr.appendChild(tdDelta);
+
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+
+        const wrapper = document.createElement('div');
+        wrapper.style.overflowX = 'auto';
+        wrapper.appendChild(table);
+        section.appendChild(wrapper);
+      }
+
+      section.style.display = '';
     }
 
     function renderDetailQuestions(results) {
@@ -1861,6 +2198,19 @@
           body.appendChild(text);
           card.appendChild(body);
 
+          const actions = document.createElement('div');
+          actions.className = 'suggestion-actions';
+
+          // Apply button — only when config_field is non-null
+          if (s.config_field) {
+            const applyBtn = document.createElement('button');
+            applyBtn.className = 'btn-apply' + (s.implemented ? ' applied' : '');
+            applyBtn.textContent = s.implemented ? 'Applied' : 'Apply';
+            applyBtn.disabled = !!s.implemented;
+            applyBtn.addEventListener('click', () => onApplySuggestion(s.id, applyBtn, card));
+            actions.appendChild(applyBtn);
+          }
+
           const check = document.createElement('div');
           check.className = 'suggestion-check';
           const cb = document.createElement('input');
@@ -1873,7 +2223,8 @@
           lbl.htmlFor = 'sug-' + s.id;
           lbl.textContent = 'Done';
           check.appendChild(lbl);
-          card.appendChild(check);
+          actions.appendChild(check);
+          card.appendChild(actions);
 
           section.appendChild(card);
         });
@@ -1929,6 +2280,70 @@
         }
       } catch (e) {
         showToast('Failed to update suggestion', true);
+      }
+    }
+
+    // --- Apply Suggestion ---
+    async function onApplySuggestion(sugId, btn, card) {
+      btn.disabled = true;
+      try {
+        const resp = await fetch(
+          '/api/projects/' + selectedProjectId + '/suggestions/' + sugId + '/apply',
+          { method: 'POST' }
+        );
+        if (resp.status === 409) {
+          btn.textContent = 'Applied';
+          btn.classList.add('applied');
+          card.classList.add('applied');
+          showToast('Already applied', false);
+          return;
+        }
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: 'Apply failed' }));
+          throw new Error(err.detail || 'Apply failed');
+        }
+        const data = await resp.json();
+        btn.textContent = 'Applied';
+        btn.classList.add('applied');
+        card.classList.add('applied');
+        // Also check the Done checkbox
+        const cb = card.querySelector('input[type="checkbox"]');
+        if (cb && !cb.checked) { cb.checked = true; card.classList.add('implemented'); }
+        showToast('Created "' + data.experiment_name + '" — go to Experiments to run it', false);
+      } catch (e) {
+        btn.disabled = false; // re-enable on error
+        showToast(e.message, true);
+      }
+    }
+
+    // --- Export ---
+    async function onExport(expId, format, btn) {
+      btn.disabled = true;
+      const origText = btn.textContent;
+      btn.textContent = 'Exporting...';
+      try {
+        const resp = await fetch(
+          '/api/projects/' + selectedProjectId + '/experiments/' + expId + '/export?format=' + format
+        );
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: 'Export failed' }));
+          throw new Error(err.detail || 'Export failed');
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'experiment-' + expId + '.' + (format === 'csv' ? 'csv' : 'json');
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('Export downloaded', false);
+      } catch (e) {
+        showToast(e.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
       }
     }
 
