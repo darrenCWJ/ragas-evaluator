@@ -5,15 +5,16 @@ import io
 import json
 import logging
 import sqlite3
+import statistics
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
@@ -22,6 +23,7 @@ from ragas.embeddings.base import embedding_factory
 
 from chunking import chunk_text_pipeline
 from db.init import get_db as get_db_conn
+from rag.query import single_shot_query, multi_step_query
 from embedding.engine import embed_texts_dispatch, embed_query_dispatch
 from embedding.vectorstore import (
     delete_collection as delete_vector_collection,
@@ -562,6 +564,120 @@ class RagQueryRequest(BaseModel):
         if len(v) > 10000:
             raise ValueError("query must not exceed 10000 characters")
         return v
+
+
+VALID_EXPERIMENT_STATUSES = {"pending", "running", "completed", "failed"}
+
+DEFAULT_EXPERIMENT_METRICS = [
+    "faithfulness", "answer_relevancy", "context_precision",
+    "context_recall", "factual_correctness", "semantic_similarity",
+]
+
+
+class ExperimentCreate(BaseModel):
+    test_set_id: int
+    rag_config_id: int
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+
+class ExperimentRunRequest(BaseModel):
+    metrics: list[str] | None = None
+
+
+class SuggestionUpdate(BaseModel):
+    implemented: bool
+
+
+def _build_virtual_rag_config_row(experiment_row, rag_config_row) -> dict:
+    """Build a dict satisfying the rag_config_row interface for RAG query functions."""
+    retrieval_config = json.loads(experiment_row["retrieval_config_json"]) if experiment_row["retrieval_config_json"] else {}
+    return {
+        "project_id": rag_config_row["project_id"],
+        "llm_model": experiment_row["model"],
+        "llm_params_json": experiment_row["model_params_json"],
+        "chunk_config_id": experiment_row["chunk_config_id"],
+        "embedding_config_id": experiment_row["embedding_config_id"],
+        "search_type": retrieval_config.get("search_type", "dense"),
+        "sparse_config_id": retrieval_config.get("sparse_config_id"),
+        "alpha": retrieval_config.get("alpha"),
+        "top_k": retrieval_config.get("top_k", 5),
+        "system_prompt": retrieval_config.get("system_prompt"),
+        "response_mode": retrieval_config.get("response_mode", "single_shot"),
+        "max_steps": retrieval_config.get("max_steps", 3),
+    }
+
+
+async def _evaluate_experiment_row(
+    scorers: dict,
+    question: str,
+    generated_answer: str,
+    reference_answer: str,
+    contexts: list[str],
+) -> dict:
+    """Evaluate a generated answer against reference using selected metrics.
+
+    Unlike evaluate_row, this properly separates generated_answer from reference_answer
+    for metrics that compare the two.
+    """
+    results = {}
+
+    for name, scorer in scorers.items():
+        try:
+            if name == "faithfulness":
+                results[name] = await faithfulness.score(scorer, question, generated_answer, contexts)
+            elif name == "answer_relevancy":
+                results[name] = await answer_relevancy.score(scorer, question, generated_answer)
+            elif name == "context_precision":
+                results[name] = await context_precision.score(scorer, question, generated_answer, contexts)
+            elif name == "context_recall":
+                results[name] = await context_recall.score(scorer, question, generated_answer, contexts)
+            elif name == "context_entities_recall":
+                results[name] = await context_entities_recall.score(scorer, generated_answer, contexts)
+            elif name == "noise_sensitivity":
+                results[name] = await noise_sensitivity.score(scorer, question, generated_answer, reference_answer, contexts)
+            elif name == "factual_correctness":
+                results[name] = await factual_correctness.score(scorer, generated_answer, reference_answer)
+            elif name == "semantic_similarity":
+                results[name] = await semantic_similarity.score(scorer, generated_answer, reference_answer)
+            elif name == "non_llm_string_similarity":
+                results[name] = await non_llm_string_similarity.score(scorer, generated_answer, reference_answer)
+            elif name == "bleu_score":
+                results[name] = await bleu_score.score(scorer, generated_answer, reference_answer)
+            elif name == "rouge_score":
+                results[name] = await rouge_score.score(scorer, generated_answer, reference_answer)
+            elif name == "chrf_score":
+                results[name] = await chrf_score.score(scorer, generated_answer, reference_answer)
+            elif name == "exact_match":
+                results[name] = await exact_match.score(scorer, generated_answer, reference_answer)
+            elif name == "string_presence":
+                results[name] = await string_presence.score(scorer, generated_answer, reference_answer)
+            elif name == "summarization_score":
+                results[name] = await summarization_score.score(scorer, generated_answer, contexts)
+            elif name == "aspect_critic":
+                results[name] = await aspect_critic.score(scorer, question, generated_answer, contexts)
+            elif name == "rubrics_score":
+                results[name] = await rubrics_score.score(scorer, question, generated_answer, contexts)
+            elif name == "answer_accuracy":
+                results[name] = await answer_accuracy.score(scorer, question, generated_answer, reference_answer)
+            elif name == "context_relevance":
+                results[name] = await context_relevance.score(scorer, question, contexts)
+            elif name == "response_groundedness":
+                results[name] = await response_groundedness.score(scorer, generated_answer, contexts)
+        except Exception as e:
+            logger.warning("Metric %s failed: %s", name, e)
+            results[name] = None
+
+    return results
 
 
 # --- API Routes ---
@@ -1865,6 +1981,887 @@ async def test_set_summary(project_id: int, test_set_id: int):
         **counts,
         "completion_pct": completion_pct,
     }
+
+
+# --- Experiment Routes ---
+
+
+def _parse_experiment_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "test_set_id": row["test_set_id"],
+        "name": row["name"],
+        "model": row["model"],
+        "model_params": json.loads(row["model_params_json"]) if row["model_params_json"] else None,
+        "retrieval_config": json.loads(row["retrieval_config_json"]) if row["retrieval_config_json"] else None,
+        "chunk_config_id": row["chunk_config_id"],
+        "embedding_config_id": row["embedding_config_id"],
+        "rag_config_id": row["rag_config_id"],
+        "status": row["status"],
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.post("/api/projects/{project_id}/experiments", status_code=201)
+async def create_experiment(project_id: int, req: ExperimentCreate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate rag_config belongs to project
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (req.rag_config_id, project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(
+            status_code=422,
+            detail="RAG config not found in this project",
+        )
+
+    # Validate test_set belongs to project
+    test_set = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (req.test_set_id, project_id),
+    ).fetchone()
+    if test_set is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Test set not found in this project",
+        )
+
+    # Check that test set has approved/edited questions
+    approved_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
+        (req.test_set_id,),
+    ).fetchone()["cnt"]
+    if approved_count == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Test set has no approved questions",
+        )
+
+    # Snapshot config from rag_config for reproducibility
+    retrieval_config = json.dumps({
+        "search_type": rag_config["search_type"],
+        "sparse_config_id": rag_config["sparse_config_id"],
+        "alpha": rag_config["alpha"],
+        "top_k": rag_config["top_k"],
+        "system_prompt": rag_config["system_prompt"],
+        "response_mode": rag_config["response_mode"],
+        "max_steps": rag_config["max_steps"],
+    })
+
+    cursor = conn.execute(
+        """INSERT INTO experiments
+           (project_id, test_set_id, name, model, model_params_json, retrieval_config_json,
+            chunk_config_id, embedding_config_id, rag_config_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+        (
+            project_id,
+            req.test_set_id,
+            req.name,
+            rag_config["llm_model"],
+            rag_config["llm_params_json"],
+            retrieval_config,
+            rag_config["chunk_config_id"],
+            rag_config["embedding_config_id"],
+            req.rag_config_id,
+        ),
+    )
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _parse_experiment_row(row)
+
+
+@app.get("/api/projects/{project_id}/experiments")
+async def list_experiments(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = conn.execute(
+        "SELECT * FROM experiments WHERE project_id = ? ORDER BY created_at DESC",
+        (project_id,),
+    ).fetchall()
+
+    experiments = []
+    for row in rows:
+        exp = _parse_experiment_row(row)
+        # Include approved question count from the referenced test set
+        q_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
+            (row["test_set_id"],),
+        ).fetchone()["cnt"]
+        exp["approved_question_count"] = q_count
+        experiments.append(exp)
+
+    return experiments
+
+
+# --- Experiment Comparison Route (must precede /{experiment_id} routes) ---
+
+
+@app.get("/api/projects/{project_id}/experiments/compare")
+async def compare_experiments(project_id: int, ids: str = Query(..., description="Comma-separated experiment IDs (2-5)")):
+    # Parse and validate IDs
+    raw_parts = ids.split(",")
+    try:
+        experiment_ids = [int(p.strip()) for p in raw_parts if p.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="All experiment IDs must be numeric")
+
+    if len(experiment_ids) < 2 or len(experiment_ids) > 5:
+        raise HTTPException(status_code=400, detail="Provide between 2 and 5 experiment IDs")
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Fetch all experiments with parameterized IN clause
+    placeholders = ",".join("?" for _ in experiment_ids)
+    rows = conn.execute(
+        f"SELECT * FROM experiments WHERE id IN ({placeholders}) AND project_id = ?",
+        (*experiment_ids, project_id),
+    ).fetchall()
+
+    if len(rows) != len(experiment_ids):
+        found_ids = {r["id"] for r in rows}
+        missing = [eid for eid in experiment_ids if eid not in found_ids]
+        raise HTTPException(status_code=404, detail=f"Experiments not found in this project: {missing}")
+
+    # Validate all completed
+    non_completed = [r["id"] for r in rows if r["status"] != "completed"]
+    if non_completed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"All experiments must be completed. Not completed: {non_completed}",
+        )
+
+    # Validate same test set
+    test_set_ids = {r["test_set_id"] for r in rows}
+    if len(test_set_ids) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="All experiments must use the same test set for comparison",
+        )
+
+    # Build experiment metadata
+    experiments_meta = []
+    for row in rows:
+        exp = _parse_experiment_row(row)
+
+        ts = conn.execute("SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)).fetchone()
+        exp["test_set_name"] = ts["name"] if ts else None
+
+        if row["rag_config_id"]:
+            rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)).fetchone()
+            exp["rag_config_name"] = rc["name"] if rc else None
+        else:
+            exp["rag_config_name"] = None
+
+        # Compute aggregate metrics
+        result_rows = conn.execute(
+            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+            (row["id"],),
+        ).fetchall()
+        exp["result_count"] = len(result_rows)
+
+        if result_rows:
+            metric_totals = {}
+            metric_counts = {}
+            for rr in result_rows:
+                metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+                for metric_name, value in metrics.items():
+                    if value is not None:
+                        metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                        metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+                    else:
+                        if metric_name not in metric_totals:
+                            metric_totals[metric_name] = 0.0
+                        if metric_name not in metric_counts:
+                            metric_counts[metric_name] = 0
+            aggregate = {}
+            for mn in metric_totals:
+                cnt = metric_counts[mn]
+                aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
+            exp["aggregate_metrics"] = aggregate
+        else:
+            exp["aggregate_metrics"] = None
+
+        experiments_meta.append(exp)
+
+    # Fetch all results for all experiments with parameterized IN clause
+    all_results = conn.execute(
+        f"""SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer,
+                   tq.question_type, tq.persona
+            FROM experiment_results er
+            JOIN test_questions tq ON er.test_question_id = tq.id
+            WHERE er.experiment_id IN ({placeholders})
+            ORDER BY tq.id""",
+        tuple(experiment_ids),
+    ).fetchall()
+
+    # Guard: payload size limit
+    if len(all_results) > 2500:
+        raise HTTPException(
+            status_code=413,
+            detail="Too many results for comparison. Reduce experiment count or use experiments with smaller test sets.",
+        )
+
+    # Build per-question aligned data
+    questions_map = {}  # test_question_id -> { question info + per-experiment data }
+    for r in all_results:
+        qid = r["test_question_id"]
+        if qid not in questions_map:
+            ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
+            questions_map[qid] = {
+                "test_question_id": qid,
+                "question": r["question"],
+                "reference_answer": ref_answer,
+                "question_type": r["question_type"],
+                "persona": r["persona"],
+                "experiments": {},
+            }
+
+        questions_map[qid]["experiments"][r["experiment_id"]] = {
+            "response": r["response"],
+            "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else {},
+            "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
+            "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
+        }
+
+    # Convert to ordered list
+    questions_list = sorted(questions_map.values(), key=lambda q: q["test_question_id"])
+
+    return {"experiments": experiments_meta, "questions": questions_list}
+
+
+# --- Experiment History Route (must precede /{experiment_id} routes) ---
+
+
+@app.get("/api/projects/{project_id}/experiments/history")
+async def get_experiment_history(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = conn.execute(
+        "SELECT * FROM experiments WHERE project_id = ? AND status = 'completed' ORDER BY completed_at DESC",
+        (project_id,),
+    ).fetchall()
+
+    experiments = []
+    for row in rows:
+        exp = _parse_experiment_row(row)
+
+        # Fetch rag_config_name
+        if row["rag_config_id"]:
+            rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)).fetchone()
+            exp["rag_config_name"] = rc["name"] if rc else None
+        else:
+            exp["rag_config_name"] = None
+
+        # Compute aggregate metrics and overall score
+        result_rows = conn.execute(
+            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+            (row["id"],),
+        ).fetchall()
+        exp["result_count"] = len(result_rows)
+
+        if result_rows:
+            metric_totals = {}
+            metric_counts = {}
+            for rr in result_rows:
+                metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+                for metric_name, value in metrics.items():
+                    if value is not None:
+                        metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                        metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+
+            aggregate = {}
+            for mn in metric_totals:
+                cnt = metric_counts[mn]
+                aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
+
+            exp["aggregate_metrics"] = aggregate
+
+            # Overall score = average of all non-null metric averages
+            valid_scores = [v for v in aggregate.values() if v is not None]
+            exp["overall_score"] = round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
+        else:
+            exp["aggregate_metrics"] = None
+            exp["overall_score"] = None
+
+        experiments.append(exp)
+
+    return {"experiments": experiments}
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}")
+async def get_experiment(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    row = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    exp = _parse_experiment_row(row)
+
+    # Include test_set name and rag_config name for display
+    ts = conn.execute("SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)).fetchone()
+    exp["test_set_name"] = ts["name"] if ts else None
+
+    if row["rag_config_id"]:
+        rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)).fetchone()
+        exp["rag_config_name"] = rc["name"] if rc else None
+    else:
+        exp["rag_config_name"] = None
+
+    # Include approved question count
+    q_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
+        (row["test_set_id"],),
+    ).fetchone()["cnt"]
+    exp["approved_question_count"] = q_count
+
+    # Include result count and aggregate metrics
+    result_rows = conn.execute(
+        "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+
+    exp["result_count"] = len(result_rows)
+
+    if result_rows:
+        metric_totals = {}
+        metric_counts = {}
+        for rr in result_rows:
+            metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+            for metric_name, value in metrics.items():
+                if value is not None:
+                    metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                    metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+                else:
+                    # Ensure metric appears even if all null
+                    if metric_name not in metric_totals:
+                        metric_totals[metric_name] = 0.0
+                    if metric_name not in metric_counts:
+                        metric_counts[metric_name] = 0
+
+        aggregate = {}
+        for metric_name in metric_totals:
+            count = metric_counts[metric_name]
+            if count > 0:
+                aggregate[metric_name] = round(metric_totals[metric_name] / count, 4)
+            else:
+                aggregate[metric_name] = None
+        exp["aggregate_metrics"] = aggregate
+    else:
+        exp["aggregate_metrics"] = None
+
+    return exp
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}/results")
+async def get_experiment_results(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rows = conn.execute(
+        """SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer,
+                  tq.question_type, tq.persona
+           FROM experiment_results er
+           JOIN test_questions tq ON er.test_question_id = tq.id
+           WHERE er.experiment_id = ?
+           ORDER BY er.id""",
+        (experiment_id,),
+    ).fetchall()
+
+    results = []
+    for r in rows:
+        ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
+        results.append({
+            "id": r["id"],
+            "test_question_id": r["test_question_id"],
+            "question": r["question"],
+            "reference_answer": ref_answer,
+            "question_type": r["question_type"],
+            "persona": r["persona"],
+            "response": r["response"],
+            "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
+            "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else {},
+            "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
+            "created_at": r["created_at"],
+        })
+
+    return results
+
+
+@app.delete("/api/projects/{project_id}/experiments/{experiment_id}", status_code=204)
+async def delete_experiment(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    row = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if row["status"] != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete experiment with status '{row['status']}'. Only pending experiments can be deleted.",
+        )
+
+    conn.execute("DELETE FROM experiments WHERE id = ?", (experiment_id,))
+    conn.commit()
+    return None
+
+
+# --- Model Registry Route ---
+
+
+@app.get("/api/models")
+async def get_models():
+    from llm.connector import list_providers
+    return list_providers()
+
+
+# --- Experiment Runner Route ---
+
+
+@app.post("/api/projects/{project_id}/experiments/{experiment_id}/run")
+async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRunRequest):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Pre-validation (non-authoritative — atomic guard is inside generator)
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["status"] != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Experiment already {experiment['status']}. Only pending experiments can be run.",
+        )
+
+    # Validate rag_config still exists (needed for project_id in collection naming)
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ?",
+        (experiment["rag_config_id"],),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(
+            status_code=422,
+            detail="RAG config has been deleted. Cannot run experiment without retrieval pipeline.",
+        )
+
+    # Silently filter metrics to valid ones
+    requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
+    selected_metrics = [m for m in requested_metrics if m in ALL_METRICS]
+    if not selected_metrics:
+        raise HTTPException(status_code=400, detail="No valid metrics selected")
+
+    async def _run_generator():
+        run_conn = get_db_conn()
+        run_conn.row_factory = sqlite3.Row
+        completed_count = 0
+
+        try:
+            # Atomic status claim — prevents concurrent run race condition
+            cursor = run_conn.execute(
+                "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending'",
+                (datetime.utcnow().isoformat(), experiment_id),
+            )
+            run_conn.commit()
+
+            if cursor.rowcount != 1:
+                yield f"event: error\ndata: {json.dumps({'message': 'Experiment already claimed by another request'})}\n\n"
+                return
+
+            # Fetch approved/edited test questions
+            questions = run_conn.execute(
+                "SELECT * FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited') ORDER BY id",
+                (experiment["test_set_id"],),
+            ).fetchall()
+
+            total = len(questions)
+            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': total, 'metrics': selected_metrics})}\n\n"
+
+            # Setup scorers
+            scorers = setup_scorers(selected_metrics)
+
+            # Build virtual rag_config row
+            virtual_config = _build_virtual_rag_config_row(experiment, rag_config)
+            response_mode = virtual_config["response_mode"]
+
+            for i, q_row in enumerate(questions, 1):
+                question_text = q_row["question"]
+                qid = q_row["id"]
+
+                try:
+                    # Execute RAG query
+                    if response_mode == "multi_step":
+                        query_result = await multi_step_query(question_text, virtual_config, run_conn)
+                    else:
+                        query_result = await single_shot_query(question_text, virtual_config, run_conn)
+
+                    generated_answer = query_result["answer"]
+                    full_context_dicts = query_result["contexts"]
+                    usage_info = query_result.get("usage", {})
+
+                    # Extract content strings for metric evaluation
+                    context_strings = [c["content"] for c in full_context_dicts]
+
+                    # Get reference answer (prefer user-edited)
+                    ref_answer = q_row["user_edited_answer"] if q_row["user_edited_answer"] else q_row["reference_answer"]
+
+                    # Evaluate metrics
+                    metrics_result = await _evaluate_experiment_row(
+                        scorers, question_text, generated_answer, ref_answer, context_strings,
+                    )
+
+                    # Store result
+                    run_conn.execute(
+                        """INSERT INTO experiment_results
+                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            experiment_id,
+                            qid,
+                            generated_answer,
+                            json.dumps(full_context_dicts),
+                            json.dumps(metrics_result),
+                            json.dumps(usage_info),
+                        ),
+                    )
+                    run_conn.commit()
+                    completed_count += 1
+
+                    yield f"event: progress\ndata: {json.dumps({'current': i, 'total': total, 'question_id': qid, 'question': question_text[:100]})}\n\n"
+
+                except Exception as e:
+                    # Per-question error isolation: store error row, continue
+                    logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, e)
+                    run_conn.execute(
+                        """INSERT INTO experiment_results
+                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            experiment_id,
+                            qid,
+                            None,
+                            "[]",
+                            "{}",
+                            json.dumps({"error": str(e), "question_id": qid}),
+                        ),
+                    )
+                    run_conn.commit()
+                    completed_count += 1
+
+                    yield f"event: progress\ndata: {json.dumps({'current': i, 'total': total, 'question_id': qid, 'question': question_text[:100], 'error': str(e)})}\n\n"
+
+            # All questions processed — mark completed
+            run_conn.execute(
+                "UPDATE experiments SET status = 'completed', completed_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), experiment_id),
+            )
+            run_conn.commit()
+
+            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': completed_count})}\n\n"
+
+        except Exception as e:
+            logger.error("Experiment %d fatal error: %s", experiment_id, e)
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+        finally:
+            # Cleanup guarantee: if still "running", set to "failed"
+            try:
+                row = run_conn.execute(
+                    "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
+                ).fetchone()
+                if row and row["status"] == "running":
+                    run_conn.execute(
+                        "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
+                        (datetime.utcnow().isoformat(), experiment_id),
+                    )
+                    run_conn.commit()
+            except Exception:
+                pass  # Best-effort cleanup
+
+    return StreamingResponse(_run_generator(), media_type="text/event-stream")
+
+
+# --- Suggestion Engine Routes ---
+
+
+def _generate_suggestions(aggregate_metrics: dict, per_question_results: list[dict]) -> list[dict]:
+    """Rule-based suggestion engine: analyzes metrics and returns actionable suggestions."""
+    suggestions = []
+
+    if not aggregate_metrics:
+        return suggestions
+
+    def _priority(score):
+        if score < 0.4:
+            return "high"
+        elif score < 0.7:
+            return "medium"
+        else:
+            return "low"
+
+    # --- Retrieval rules ---
+    context_recall = aggregate_metrics.get("context_recall")
+    if context_recall is not None and context_recall < 0.7:
+        suggestions.append({
+            "category": "retrieval",
+            "signal": f"context_recall avg {context_recall:.2f}",
+            "suggestion": "Consider increasing top_k, adding hybrid search, or re-chunking with smaller chunk sizes for better recall",
+            "priority": _priority(context_recall),
+        })
+
+    context_precision = aggregate_metrics.get("context_precision")
+    if context_precision is not None and context_precision < 0.7:
+        suggestions.append({
+            "category": "retrieval",
+            "signal": f"context_precision avg {context_precision:.2f}",
+            "suggestion": "Retrieved contexts are noisy — try reranking, reduce top_k, or use more specific embedding model",
+            "priority": _priority(context_precision),
+        })
+
+    context_relevance = aggregate_metrics.get("context_relevance")
+    if context_relevance is not None and context_relevance < 0.5:
+        suggestions.append({
+            "category": "retrieval",
+            "signal": f"context_relevance avg {context_relevance:.2f}",
+            "suggestion": "Contexts are not relevant — review embedding model choice or chunking strategy",
+            "priority": _priority(context_relevance),
+        })
+
+    # --- Generation rules ---
+    faithfulness = aggregate_metrics.get("faithfulness")
+    if faithfulness is not None and faithfulness < 0.7:
+        suggestions.append({
+            "category": "generation",
+            "signal": f"faithfulness avg {faithfulness:.2f}",
+            "suggestion": "Responses contain unsupported claims — add system prompt instruction to only use provided context",
+            "priority": _priority(faithfulness),
+        })
+
+    answer_relevancy = aggregate_metrics.get("answer_relevancy")
+    if answer_relevancy is not None and answer_relevancy < 0.7:
+        suggestions.append({
+            "category": "generation",
+            "signal": f"answer_relevancy avg {answer_relevancy:.2f}",
+            "suggestion": "Responses are not addressing the question — check system prompt clarity and response_mode",
+            "priority": _priority(answer_relevancy),
+        })
+
+    answer_correctness = aggregate_metrics.get("answer_correctness")
+    if answer_correctness is not None and answer_correctness < 0.5:
+        suggestions.append({
+            "category": "generation",
+            "signal": f"answer_correctness avg {answer_correctness:.2f}",
+            "suggestion": "Low correctness — verify reference answers are accurate, then review retrieval quality",
+            "priority": _priority(answer_correctness),
+        })
+
+    # --- Embedding rules (cross-metric) ---
+    if (context_recall is not None and context_recall < 0.5
+            and context_precision is not None and context_precision < 0.5):
+        suggestions.append({
+            "category": "embedding",
+            "signal": f"context_recall {context_recall:.2f} AND context_precision {context_precision:.2f}",
+            "suggestion": "Both recall and precision low — embedding model may be mismatched for this domain. Try a different model or fine-tune",
+            "priority": "high",
+        })
+
+    # --- Chunking rules (variance-based) ---
+    if per_question_results:
+        # Collect per-question scores for each metric
+        metric_scores: dict[str, list[float]] = {}
+        for r in per_question_results:
+            metrics = r.get("metrics", {})
+            for mn, val in metrics.items():
+                if val is not None:
+                    metric_scores.setdefault(mn, []).append(val)
+
+        for mn, scores in metric_scores.items():
+            if len(scores) >= 3:  # Need at least 3 data points for meaningful stdev
+                stdev = statistics.stdev(scores)
+                if stdev > 0.3:
+                    suggestions.append({
+                        "category": "chunking",
+                        "signal": f"{mn} stdev {stdev:.2f} across {len(scores)} questions",
+                        "suggestion": f"High variance in {mn} — inconsistent chunk quality. Review chunking strategy for uniformity",
+                        "priority": "medium",
+                    })
+
+    return suggestions
+
+
+@app.post("/api/projects/{project_id}/experiments/{experiment_id}/suggestions/generate")
+async def generate_suggestions(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["status"] != "completed":
+        raise HTTPException(status_code=409, detail="Experiment must be completed to generate suggestions")
+
+    # Fetch results
+    result_rows = conn.execute(
+        "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+
+    if not result_rows:
+        raise HTTPException(status_code=409, detail="No results to analyze")
+
+    # Compute aggregate metrics
+    metric_totals = {}
+    metric_counts = {}
+    per_question_results = []
+    for rr in result_rows:
+        metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+        per_question_results.append({"metrics": metrics})
+        for metric_name, value in metrics.items():
+            if value is not None:
+                metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+
+    aggregate = {}
+    for mn in metric_totals:
+        cnt = metric_counts[mn]
+        aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
+
+    # Generate suggestions
+    new_suggestions = _generate_suggestions(aggregate, per_question_results)
+
+    # Atomic: delete old + insert new in single transaction
+    conn.execute("DELETE FROM suggestions WHERE experiment_id = ?", (experiment_id,))
+    for s in new_suggestions:
+        conn.execute(
+            "INSERT INTO suggestions (experiment_id, category, signal, suggestion, priority) VALUES (?, ?, ?, ?, ?)",
+            (experiment_id, s["category"], s["signal"], s["suggestion"], s["priority"]),
+        )
+    conn.commit()
+
+    # Re-read from DB to return actual state
+    rows = conn.execute(
+        "SELECT * FROM suggestions WHERE experiment_id = ? ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, category",
+        (experiment_id,),
+    ).fetchall()
+    result = [dict(r) for r in rows]
+
+    return {"suggestions": result, "count": len(result)}
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}/suggestions")
+async def get_suggestions(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT id FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rows = conn.execute(
+        "SELECT * FROM suggestions WHERE experiment_id = ? ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, category",
+        (experiment_id,),
+    ).fetchall()
+
+    return {"suggestions": [dict(r) for r in rows]}
+
+
+@app.patch("/api/projects/{project_id}/suggestions/{suggestion_id}")
+async def update_suggestion(project_id: int, suggestion_id: int, req: SuggestionUpdate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Single JOIN query for cross-project isolation
+    row = conn.execute(
+        """SELECT s.* FROM suggestions s
+           JOIN experiments e ON s.experiment_id = e.id
+           WHERE s.id = ? AND e.project_id = ?""",
+        (suggestion_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    conn.execute(
+        "UPDATE suggestions SET implemented = ? WHERE id = ?",
+        (req.implemented, suggestion_id),
+    )
+    conn.commit()
+
+    # Re-read from DB to return actual state
+    updated = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+    return dict(updated)
 
 
 # Mount static files AFTER API routes
