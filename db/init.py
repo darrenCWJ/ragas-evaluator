@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     retrieval_config_json TEXT,
     chunk_config_id INTEGER REFERENCES chunk_configs(id),
     embedding_config_id INTEGER REFERENCES embedding_configs(id),
+    rag_config_id INTEGER REFERENCES rag_configs(id),
+    baseline_experiment_id INTEGER REFERENCES experiments(id),
     status TEXT NOT NULL DEFAULT 'pending',
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
@@ -131,6 +133,8 @@ CREATE TABLE IF NOT EXISTS suggestions (
     suggestion TEXT NOT NULL,
     priority TEXT NOT NULL DEFAULT 'medium',
     implemented BOOLEAN DEFAULT FALSE,
+    config_field TEXT,
+    suggested_value TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -146,6 +150,39 @@ def init_db() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+
+    # Migration: add rag_config_id to experiments if column missing (stale DB)
+    try:
+        conn.execute("ALTER TABLE experiments ADD COLUMN rag_config_id INTEGER REFERENCES rag_configs(id)")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add baseline_experiment_id to experiments (Phase 8 — iteration tracking)
+    try:
+        conn.execute("ALTER TABLE experiments ADD COLUMN baseline_experiment_id INTEGER REFERENCES experiments(id)")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add config_field and suggested_value to suggestions (Phase 8 — structured config mapping)
+    try:
+        conn.execute("ALTER TABLE suggestions ADD COLUMN config_field TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE suggestions ADD COLUMN suggested_value TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add max_steps to rag_configs (Phase 4 — multi-step RAG, missed migration for stale DB)
+    try:
+        conn.execute("ALTER TABLE rag_configs ADD COLUMN max_steps INTEGER NOT NULL DEFAULT 3")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     _connection = conn
     return conn
