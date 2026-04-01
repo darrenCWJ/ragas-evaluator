@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
@@ -3409,7 +3409,18 @@ async def export_experiment(project_id: int, experiment_id: int, format: str = Q
         )
 
 
-# Mount static files AFTER API routes
+# SPA catch-all: serve index.html for any /app/* route that isn't a static asset
+_frontend_dist = Path("frontend/dist")
+if _frontend_dist.is_dir():
+    # Serve static assets (JS, CSS, images) from the build
+    app.mount("/app/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="frontend-assets")
+
+    @app.get("/app/{path:path}")
+    async def spa_fallback(path: str):
+        """Serve index.html for all SPA routes (React Router handles client-side routing)."""
+        return FileResponse(str(_frontend_dist / "index.html"))
+
+# Mount legacy static files AFTER /app routes
 app.mount("/", StaticFiles(directory="public", html=True), name="static")
 
 
