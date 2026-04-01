@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-deep text-text-primary font-sans antialiased;
+    min-height: 100vh;
+  }
+
+  /* Scrollbar theming */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #283348;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4a68;
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(129, 140, 248, 0.3);
+    color: #e2e8f0;
+  }
+}
