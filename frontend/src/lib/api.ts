@@ -319,3 +319,106 @@ export async function queryRag(
     { method: "POST", body: JSON.stringify({ query }) },
   );
 }
+
+// --- Test Set Types ---
+
+export interface TestSet {
+  id: number;
+  name: string;
+  project_id?: number;
+  generation_config: {
+    chunk_config_id: number;
+    testset_size: number;
+    num_personas: number;
+    custom_personas: Record<string, unknown>[] | null;
+    use_personas: boolean;
+  };
+  created_at: string;
+  total_questions: number;
+  pending_count: number;
+  approved_count: number;
+  rejected_count: number;
+}
+
+export interface TestSetCreate {
+  chunk_config_id: number;
+  name?: string;
+  testset_size?: number;
+  num_personas?: number;
+  use_personas?: boolean;
+}
+
+export interface TestQuestion {
+  id: number;
+  test_set_id: number;
+  question: string;
+  reference_answer: string;
+  reference_contexts: string[];
+  question_type: string;
+  persona: string | null;
+  status: string;
+  user_edited_answer: string | null;
+  user_notes: string | null;
+  reviewed_at: string | null;
+}
+
+export interface TestSetSummary {
+  test_set_id: number;
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  edited: number;
+  completion_pct: number;
+}
+
+// --- Test Set API ---
+
+export async function fetchTestSets(projectId: number): Promise<TestSet[]> {
+  const data = await request<{ test_sets: TestSet[] }>(
+    `/api/projects/${projectId}/test-sets`,
+  );
+  return data.test_sets;
+}
+
+export async function createTestSet(
+  projectId: number,
+  config: TestSetCreate,
+  signal?: AbortSignal,
+): Promise<TestSet> {
+  return request<TestSet>(`/api/projects/${projectId}/test-sets`, {
+    method: "POST",
+    body: JSON.stringify(config),
+    signal,
+  });
+}
+
+export async function deleteTestSet(
+  projectId: number,
+  testSetId: number,
+): Promise<void> {
+  await request<void>(`/api/projects/${projectId}/test-sets/${testSetId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchTestQuestions(
+  projectId: number,
+  testSetId: number,
+  status?: string,
+): Promise<TestQuestion[]> {
+  const qs = status ? `?status=${status}` : "";
+  const data = await request<{ questions: TestQuestion[] }>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/questions${qs}`,
+  );
+  return data.questions;
+}
+
+export async function fetchTestSetSummary(
+  projectId: number,
+  testSetId: number,
+): Promise<TestSetSummary> {
+  return request<TestSetSummary>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/summary`,
+  );
+}

@@ -35,7 +35,7 @@ Phases: 2 of 5 complete
 |-------|------|-------|--------|-----------|
 | 9 | Foundation & Design System | 1 | Complete | 2026-04-02 |
 | 10 | Document & RAG Pipeline | 2 | Complete | 2026-04-02 |
-| 11 | Test Generation & Annotation | TBD | Not started | - |
+| 11 | Test Generation & Annotation | TBD | In progress | - |
 | 12 | Experiments & Results | TBD | Not started | - |
 | 13 | Feedback Loop & Polish | TBD | Not started | - |
 
