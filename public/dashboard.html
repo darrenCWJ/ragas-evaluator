@@ -1,0 +1,2104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Results Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-deep: #080c14;
+      --bg-base: #0f172a;
+      --bg-card: #1a2236;
+      --bg-elevated: #1e293b;
+      --bg-input: #0d1424;
+      --border: #283348;
+      --border-focus: #6366f1;
+      --text-primary: #e2e8f0;
+      --text-secondary: #8896b0;
+      --text-muted: #5a6a84;
+      --accent: #818cf8;
+      --accent-glow: rgba(129, 140, 248, 0.15);
+      --score-high: #22c55e;
+      --score-high-bg: rgba(34, 197, 94, 0.12);
+      --score-mid: #f59e0b;
+      --score-mid-bg: rgba(245, 158, 11, 0.12);
+      --score-low: #ef4444;
+      --score-low-bg: rgba(239, 68, 68, 0.12);
+      --score-null: #5a6a84;
+      --status-completed: #22c55e;
+      --status-completed-bg: rgba(34, 197, 94, 0.08);
+      --status-completed-border: rgba(34, 197, 94, 0.25);
+      --status-failed: #ef4444;
+      --status-failed-bg: rgba(239, 68, 68, 0.08);
+      --status-failed-border: rgba(239, 68, 68, 0.25);
+      --delta-pos: #22c55e;
+      --delta-neg: #ef4444;
+      --exp-color-1: #818cf8;
+      --exp-color-2: #f472b6;
+      --exp-color-3: #34d399;
+      --exp-color-4: #fbbf24;
+      --exp-color-5: #60a5fa;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* === NAV === */
+    nav {
+      display: flex;
+      justify-content: center;
+      gap: 0.6rem;
+      padding: 1.25rem 2rem 0;
+    }
+
+    nav a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 500;
+      padding: 0.4rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+
+    nav a:hover, nav a.active {
+      background: var(--bg-elevated);
+      border-color: var(--accent);
+    }
+
+    /* === HEADER === */
+    .page-header {
+      background: var(--bg-base);
+      border-bottom: 1px solid var(--border);
+      padding: 1.5rem 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+    }
+
+    .header-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .header-title h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .header-title h1 span {
+      background: linear-gradient(135deg, #818cf8, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-subtitle {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+
+    /* === CONTROLS BAR === */
+    .controls-bar {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.25rem 2rem 0;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .control-group label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+    }
+
+    select {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.82rem;
+      padding: 0.4rem 0.7rem;
+      background: var(--bg-input);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      min-width: 160px;
+    }
+
+    select:focus { outline: none; border-color: var(--border-focus); }
+
+    /* === TAB SWITCHER === */
+    .tab-switcher {
+      display: flex;
+      gap: 0;
+      margin-left: auto;
+    }
+
+    .tab-btn {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.45rem 1rem;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:first-child { border-radius: 6px 0 0 6px; }
+    .tab-btn:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+
+    .tab-btn.active {
+      background: var(--accent-glow);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .tab-btn.active + .tab-btn { border-left-color: var(--accent); }
+
+    /* === MAIN CONTENT === */
+    .main-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.25rem 2rem 4rem;
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* === EMPTY STATE === */
+    .empty-state {
+      text-align: center;
+      padding: 4rem 2rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.75rem;
+      opacity: 0.5;
+    }
+
+    .empty-state h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 0.35rem;
+    }
+
+    .empty-state p {
+      font-size: 0.82rem;
+    }
+
+    /* === ERROR MESSAGE === */
+    .error-msg {
+      background: var(--status-failed-bg);
+      border: 1px solid var(--status-failed-border);
+      color: var(--status-failed);
+      padding: 0.65rem 1rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      margin-bottom: 1rem;
+    }
+
+    /* === EXPERIMENT HEADER CARD === */
+    .exp-header-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.1rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .exp-header-top {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .exp-header-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .exp-header-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.25rem;
+    }
+
+    .meta-item {
+      font-size: 0.78rem;
+    }
+
+    .meta-label {
+      color: var(--text-muted);
+      margin-right: 0.3rem;
+    }
+
+    .meta-value {
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .meta-value.mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+    }
+
+    /* === AGGREGATE METRICS === */
+    .metrics-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .section-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.75rem;
+    }
+
+    .metric-bars {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .metric-bar-row {
+      display: grid;
+      grid-template-columns: 180px 1fr 50px;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .metric-bar-label {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .metric-bar-track {
+      height: 18px;
+      background: var(--bg-elevated);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .metric-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+      min-width: 2px;
+    }
+
+    .metric-bar-fill.high { background: linear-gradient(90deg, var(--score-high), #4ade80); }
+    .metric-bar-fill.mid  { background: linear-gradient(90deg, var(--score-mid), #fbbf24); }
+    .metric-bar-fill.low  { background: linear-gradient(90deg, var(--score-low), #f87171); }
+    .metric-bar-fill.null { background: var(--score-null); width: 0 !important; }
+
+    .metric-bar-score {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .metric-bar-score.high { color: var(--score-high); }
+    .metric-bar-score.mid  { color: var(--score-mid); }
+    .metric-bar-score.low  { color: var(--score-low); }
+    .metric-bar-score.null { color: var(--score-null); }
+
+    /* === PER-QUESTION TABLE === */
+    .questions-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .questions-table thead th {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg-deep);
+      z-index: 5;
+    }
+
+    .questions-table thead th.num { text-align: right; }
+
+    .questions-table tbody tr {
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .questions-table tbody tr:hover { background: rgba(129, 140, 248, 0.04); }
+
+    .questions-table tbody td {
+      font-size: 0.82rem;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid rgba(40, 51, 72, 0.5);
+      vertical-align: top;
+    }
+
+    .questions-table tbody td.num {
+      text-align: right;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+    }
+
+    .question-text {
+      max-width: 400px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .score-pill {
+      display: inline-block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.1rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .score-pill.high { background: var(--score-high-bg); color: var(--score-high); }
+    .score-pill.mid  { background: var(--score-mid-bg);  color: var(--score-mid); }
+    .score-pill.low  { background: var(--score-low-bg);  color: var(--score-low); }
+    .score-pill.null { color: var(--score-null); }
+
+    /* === EXPANDED ROW DETAIL === */
+    .detail-row { display: none; }
+    .detail-row.open { display: table-row; }
+
+    .detail-row td {
+      padding: 0 !important;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-content {
+      padding: 1rem 1.25rem;
+      background: var(--bg-card);
+      border-left: 3px solid var(--accent);
+    }
+
+    .detail-section {
+      margin-bottom: 1rem;
+    }
+
+    .detail-section:last-child { margin-bottom: 0; }
+
+    .detail-section-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.4rem;
+    }
+
+    .detail-text {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .detail-metrics-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+
+    .detail-metric {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: var(--bg-elevated);
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+    }
+
+    .detail-metric-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .detail-metric-score {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+
+    .detail-mini-bar {
+      width: 40px;
+      height: 6px;
+      background: var(--bg-deep);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .detail-mini-fill {
+      height: 100%;
+      border-radius: 3px;
+    }
+
+    .contexts-toggle {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.75rem;
+      color: var(--accent);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      margin-bottom: 0.4rem;
+    }
+
+    .contexts-toggle:hover { text-decoration: underline; }
+
+    .contexts-list { display: none; }
+    .contexts-list.open { display: block; }
+
+    .context-item {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* === COMPARISON VIEW === */
+    .compare-controls {
+      margin-bottom: 1.25rem;
+    }
+
+    .compare-exp-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      margin-bottom: 1rem;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .compare-exp-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .compare-exp-item:hover { border-color: rgba(129, 140, 248, 0.3); }
+
+    .compare-exp-item input[type="checkbox"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .compare-exp-item .exp-info {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .compare-exp-item .exp-info-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .compare-exp-item .exp-info-model {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .btn-compare {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.55rem 1.25rem;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      background: var(--accent-glow);
+      color: var(--accent);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-compare:hover:not(:disabled) { background: rgba(129, 140, 248, 0.25); }
+    .btn-compare:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* === COMPARISON RESULTS === */
+    .compare-results { display: none; }
+    .compare-results.visible { display: block; }
+
+    .compare-summary-cards {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .compare-card {
+      flex: 1;
+      min-width: 180px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      border-top: 3px solid var(--exp-color-1);
+    }
+
+    .compare-card:nth-child(2) { border-top-color: var(--exp-color-2); }
+    .compare-card:nth-child(3) { border-top-color: var(--exp-color-3); }
+    .compare-card:nth-child(4) { border-top-color: var(--exp-color-4); }
+    .compare-card:nth-child(5) { border-top-color: var(--exp-color-5); }
+
+    .compare-card-name {
+      font-size: 0.9rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+
+    .compare-card-model {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .compare-card-config {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+
+    .compare-card-avg {
+      margin-top: 0.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .compare-card-avg-label {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 500;
+    }
+
+    /* === COMPARISON METRIC BARS === */
+    .compare-metric-group {
+      margin-bottom: 0.75rem;
+    }
+
+    .compare-metric-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.3rem;
+    }
+
+    .compare-bar-set {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .compare-bar-row {
+      display: grid;
+      grid-template-columns: 1fr 55px;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .compare-bar-track {
+      height: 14px;
+      background: var(--bg-elevated);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .compare-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .compare-bar-fill.color-1 { background: var(--exp-color-1); }
+    .compare-bar-fill.color-2 { background: var(--exp-color-2); }
+    .compare-bar-fill.color-3 { background: var(--exp-color-3); }
+    .compare-bar-fill.color-4 { background: var(--exp-color-4); }
+    .compare-bar-fill.color-5 { background: var(--exp-color-5); }
+
+    .compare-bar-score {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-align: right;
+      color: var(--text-secondary);
+    }
+
+    .delta-badge {
+      display: inline-block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 0.05rem 0.35rem;
+      border-radius: 3px;
+      margin-left: 0.3rem;
+    }
+
+    .delta-badge.pos { color: var(--delta-pos); background: rgba(34, 197, 94, 0.1); }
+    .delta-badge.neg { color: var(--delta-neg); background: rgba(239, 68, 68, 0.1); }
+    .delta-badge.zero { color: var(--text-muted); }
+
+    /* === COMPARISON TABLE === */
+    .compare-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .compare-table thead th {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg-deep);
+      z-index: 5;
+    }
+
+    .compare-table thead th.num { text-align: center; }
+
+    .compare-table tbody td {
+      font-size: 0.82rem;
+      padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid rgba(40, 51, 72, 0.5);
+      vertical-align: middle;
+    }
+
+    .compare-table tbody td.num { text-align: center; }
+
+    .winner-cell {
+      background: rgba(34, 197, 94, 0.06);
+    }
+
+    .summary-row td {
+      font-weight: 700;
+      border-top: 2px solid var(--border);
+      background: var(--bg-card);
+    }
+
+    /* === TOAST === */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      padding: 0.65rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    .toast.visible {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* === LOADING === */
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .loading::before {
+      content: '';
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.6rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* --- Suggestions Panel --- */
+    .suggestions-section { margin-top: 2rem; }
+    .suggestions-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+    .btn-generate {
+      background: var(--bg-elevated); color: var(--accent); border: 1px solid var(--border);
+      padding: 0.5rem 1.1rem; border-radius: 8px; cursor: pointer;
+      font-family: inherit; font-size: 0.82rem; font-weight: 500;
+      transition: all 0.2s;
+    }
+    .btn-generate:hover { border-color: var(--accent); background: var(--accent-glow); }
+    .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-generate.regenerate { color: var(--score-mid); border-color: rgba(245, 158, 11, 0.3); }
+    .btn-generate.regenerate:hover { border-color: var(--score-mid); }
+
+    .suggestion-category {
+      margin-bottom: 1.25rem;
+    }
+    .suggestion-category-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-bottom: 0.6rem; padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .category-badge {
+      padding: 0.15rem 0.6rem; border-radius: 4px;
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .category-badge.retrieval { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+    .category-badge.generation { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+    .category-badge.embedding { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+    .category-badge.chunking { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+
+    .suggestion-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.85rem 1rem; margin-bottom: 0.5rem;
+      display: flex; align-items: flex-start; gap: 0.75rem;
+    }
+    .suggestion-card .priority-dot {
+      width: 8px; height: 8px; border-radius: 50%; margin-top: 0.45rem; flex-shrink: 0;
+    }
+    .suggestion-card .priority-dot.high { background: var(--score-low); }
+    .suggestion-card .priority-dot.medium { background: var(--score-mid); }
+    .suggestion-card .priority-dot.low { background: var(--score-high); }
+    .suggestion-body { flex: 1; min-width: 0; }
+    .suggestion-signal {
+      font-size: 0.75rem; color: var(--text-muted); font-style: italic;
+      font-family: 'JetBrains Mono', monospace; margin-bottom: 0.3rem;
+    }
+    .suggestion-text { font-size: 0.85rem; color: var(--text-primary); line-height: 1.45; }
+    .suggestion-check {
+      display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; margin-top: 0.25rem;
+    }
+    .suggestion-check input[type="checkbox"] {
+      accent-color: var(--score-high); width: 15px; height: 15px; cursor: pointer;
+    }
+    .suggestion-check label {
+      font-size: 0.72rem; color: var(--text-muted); cursor: pointer;
+    }
+    .suggestion-card.implemented { opacity: 0.55; }
+
+    /* --- History Timeline --- */
+    .history-timeline { display: flex; flex-direction: column; gap: 0.6rem; }
+    .history-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1rem 1.25rem; cursor: pointer; transition: all 0.2s;
+      display: flex; align-items: center; gap: 1rem;
+    }
+    .history-card:hover { border-color: var(--accent); background: var(--bg-elevated); }
+    .history-score-dot {
+      width: 38px; height: 38px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.72rem; font-weight: 700; flex-shrink: 0;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .history-info { flex: 1; min-width: 0; }
+    .history-name { font-weight: 600; font-size: 0.9rem; color: var(--text-primary); margin-bottom: 0.2rem; }
+    .history-meta { font-size: 0.78rem; color: var(--text-secondary); display: flex; gap: 1rem; flex-wrap: wrap; }
+    .history-score-bar {
+      width: 120px; height: 6px; background: var(--bg-input); border-radius: 3px;
+      overflow: hidden; flex-shrink: 0;
+    }
+    .history-score-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/">Evaluate</a>
+    <a href="/testgen.html">Test Generator</a>
+    <a href="/annotation.html">Annotation</a>
+    <a href="/experiments.html">Experiments</a>
+    <a href="/dashboard.html" class="active">Dashboard</a>
+  </nav>
+
+  <header class="page-header">
+    <div class="header-inner">
+      <div class="header-top">
+        <div class="header-title">
+          <h1>Results <span>Dashboard</span></h1>
+          <div class="header-subtitle">Analyze experiment results and compare configurations</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="controls-bar">
+    <div class="control-group">
+      <label>Project</label>
+      <select id="projectSelect"><option value="">Select project...</option></select>
+    </div>
+    <div class="tab-switcher">
+      <button class="tab-btn active" data-tab="detail">Detail View</button>
+      <button class="tab-btn" data-tab="compare">Compare</button>
+      <button class="tab-btn" data-tab="history">History</button>
+    </div>
+  </div>
+
+  <main class="main-content">
+    <!-- DETAIL VIEW -->
+    <div id="detail-panel" class="tab-panel active">
+      <div class="control-group" style="margin-bottom:1.25rem;">
+        <label>Experiment</label>
+        <select id="experimentSelect"><option value="">Select experiment...</option></select>
+      </div>
+
+      <div id="detail-empty" class="empty-state">
+        <div class="empty-state-icon">&#x1F4CA;</div>
+        <h3>No experiment selected</h3>
+        <p>Select a project and a completed experiment to view results.</p>
+      </div>
+
+      <div id="detail-loading" class="loading" style="display:none;">Loading results...</div>
+
+      <div id="detail-content" style="display:none;">
+        <div id="detail-header" class="exp-header-card"></div>
+        <div class="metrics-section">
+          <div class="section-title">Aggregate Metrics</div>
+          <div id="detail-metrics" class="metric-bars"></div>
+        </div>
+        <div class="section-title">Per-Question Results</div>
+        <div style="overflow-x:auto;">
+          <table class="questions-table">
+            <thead>
+              <tr>
+                <th style="width:40px;">#</th>
+                <th>Question</th>
+                <th style="width:100px;">Type</th>
+                <th class="num" style="width:80px;">Avg Score</th>
+              </tr>
+            </thead>
+            <tbody id="detail-questions"></tbody>
+          </table>
+        </div>
+
+        <!-- SUGGESTIONS PANEL -->
+        <div class="suggestions-section">
+          <div class="suggestions-header">
+            <div class="section-title">Improvement Suggestions</div>
+            <button id="btn-generate" class="btn-generate">Generate Suggestions</button>
+          </div>
+          <div id="suggestions-empty" class="empty-state" style="padding:1.5rem;">
+            <p>No suggestions yet. Click "Generate Suggestions" to analyze this experiment's metrics.</p>
+          </div>
+          <div id="suggestions-loading" class="loading" style="display:none;">Analyzing metrics...</div>
+          <div id="suggestions-content" style="display:none;"></div>
+          <div id="suggestions-error" class="error-msg" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- COMPARE VIEW -->
+    <div id="compare-panel" class="tab-panel">
+      <div id="compare-empty-project" class="empty-state">
+        <div class="empty-state-icon">&#x2696;</div>
+        <h3>Select a project first</h3>
+        <p>Choose a project to see completed experiments available for comparison.</p>
+      </div>
+
+      <div id="compare-controls" class="compare-controls" style="display:none;">
+        <div class="section-title">Select experiments to compare (2-5, same test set)</div>
+        <div id="compare-exp-list" class="compare-exp-list"></div>
+        <div id="compare-error" class="error-msg" style="display:none;"></div>
+        <button id="btn-compare" class="btn-compare" disabled>Compare Selected</button>
+      </div>
+
+      <div id="compare-loading" class="loading" style="display:none;">Loading comparison...</div>
+
+      <div id="compare-results" class="compare-results">
+        <div id="compare-cards" class="compare-summary-cards"></div>
+        <div class="metrics-section">
+          <div class="section-title">Metric Comparison</div>
+          <div id="compare-metrics"></div>
+        </div>
+        <div class="section-title">Per-Question Comparison</div>
+        <div style="overflow-x:auto;">
+          <table class="compare-table">
+            <thead id="compare-table-head"></thead>
+            <tbody id="compare-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY VIEW -->
+    <div id="history-panel" class="tab-panel">
+      <div id="history-empty" class="empty-state">
+        <div class="empty-state-icon">&#x1F4C5;</div>
+        <h3>No project selected</h3>
+        <p>Select a project to view experiment history.</p>
+      </div>
+      <div id="history-loading" class="loading" style="display:none;">Loading history...</div>
+      <div id="history-content" style="display:none;">
+        <div id="history-list" class="history-timeline"></div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    // --- State ---
+    let projects = [];
+    let experiments = [];
+    let selectedProjectId = null;
+    let selectedExpId = null;
+    let compareSelected = new Set();
+
+    // --- Init ---
+    async function init() {
+      setupTabs();
+      await loadProjects();
+      document.getElementById('projectSelect').addEventListener('change', onProjectChange);
+      document.getElementById('experimentSelect').addEventListener('change', onExperimentChange);
+      document.getElementById('btn-compare').addEventListener('click', onCompare);
+      document.getElementById('btn-generate').addEventListener('click', onGenerateSuggestions);
+    }
+
+    function setupTabs() {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+          document.getElementById(btn.dataset.tab + '-panel').classList.add('active');
+          // Load history when switching to history tab
+          if (btn.dataset.tab === 'history' && selectedProjectId) {
+            loadHistory();
+          }
+        });
+      });
+    }
+
+    // --- Data Loading ---
+    async function loadProjects() {
+      try {
+        const resp = await fetch('/api/projects');
+        if (!resp.ok) throw new Error('Failed to load projects');
+        projects = await resp.json();
+        const sel = document.getElementById('projectSelect');
+        sel.innerHTML = '<option value="">Select project...</option>';
+        projects.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.name;
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        showToast('Failed to load projects', true);
+      }
+    }
+
+    async function onProjectChange() {
+      const pid = parseInt(document.getElementById('projectSelect').value);
+      if (isNaN(pid)) {
+        selectedProjectId = null;
+        experiments = [];
+        renderExperimentSelect();
+        resetDetailView();
+        updateCompareView();
+        resetHistory();
+        return;
+      }
+      selectedProjectId = pid;
+      try {
+        const resp = await fetch('/api/projects/' + pid + '/experiments');
+        if (!resp.ok) throw new Error('Failed to load experiments');
+        const all = await resp.json();
+        experiments = all.filter(e => e.status === 'completed');
+        renderExperimentSelect();
+        resetDetailView();
+        updateCompareView();
+        resetHistory();
+      } catch (e) {
+        showToast('Failed to load experiments', true);
+      }
+    }
+
+    function renderExperimentSelect() {
+      const sel = document.getElementById('experimentSelect');
+      sel.innerHTML = '<option value="">Select experiment...</option>';
+      if (experiments.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No completed experiments';
+        opt.disabled = true;
+        sel.appendChild(opt);
+        return;
+      }
+      experiments.forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.id;
+        opt.textContent = e.name + '  (' + e.model + ')';
+        sel.appendChild(opt);
+      });
+    }
+
+    async function onExperimentChange() {
+      const eid = parseInt(document.getElementById('experimentSelect').value);
+      if (isNaN(eid)) {
+        selectedExpId = null;
+        resetDetailView();
+        return;
+      }
+      selectedExpId = eid;
+      await loadDetailView(eid);
+    }
+
+    // --- Detail View ---
+    function resetDetailView() {
+      document.getElementById('detail-empty').style.display = '';
+      document.getElementById('detail-content').style.display = 'none';
+      document.getElementById('detail-loading').style.display = 'none';
+    }
+
+    async function loadDetailView(eid) {
+      document.getElementById('detail-empty').style.display = 'none';
+      document.getElementById('detail-content').style.display = 'none';
+      document.getElementById('detail-loading').style.display = '';
+
+      try {
+        const [expResp, resultsResp, sugResp] = await Promise.all([
+          fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid),
+          fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid + '/results'),
+          fetch('/api/projects/' + selectedProjectId + '/experiments/' + eid + '/suggestions'),
+        ]);
+
+        if (!expResp.ok || !resultsResp.ok) throw new Error('Failed to load experiment data');
+
+        const exp = await expResp.json();
+        const results = await resultsResp.json();
+        const sugData = sugResp.ok ? await sugResp.json() : { suggestions: [] };
+
+        renderDetailHeader(exp);
+        renderDetailMetrics(exp.aggregate_metrics);
+        renderDetailQuestions(results);
+        renderSuggestions(sugData.suggestions);
+
+        document.getElementById('detail-loading').style.display = 'none';
+        document.getElementById('detail-content').style.display = '';
+      } catch (e) {
+        document.getElementById('detail-loading').style.display = 'none';
+        document.getElementById('detail-empty').style.display = '';
+        showToast('Failed to load experiment data', true);
+      }
+    }
+
+    function renderDetailHeader(exp) {
+      const el = document.getElementById('detail-header');
+      // Clear previous
+      el.innerHTML = '';
+
+      const topDiv = document.createElement('div');
+      topDiv.className = 'exp-header-top';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'exp-header-name';
+      nameSpan.textContent = exp.name;
+      topDiv.appendChild(nameSpan);
+      el.appendChild(topDiv);
+
+      const metaDiv = document.createElement('div');
+      metaDiv.className = 'exp-header-meta';
+
+      const items = [
+        ['Model', exp.model],
+        ['RAG Config', exp.rag_config_name || 'N/A'],
+        ['Test Set', exp.test_set_name || 'N/A'],
+        ['Results', (exp.result_count || 0) + ' / ' + (exp.approved_question_count || 0)],
+        ['Completed', formatDate(exp.completed_at)],
+      ];
+
+      items.forEach(([label, value]) => {
+        const item = document.createElement('span');
+        item.className = 'meta-item';
+        const lbl = document.createElement('span');
+        lbl.className = 'meta-label';
+        lbl.textContent = label + ':';
+        const val = document.createElement('span');
+        val.className = 'meta-value';
+        val.textContent = value;
+        item.appendChild(lbl);
+        item.appendChild(val);
+        metaDiv.appendChild(item);
+      });
+
+      el.appendChild(metaDiv);
+    }
+
+    function renderDetailMetrics(metrics) {
+      const el = document.getElementById('detail-metrics');
+      el.innerHTML = '';
+
+      if (!metrics || Object.keys(metrics).length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.style.padding = '1.5rem';
+        const p = document.createElement('p');
+        p.textContent = 'No metric data available.';
+        empty.appendChild(p);
+        el.appendChild(empty);
+        return;
+      }
+
+      const sorted = Object.entries(metrics).sort((a, b) => {
+        if (a[1] === null && b[1] === null) return 0;
+        if (a[1] === null) return 1;
+        if (b[1] === null) return -1;
+        return b[1] - a[1];
+      });
+
+      sorted.forEach(([name, value]) => {
+        const row = document.createElement('div');
+        row.className = 'metric-bar-row';
+
+        const label = document.createElement('span');
+        label.className = 'metric-bar-label';
+        label.textContent = name;
+
+        const track = document.createElement('div');
+        track.className = 'metric-bar-track';
+        const fill = document.createElement('div');
+        fill.className = 'metric-bar-fill ' + scoreTier(value);
+        fill.style.width = value !== null ? (value * 100) + '%' : '0%';
+        track.appendChild(fill);
+
+        const score = document.createElement('span');
+        score.className = 'metric-bar-score ' + scoreTier(value);
+        score.textContent = value !== null ? value.toFixed(4) : 'N/A';
+
+        row.appendChild(label);
+        row.appendChild(track);
+        row.appendChild(score);
+        el.appendChild(row);
+      });
+    }
+
+    function renderDetailQuestions(results) {
+      const tbody = document.getElementById('detail-questions');
+      tbody.innerHTML = '';
+
+      if (results.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.style.textAlign = 'center';
+        td.style.color = 'var(--text-muted)';
+        td.style.padding = '2rem';
+        td.textContent = 'No results for this experiment.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      results.forEach((r, i) => {
+        const avg = calcAvgScore(r.metrics);
+        const tr = document.createElement('tr');
+        tr.addEventListener('click', () => toggleDetailRow(r.test_question_id));
+
+        const tdNum = document.createElement('td');
+        tdNum.textContent = i + 1;
+
+        const tdQ = document.createElement('td');
+        const qSpan = document.createElement('span');
+        qSpan.className = 'question-text';
+        qSpan.textContent = r.question;
+        tdQ.appendChild(qSpan);
+
+        const tdType = document.createElement('td');
+        tdType.textContent = r.question_type || '-';
+        tdType.style.color = 'var(--text-muted)';
+        tdType.style.fontSize = '0.78rem';
+
+        const tdScore = document.createElement('td');
+        tdScore.className = 'num';
+        const pill = document.createElement('span');
+        pill.className = 'score-pill ' + scoreTier(avg);
+        pill.textContent = avg !== null ? avg.toFixed(3) : 'N/A';
+        tdScore.appendChild(pill);
+
+        tr.appendChild(tdNum);
+        tr.appendChild(tdQ);
+        tr.appendChild(tdType);
+        tr.appendChild(tdScore);
+        tbody.appendChild(tr);
+
+        // Detail row
+        const detailTr = document.createElement('tr');
+        detailTr.className = 'detail-row';
+        detailTr.id = 'detail-' + r.test_question_id;
+        const detailTd = document.createElement('td');
+        detailTd.colSpan = 4;
+        detailTd.appendChild(buildDetailContent(r));
+        detailTr.appendChild(detailTd);
+        tbody.appendChild(detailTr);
+      });
+    }
+
+    function toggleDetailRow(qid) {
+      const el = document.getElementById('detail-' + qid);
+      if (el) el.classList.toggle('open');
+    }
+
+    function buildDetailContent(r) {
+      const wrap = document.createElement('div');
+      wrap.className = 'detail-content';
+
+      // Response
+      const respSection = buildDetailSection('Response', r.response || '(no response)');
+      wrap.appendChild(respSection);
+
+      // Reference answer
+      const refSection = buildDetailSection('Reference Answer', r.reference_answer || '(none)');
+      wrap.appendChild(refSection);
+
+      // Metrics
+      const metricsSection = document.createElement('div');
+      metricsSection.className = 'detail-section';
+      const metricsTitle = document.createElement('div');
+      metricsTitle.className = 'detail-section-title';
+      metricsTitle.textContent = 'Individual Metrics';
+      metricsSection.appendChild(metricsTitle);
+
+      const metricsGrid = document.createElement('div');
+      metricsGrid.className = 'detail-metrics-grid';
+
+      if (r.metrics && Object.keys(r.metrics).length > 0) {
+        Object.entries(r.metrics).sort((a, b) => a[0].localeCompare(b[0])).forEach(([name, val]) => {
+          const chip = document.createElement('div');
+          chip.className = 'detail-metric';
+
+          const mName = document.createElement('span');
+          mName.className = 'detail-metric-name';
+          mName.textContent = name;
+
+          const miniBar = document.createElement('div');
+          miniBar.className = 'detail-mini-bar';
+          const miniFill = document.createElement('div');
+          miniFill.className = 'detail-mini-fill';
+          miniFill.style.width = val !== null ? (val * 100) + '%' : '0%';
+          miniFill.style.background = val !== null ? scoreColor(val) : 'var(--score-null)';
+          miniBar.appendChild(miniFill);
+
+          const mScore = document.createElement('span');
+          mScore.className = 'detail-metric-score';
+          mScore.style.color = val !== null ? scoreColor(val) : 'var(--score-null)';
+          mScore.textContent = val !== null ? val.toFixed(3) : 'N/A';
+
+          chip.appendChild(mName);
+          chip.appendChild(miniBar);
+          chip.appendChild(mScore);
+          metricsGrid.appendChild(chip);
+        });
+      } else {
+        const noMetrics = document.createElement('span');
+        noMetrics.style.color = 'var(--text-muted)';
+        noMetrics.style.fontSize = '0.78rem';
+        noMetrics.textContent = 'No metrics available.';
+        metricsGrid.appendChild(noMetrics);
+      }
+
+      metricsSection.appendChild(metricsGrid);
+      wrap.appendChild(metricsSection);
+
+      // Contexts
+      const ctxSection = document.createElement('div');
+      ctxSection.className = 'detail-section';
+      const ctxToggle = document.createElement('button');
+      ctxToggle.className = 'contexts-toggle';
+      const ctxCount = (r.retrieved_contexts || []).length;
+      ctxToggle.textContent = 'Retrieved Contexts (' + ctxCount + ')';
+
+      const ctxList = document.createElement('div');
+      ctxList.className = 'contexts-list';
+
+      if (ctxCount === 0) {
+        const noCtx = document.createElement('div');
+        noCtx.style.color = 'var(--text-muted)';
+        noCtx.style.fontSize = '0.78rem';
+        noCtx.textContent = 'No contexts retrieved.';
+        ctxList.appendChild(noCtx);
+      } else {
+        (r.retrieved_contexts || []).forEach(ctx => {
+          const item = document.createElement('div');
+          item.className = 'context-item';
+          item.textContent = typeof ctx === 'string' ? ctx : (ctx.content || JSON.stringify(ctx));
+          ctxList.appendChild(item);
+        });
+      }
+
+      ctxToggle.addEventListener('click', () => ctxList.classList.toggle('open'));
+      ctxSection.appendChild(ctxToggle);
+      ctxSection.appendChild(ctxList);
+      wrap.appendChild(ctxSection);
+
+      return wrap;
+    }
+
+    function buildDetailSection(title, text) {
+      const section = document.createElement('div');
+      section.className = 'detail-section';
+      const titleEl = document.createElement('div');
+      titleEl.className = 'detail-section-title';
+      titleEl.textContent = title;
+      const textEl = document.createElement('div');
+      textEl.className = 'detail-text';
+      textEl.textContent = text;
+      section.appendChild(titleEl);
+      section.appendChild(textEl);
+      return section;
+    }
+
+    // --- Compare View ---
+    function updateCompareView() {
+      compareSelected.clear();
+      document.getElementById('compare-results').classList.remove('visible');
+      document.getElementById('compare-error').style.display = 'none';
+
+      if (!selectedProjectId || experiments.length === 0) {
+        document.getElementById('compare-empty-project').style.display = '';
+        document.getElementById('compare-controls').style.display = 'none';
+        if (selectedProjectId && experiments.length === 0) {
+          document.querySelector('#compare-empty-project h3').textContent = 'No completed experiments';
+          document.querySelector('#compare-empty-project p').textContent = 'Run experiments first, then compare results here.';
+        } else {
+          document.querySelector('#compare-empty-project h3').textContent = 'Select a project first';
+          document.querySelector('#compare-empty-project p').textContent = 'Choose a project to see completed experiments available for comparison.';
+        }
+        return;
+      }
+
+      document.getElementById('compare-empty-project').style.display = 'none';
+      document.getElementById('compare-controls').style.display = '';
+
+      const list = document.getElementById('compare-exp-list');
+      list.innerHTML = '';
+
+      experiments.forEach(e => {
+        const item = document.createElement('div');
+        item.className = 'compare-exp-item';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = e.id;
+        cb.addEventListener('change', () => {
+          if (cb.checked) compareSelected.add(e.id);
+          else compareSelected.delete(e.id);
+          updateCompareButton();
+        });
+
+        const info = document.createElement('div');
+        info.className = 'exp-info';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'exp-info-name';
+        nameSpan.textContent = e.name;
+        const modelSpan = document.createElement('span');
+        modelSpan.className = 'exp-info-model';
+        modelSpan.textContent = e.model;
+        info.appendChild(nameSpan);
+        info.appendChild(modelSpan);
+
+        item.appendChild(cb);
+        item.appendChild(info);
+        item.addEventListener('click', (ev) => {
+          if (ev.target !== cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); }
+        });
+        list.appendChild(item);
+      });
+
+      updateCompareButton();
+    }
+
+    function updateCompareButton() {
+      const btn = document.getElementById('btn-compare');
+      btn.disabled = compareSelected.size < 2 || compareSelected.size > 5;
+      btn.textContent = 'Compare Selected (' + compareSelected.size + ')';
+    }
+
+    async function onCompare() {
+      const ids = Array.from(compareSelected).join(',');
+      document.getElementById('compare-error').style.display = 'none';
+      document.getElementById('compare-results').classList.remove('visible');
+      document.getElementById('compare-loading').style.display = '';
+
+      try {
+        const resp = await fetch('/api/projects/' + selectedProjectId + '/experiments/compare?ids=' + ids);
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: 'Comparison failed' }));
+          const errEl = document.getElementById('compare-error');
+          errEl.textContent = err.detail || 'Comparison failed';
+          errEl.style.display = '';
+          document.getElementById('compare-loading').style.display = 'none';
+          return;
+        }
+
+        const data = await resp.json();
+        renderCompareResults(data);
+
+        document.getElementById('compare-loading').style.display = 'none';
+        document.getElementById('compare-results').classList.add('visible');
+      } catch (e) {
+        document.getElementById('compare-loading').style.display = 'none';
+        showToast('Comparison request failed', true);
+      }
+    }
+
+    function renderCompareResults(data) {
+      const exps = data.experiments;
+      const questions = data.questions;
+
+      // Summary cards
+      renderCompareCards(exps);
+      // Metric bars
+      renderCompareMetrics(exps);
+      // Per-question table
+      renderCompareTable(exps, questions);
+    }
+
+    function renderCompareCards(exps) {
+      const el = document.getElementById('compare-cards');
+      el.innerHTML = '';
+
+      exps.forEach((exp, i) => {
+        const card = document.createElement('div');
+        card.className = 'compare-card';
+
+        const name = document.createElement('div');
+        name.className = 'compare-card-name';
+        name.textContent = exp.name;
+
+        const model = document.createElement('div');
+        model.className = 'compare-card-model';
+        model.textContent = exp.model;
+
+        const config = document.createElement('div');
+        config.className = 'compare-card-config';
+        config.textContent = exp.rag_config_name || '';
+
+        const avg = calcOverallAvg(exp.aggregate_metrics);
+        const avgEl = document.createElement('div');
+        avgEl.className = 'compare-card-avg';
+        avgEl.style.color = avg !== null ? scoreColor(avg) : 'var(--score-null)';
+        avgEl.textContent = avg !== null ? avg.toFixed(3) : 'N/A';
+
+        const avgLabel = document.createElement('div');
+        avgLabel.className = 'compare-card-avg-label';
+        avgLabel.textContent = 'Overall Average';
+
+        card.appendChild(name);
+        card.appendChild(model);
+        card.appendChild(config);
+        card.appendChild(avgEl);
+        card.appendChild(avgLabel);
+        el.appendChild(card);
+      });
+    }
+
+    function renderCompareMetrics(exps) {
+      const el = document.getElementById('compare-metrics');
+      el.innerHTML = '';
+
+      // Collect all metric names across experiments
+      const allMetrics = new Set();
+      exps.forEach(exp => {
+        if (exp.aggregate_metrics) {
+          Object.keys(exp.aggregate_metrics).forEach(m => allMetrics.add(m));
+        }
+      });
+
+      if (allMetrics.size === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.style.padding = '1.5rem';
+        const p = document.createElement('p');
+        p.textContent = 'No metric data available for comparison.';
+        empty.appendChild(p);
+        el.appendChild(empty);
+        return;
+      }
+
+      const sortedMetrics = Array.from(allMetrics).sort();
+
+      sortedMetrics.forEach(metric => {
+        const group = document.createElement('div');
+        group.className = 'compare-metric-group';
+
+        const label = document.createElement('div');
+        label.className = 'compare-metric-label';
+        label.textContent = metric;
+        group.appendChild(label);
+
+        const barSet = document.createElement('div');
+        barSet.className = 'compare-bar-set';
+
+        // Find best for delta
+        const scores = exps.map(exp => exp.aggregate_metrics ? (exp.aggregate_metrics[metric] ?? null) : null);
+        const validScores = scores.filter(s => s !== null);
+        const best = validScores.length > 0 ? Math.max(...validScores) : null;
+
+        exps.forEach((exp, i) => {
+          const val = exp.aggregate_metrics ? (exp.aggregate_metrics[metric] ?? null) : null;
+
+          const row = document.createElement('div');
+          row.className = 'compare-bar-row';
+
+          const track = document.createElement('div');
+          track.className = 'compare-bar-track';
+          const fill = document.createElement('div');
+          fill.className = 'compare-bar-fill color-' + (i + 1);
+          fill.style.width = val !== null ? (val * 100) + '%' : '0%';
+          if (val === null) fill.style.opacity = '0.2';
+          track.appendChild(fill);
+
+          const scoreEl = document.createElement('span');
+          scoreEl.className = 'compare-bar-score';
+          scoreEl.textContent = val !== null ? val.toFixed(4) : 'N/A';
+
+          // Delta badge (relative to first experiment)
+          if (i > 0 && val !== null && scores[0] !== null) {
+            const delta = val - scores[0];
+            if (Math.abs(delta) > 0.0001) {
+              const badge = document.createElement('span');
+              badge.className = 'delta-badge ' + (delta > 0 ? 'pos' : 'neg');
+              badge.textContent = (delta > 0 ? '+' : '') + delta.toFixed(4);
+              scoreEl.appendChild(badge);
+            }
+          }
+
+          row.appendChild(track);
+          row.appendChild(scoreEl);
+          barSet.appendChild(row);
+        });
+
+        group.appendChild(barSet);
+        el.appendChild(group);
+      });
+    }
+
+    function renderCompareTable(exps, questions) {
+      const thead = document.getElementById('compare-table-head');
+      const tbody = document.getElementById('compare-table-body');
+      thead.innerHTML = '';
+      tbody.innerHTML = '';
+
+      if (questions.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 2 + exps.length;
+        td.style.textAlign = 'center';
+        td.style.color = 'var(--text-muted)';
+        td.style.padding = '2rem';
+        td.textContent = 'No per-question data available.';
+        tbody.appendChild(tr);
+        tr.appendChild(td);
+        return;
+      }
+
+      // Header
+      const headTr = document.createElement('tr');
+      const thNum = document.createElement('th');
+      thNum.textContent = '#';
+      thNum.style.width = '40px';
+      headTr.appendChild(thNum);
+
+      const thQ = document.createElement('th');
+      thQ.textContent = 'Question';
+      headTr.appendChild(thQ);
+
+      exps.forEach((exp, i) => {
+        const th = document.createElement('th');
+        th.className = 'num';
+        th.textContent = exp.name;
+        th.style.minWidth = '90px';
+        th.style.borderBottom = '3px solid var(--exp-color-' + (i + 1) + ')';
+        headTr.appendChild(th);
+      });
+
+      thead.appendChild(headTr);
+
+      // Body
+      const overallSums = exps.map(() => ({ total: 0, count: 0 }));
+
+      questions.forEach((q, qi) => {
+        const tr = document.createElement('tr');
+
+        const tdNum = document.createElement('td');
+        tdNum.textContent = qi + 1;
+        tr.appendChild(tdNum);
+
+        const tdQ = document.createElement('td');
+        const qSpan = document.createElement('span');
+        qSpan.className = 'question-text';
+        qSpan.textContent = q.question;
+        tdQ.appendChild(qSpan);
+        tr.appendChild(tdQ);
+
+        // Scores for each experiment
+        const qScores = exps.map(exp => {
+          const expData = q.experiments[exp.id];
+          if (!expData || !expData.metrics) return null;
+          return calcAvgScore(expData.metrics);
+        });
+
+        const validQScores = qScores.filter(s => s !== null);
+        const bestScore = validQScores.length > 0 ? Math.max(...validQScores) : null;
+
+        qScores.forEach((score, i) => {
+          const td = document.createElement('td');
+          td.className = 'num';
+
+          if (score !== null) {
+            overallSums[i].total += score;
+            overallSums[i].count += 1;
+
+            const pill = document.createElement('span');
+            pill.className = 'score-pill ' + scoreTier(score);
+            pill.textContent = score.toFixed(3);
+            td.appendChild(pill);
+
+            if (bestScore !== null && Math.abs(score - bestScore) < 0.0001 && validQScores.length > 1) {
+              td.classList.add('winner-cell');
+            }
+          } else {
+            td.textContent = 'N/A';
+            td.style.color = 'var(--score-null)';
+          }
+
+          tr.appendChild(td);
+        });
+
+        tbody.appendChild(tr);
+      });
+
+      // Summary row
+      const summaryTr = document.createElement('tr');
+      summaryTr.className = 'summary-row';
+
+      const sTdNum = document.createElement('td');
+      summaryTr.appendChild(sTdNum);
+
+      const sTdLabel = document.createElement('td');
+      sTdLabel.textContent = 'Overall Average';
+      sTdLabel.style.fontWeight = '700';
+      summaryTr.appendChild(sTdLabel);
+
+      const overallAvgs = overallSums.map(s => s.count > 0 ? s.total / s.count : null);
+      const validAvgs = overallAvgs.filter(a => a !== null);
+      const bestAvg = validAvgs.length > 0 ? Math.max(...validAvgs) : null;
+
+      overallAvgs.forEach((avg, i) => {
+        const td = document.createElement('td');
+        td.className = 'num';
+        if (avg !== null) {
+          const pill = document.createElement('span');
+          pill.className = 'score-pill ' + scoreTier(avg);
+          pill.style.fontSize = '0.82rem';
+          pill.textContent = avg.toFixed(3);
+          td.appendChild(pill);
+
+          if (bestAvg !== null && Math.abs(avg - bestAvg) < 0.0001 && validAvgs.length > 1) {
+            td.classList.add('winner-cell');
+          }
+        } else {
+          td.textContent = 'N/A';
+          td.style.color = 'var(--score-null)';
+        }
+        summaryTr.appendChild(td);
+      });
+
+      tbody.appendChild(summaryTr);
+    }
+
+    // --- Suggestions ---
+    function renderSuggestions(suggestions) {
+      const emptyEl = document.getElementById('suggestions-empty');
+      const contentEl = document.getElementById('suggestions-content');
+      const errorEl = document.getElementById('suggestions-error');
+      const btn = document.getElementById('btn-generate');
+
+      errorEl.style.display = 'none';
+      document.getElementById('suggestions-loading').style.display = 'none';
+
+      if (!suggestions || suggestions.length === 0) {
+        emptyEl.style.display = '';
+        contentEl.style.display = 'none';
+        btn.textContent = 'Generate Suggestions';
+        btn.classList.remove('regenerate');
+        return;
+      }
+
+      emptyEl.style.display = 'none';
+      contentEl.style.display = '';
+      btn.textContent = 'Regenerate';
+      btn.classList.add('regenerate');
+
+      contentEl.innerHTML = '';
+
+      // Group by category
+      const groups = {};
+      suggestions.forEach(s => {
+        if (!groups[s.category]) groups[s.category] = [];
+        groups[s.category].push(s);
+      });
+
+      const categoryOrder = ['retrieval', 'generation', 'embedding', 'chunking'];
+      categoryOrder.forEach(cat => {
+        if (!groups[cat]) return;
+
+        const section = document.createElement('div');
+        section.className = 'suggestion-category';
+
+        const header = document.createElement('div');
+        header.className = 'suggestion-category-header';
+        const badge = document.createElement('span');
+        badge.className = 'category-badge ' + cat;
+        badge.textContent = cat;
+        header.appendChild(badge);
+        section.appendChild(header);
+
+        groups[cat].forEach(s => {
+          const card = document.createElement('div');
+          card.className = 'suggestion-card' + (s.implemented ? ' implemented' : '');
+
+          const dot = document.createElement('div');
+          dot.className = 'priority-dot ' + s.priority;
+          card.appendChild(dot);
+
+          const body = document.createElement('div');
+          body.className = 'suggestion-body';
+          const signal = document.createElement('div');
+          signal.className = 'suggestion-signal';
+          signal.textContent = s.signal;
+          body.appendChild(signal);
+          const text = document.createElement('div');
+          text.className = 'suggestion-text';
+          text.textContent = s.suggestion;
+          body.appendChild(text);
+          card.appendChild(body);
+
+          const check = document.createElement('div');
+          check.className = 'suggestion-check';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = !!s.implemented;
+          cb.id = 'sug-' + s.id;
+          cb.addEventListener('change', () => onToggleSuggestion(s.id, cb.checked, card));
+          check.appendChild(cb);
+          const lbl = document.createElement('label');
+          lbl.htmlFor = 'sug-' + s.id;
+          lbl.textContent = 'Done';
+          check.appendChild(lbl);
+          card.appendChild(check);
+
+          section.appendChild(card);
+        });
+
+        contentEl.appendChild(section);
+      });
+    }
+
+    async function onGenerateSuggestions() {
+      if (!selectedProjectId || !selectedExpId) return;
+      const btn = document.getElementById('btn-generate');
+      const errorEl = document.getElementById('suggestions-error');
+
+      btn.disabled = true;
+      errorEl.style.display = 'none';
+      document.getElementById('suggestions-empty').style.display = 'none';
+      document.getElementById('suggestions-content').style.display = 'none';
+      document.getElementById('suggestions-loading').style.display = '';
+
+      try {
+        const resp = await fetch(
+          '/api/projects/' + selectedProjectId + '/experiments/' + selectedExpId + '/suggestions/generate',
+          { method: 'POST' }
+        );
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: 'Generation failed' }));
+          throw new Error(err.detail || 'Generation failed');
+        }
+        const data = await resp.json();
+        document.getElementById('suggestions-loading').style.display = 'none';
+        renderSuggestions(data.suggestions);
+        showToast('Generated ' + data.count + ' suggestion(s)', false);
+      } catch (e) {
+        document.getElementById('suggestions-loading').style.display = 'none';
+        errorEl.textContent = e.message;
+        errorEl.style.display = '';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function onToggleSuggestion(sugId, implemented, card) {
+      try {
+        const resp = await fetch(
+          '/api/projects/' + selectedProjectId + '/suggestions/' + sugId,
+          { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ implemented }) }
+        );
+        if (!resp.ok) throw new Error('Failed to update');
+        if (implemented) {
+          card.classList.add('implemented');
+        } else {
+          card.classList.remove('implemented');
+        }
+      } catch (e) {
+        showToast('Failed to update suggestion', true);
+      }
+    }
+
+    // --- History ---
+    function resetHistory() {
+      document.getElementById('history-content').style.display = 'none';
+      document.getElementById('history-loading').style.display = 'none';
+      document.getElementById('history-empty').style.display = '';
+    }
+
+    async function loadHistory() {
+      if (!selectedProjectId) {
+        document.getElementById('history-empty').style.display = '';
+        document.getElementById('history-content').style.display = 'none';
+        return;
+      }
+
+      document.getElementById('history-empty').style.display = 'none';
+      document.getElementById('history-content').style.display = 'none';
+      document.getElementById('history-loading').style.display = '';
+
+      try {
+        const resp = await fetch('/api/projects/' + selectedProjectId + '/experiments/history');
+        if (!resp.ok) throw new Error('Failed to load history');
+        const data = await resp.json();
+
+        document.getElementById('history-loading').style.display = 'none';
+
+        if (!data.experiments || data.experiments.length === 0) {
+          const emptyEl = document.getElementById('history-empty');
+          emptyEl.innerHTML = '';
+          const icon = document.createElement('div');
+          icon.className = 'empty-state-icon';
+          icon.textContent = '\uD83D\uDCC5';
+          emptyEl.appendChild(icon);
+          const h = document.createElement('h3');
+          h.textContent = 'No completed experiments yet';
+          emptyEl.appendChild(h);
+          const p = document.createElement('p');
+          p.textContent = 'Run experiments from the Experiments page, then come back to view history.';
+          emptyEl.appendChild(p);
+          emptyEl.style.display = '';
+          return;
+        }
+
+        document.getElementById('history-content').style.display = '';
+        renderHistory(data.experiments);
+      } catch (e) {
+        document.getElementById('history-loading').style.display = 'none';
+        document.getElementById('history-empty').style.display = '';
+        showToast('Failed to load history', true);
+      }
+    }
+
+    function renderHistory(experiments) {
+      const list = document.getElementById('history-list');
+      list.innerHTML = '';
+
+      experiments.forEach(exp => {
+        const card = document.createElement('div');
+        card.className = 'history-card';
+        card.addEventListener('click', () => {
+          // Switch to detail tab and select this experiment
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          document.querySelector('.tab-btn[data-tab="detail"]').classList.add('active');
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+          document.getElementById('detail-panel').classList.add('active');
+          // Select experiment in dropdown
+          const sel = document.getElementById('experimentSelect');
+          sel.value = exp.id;
+          selectedExpId = exp.id;
+          loadDetailView(exp.id);
+        });
+
+        // Score dot
+        const scoreDot = document.createElement('div');
+        scoreDot.className = 'history-score-dot';
+        const score = exp.overall_score;
+        const color = scoreColor(score);
+        scoreDot.style.background = score !== null ? color.replace(')', ', 0.15)').replace('var(', '') : 'var(--bg-elevated)';
+        scoreDot.style.color = color;
+        scoreDot.style.border = '2px solid ' + color;
+        scoreDot.textContent = score !== null ? (score * 100).toFixed(0) : '--';
+        card.appendChild(scoreDot);
+
+        // Info
+        const info = document.createElement('div');
+        info.className = 'history-info';
+        const name = document.createElement('div');
+        name.className = 'history-name';
+        name.textContent = exp.name;
+        info.appendChild(name);
+        const meta = document.createElement('div');
+        meta.className = 'history-meta';
+        const model = document.createElement('span');
+        model.textContent = exp.model;
+        meta.appendChild(model);
+        if (exp.rag_config_name) {
+          const cfg = document.createElement('span');
+          cfg.textContent = exp.rag_config_name;
+          meta.appendChild(cfg);
+        }
+        const dt = document.createElement('span');
+        dt.textContent = formatDate(exp.completed_at);
+        meta.appendChild(dt);
+        const rc = document.createElement('span');
+        rc.textContent = (exp.result_count || 0) + ' results';
+        meta.appendChild(rc);
+        info.appendChild(meta);
+        card.appendChild(info);
+
+        // Score bar
+        const bar = document.createElement('div');
+        bar.className = 'history-score-bar';
+        const fill = document.createElement('div');
+        fill.className = 'history-score-fill';
+        fill.style.width = score !== null ? (score * 100) + '%' : '0%';
+        fill.style.background = color;
+        bar.appendChild(fill);
+        card.appendChild(bar);
+
+        list.appendChild(card);
+      });
+    }
+
+    // --- Helpers ---
+    function scoreTier(val) {
+      if (val === null || val === undefined) return 'null';
+      if (val >= 0.7) return 'high';
+      if (val >= 0.4) return 'mid';
+      return 'low';
+    }
+
+    function scoreColor(val) {
+      if (val === null || val === undefined) return 'var(--score-null)';
+      if (val >= 0.7) return 'var(--score-high)';
+      if (val >= 0.4) return 'var(--score-mid)';
+      return 'var(--score-low)';
+    }
+
+    function calcAvgScore(metrics) {
+      if (!metrics) return null;
+      const vals = Object.values(metrics).filter(v => v !== null && v !== undefined);
+      if (vals.length === 0) return null;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    }
+
+    function calcOverallAvg(aggMetrics) {
+      if (!aggMetrics) return null;
+      const vals = Object.values(aggMetrics).filter(v => v !== null);
+      if (vals.length === 0) return null;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function showToast(msg, isError) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.style.borderColor = isError ? 'var(--status-failed-border)' : 'var(--status-completed-border)';
+      toast.classList.add('visible');
+      setTimeout(() => toast.classList.remove('visible'), 2500);
+    }
+
+    // --- Go ---
+    init();
+  </script>
+</body>
+</html>
