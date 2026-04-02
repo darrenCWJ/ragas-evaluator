@@ -105,11 +105,51 @@ export interface RagConfigCreate {
   max_steps?: number | null;
 }
 
+export interface RagConfigExpanded extends RagConfig {
+  chunk_config: { name: string; method: string; params: Record<string, number | string> } | null;
+  embedding_config: { name: string; type: string; model_name: string } | null;
+}
+
 export interface RagQueryResult {
   answer: string;
   contexts: { content: string; chunk_id?: number; [key: string]: unknown }[];
   model: string;
   usage: { prompt_tokens: number; completion_tokens: number };
+}
+
+// --- External Baseline Types ---
+
+export interface ExternalBaseline {
+  id: number;
+  project_id: number;
+  question: string;
+  answer: string;
+  sources: string;
+  source_type: string;
+  created_at: string;
+}
+
+export interface CsvUploadResult {
+  imported: number;
+  preview: { question: string; answer: string; sources: string }[];
+}
+
+// --- API Config Types ---
+
+export interface ApiConfig {
+  id: number;
+  project_id: number;
+  endpoint_url: string;
+  api_key: string | null;
+  headers_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiConfigCreate {
+  endpoint_url: string;
+  api_key?: string | null;
+  headers_json?: string | null;
 }
 
 interface CreateProjectPayload {
@@ -155,6 +195,77 @@ export async function createProject(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+// --- External Baseline API ---
+
+export async function uploadBaselineCsv(
+  projectId: number,
+  file: File,
+): Promise<CsvUploadResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/projects/${projectId}/baselines/upload-csv`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "Unknown error");
+    throw new ApiError(res.status, `${res.status}: ${body}`);
+  }
+  return res.json() as Promise<CsvUploadResult>;
+}
+
+export async function fetchBaselines(
+  projectId: number,
+): Promise<ExternalBaseline[]> {
+  return request<ExternalBaseline[]>(`/api/projects/${projectId}/baselines`);
+}
+
+export async function deleteBaseline(
+  projectId: number,
+  baselineId: number,
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/baselines/${baselineId}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function clearBaselines(
+  projectId: number,
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/baselines`,
+    { method: "DELETE" },
+  );
+}
+
+// --- API Config API ---
+
+export async function saveApiConfig(
+  projectId: number,
+  payload: ApiConfigCreate,
+): Promise<ApiConfig> {
+  return request<ApiConfig>(`/api/projects/${projectId}/api-config`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchApiConfig(
+  projectId: number,
+): Promise<ApiConfig> {
+  return request<ApiConfig>(`/api/projects/${projectId}/api-config`);
+}
+
+export async function deleteApiConfig(
+  projectId: number,
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/api-config`,
+    { method: "DELETE" },
+  );
 }
 
 // --- Document API ---
@@ -297,6 +408,19 @@ export async function createRagConfig(
     method: "POST",
     body: JSON.stringify(config),
   });
+}
+
+export async function fetchRagConfigsExpanded(
+  projectId: number,
+): Promise<RagConfigExpanded[]> {
+  return request<RagConfigExpanded[]>(`/api/projects/${projectId}/rag-configs/expanded`);
+}
+
+export async function fetchRagConfigExpanded(
+  projectId: number,
+  configId: number,
+): Promise<RagConfigExpanded> {
+  return request<RagConfigExpanded>(`/api/projects/${projectId}/rag-configs/${configId}/expanded`);
 }
 
 export async function deleteRagConfig(
