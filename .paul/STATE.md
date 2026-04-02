@@ -10,14 +10,14 @@ See: .paul/PROJECT.md (updated 2026-04-02)
 ## Current Position
 
 Milestone: v0.3 Process Flow & Fixes (v0.3.0)
-Phase: 16 of 19 (Build — Save & Use RAG Config)
+Phase: 17 of 19 (Test Tab Fixes)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-04-03 — Phase 15 complete, transitioned to Phase 16
+Last activity: 2026-04-03 — Phase 16 complete, transitioned to Phase 17
 
 Progress:
-- Milestone: [███░░░░░░░] 33% (2/6 phases)
-- Phase 16: [░░░░░░░░░░] 0%
+- Milestone: [█████░░░░░] 50% (3/6 phases)
+- Phase 17: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
@@ -47,6 +47,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | useStageCompletion with location-based refetch | Phase 13 | Immediate feedback after user actions on stages |
 | Inline dismissable banner for delete errors | Phase 15 | Reusable pattern for delete failure feedback |
 | Help text as static p elements below labels | Phase 15 | Simple, accessible, no tooltip dependencies |
+| Enterprise audit on Phase 16 plan: 3 must-have + 2 strongly-recommended applied | Phase 16 | Plan strengthened for route ordering, authorization, error handling |
+| Expanded endpoint pattern with _expand_rag_config helper | Phase 16 | Reusable for future entity expansion endpoints |
+| Route ordering: static paths before path params in FastAPI | Phase 16 | Must maintain for all future /rag-configs/* routes |
 
 ### Deferred Issues
 
@@ -57,7 +60,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: pending (phase 15 commit)
+Last commit: (pending phase 16 commit)
 Branch: main
 Feature branches merged: all v0.2 branches merged
 
@@ -68,8 +71,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-03
-Stopped at: Phase 15 complete, ready to plan Phase 16
-Next action: /paul:plan for Phase 16
+Stopped at: Phase 16 complete, ready to plan Phase 17
+Next action: /paul:plan for Phase 17
 Resume file: .paul/ROADMAP.md
 
 ---

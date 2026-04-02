@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import csv
 import io
@@ -59,10 +58,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
-INPUT_DIR = BASE_DIR / "input"
-OUTPUT_DIR = BASE_DIR / "output"
-
-CONTEXT_SEPARATOR = "||"
 
 ALL_METRICS = [
     "faithfulness",
@@ -140,105 +135,6 @@ def setup_scorers(metrics: list[str] = None):
     return scorers
 
 
-async def evaluate_row(scorers, question: str, answer: str, contexts: list[str]) -> dict:
-    results = {}
-
-    for name, scorer in scorers.items():
-        try:
-            if name == "faithfulness":
-                results[name] = await faithfulness.score(scorer, question, answer, contexts)
-            elif name == "answer_relevancy":
-                results[name] = await answer_relevancy.score(scorer, question, answer)
-            elif name == "context_precision":
-                results[name] = await context_precision.score(scorer, question, answer, contexts)
-            elif name == "context_recall":
-                results[name] = await context_recall.score(scorer, question, answer, contexts)
-            elif name == "context_entities_recall":
-                results[name] = await context_entities_recall.score(scorer, answer, contexts)
-            elif name == "noise_sensitivity":
-                results[name] = await noise_sensitivity.score(scorer, question, answer, answer, contexts)
-            elif name == "factual_correctness":
-                results[name] = await factual_correctness.score(scorer, answer, answer)
-            elif name == "semantic_similarity":
-                results[name] = await semantic_similarity.score(scorer, answer, answer)
-            elif name == "non_llm_string_similarity":
-                results[name] = await non_llm_string_similarity.score(scorer, answer, answer)
-            elif name == "bleu_score":
-                results[name] = await bleu_score.score(scorer, answer, answer)
-            elif name == "rouge_score":
-                results[name] = await rouge_score.score(scorer, answer, answer)
-            elif name == "chrf_score":
-                results[name] = await chrf_score.score(scorer, answer, answer)
-            elif name == "exact_match":
-                results[name] = await exact_match.score(scorer, answer, answer)
-            elif name == "string_presence":
-                results[name] = await string_presence.score(scorer, answer, answer)
-            elif name == "summarization_score":
-                results[name] = await summarization_score.score(scorer, answer, contexts)
-            elif name == "aspect_critic":
-                results[name] = await aspect_critic.score(scorer, question, answer, contexts)
-            elif name == "rubrics_score":
-                results[name] = await rubrics_score.score(scorer, question, answer, contexts)
-            elif name == "answer_accuracy":
-                results[name] = await answer_accuracy.score(scorer, question, answer, answer)
-            elif name == "context_relevance":
-                results[name] = await context_relevance.score(scorer, question, contexts)
-            elif name == "response_groundedness":
-                results[name] = await response_groundedness.score(scorer, answer, contexts)
-        except Exception as e:
-            print(f"  Warning: {name} failed: {e}")
-            results[name] = None
-
-    return results
-
-
-def parse_contexts(raw: str) -> list[str]:
-    return [c.strip() for c in raw.split(CONTEXT_SEPARATOR) if c.strip()]
-
-
-async def process_csv(input_file: str, metrics: list[str] = None):
-    input_path = INPUT_DIR / input_file
-    if not input_path.exists():
-        print(f"Error: {input_path} not found")
-        return
-
-    selected = metrics or ALL_METRICS
-    scorers = setup_scorers(selected)
-    rows = []
-
-    with open(input_path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
-
-    results = []
-    for i, row in enumerate(rows):
-        question = row["Question"]
-        answer = row["Answer"]
-        contexts = parse_contexts(row["Retrieve Context"])
-
-        print(f"Evaluating row {i + 1}/{len(rows)}: {question[:50]}...")
-        scores = await evaluate_row(scorers, question, answer, contexts)
-        results.append({
-            "Question": question,
-            "Answer": answer,
-            "Retrieve Context": row["Retrieve Context"],
-            **scores,
-        })
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stem = Path(input_file).stem
-    output_path = OUTPUT_DIR / f"{stem}_results_{timestamp}.csv"
-
-    fieldnames = ["Question", "Answer", "Retrieve Context"] + list(scorers.keys())
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-
-    print(f"Results saved to {output_path}")
-
-
 # --- FastAPI Application (module-level) ---
 
 @asynccontextmanager
@@ -262,24 +158,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_scorers = None
-
-
-def get_scorers():
-    global _scorers
-    if _scorers is None:
-        _scorers = setup_scorers()
-    return _scorers
-
-
 # --- Pydantic Models ---
-
-class EvalRequest(BaseModel):
-    question: str
-    answer: str
-    retrieve_context: list[str]
-    metrics: list[str] | None = None
-
 
 class TestGenRequest(BaseModel):
     chunks: list[str]
@@ -375,6 +254,20 @@ class ProjectUpdate(BaseModel):
             v = v.strip()
             if not v:
                 raise ValueError("Project name must not be blank")
+        return v
+
+
+class ApiConfigCreate(BaseModel):
+    endpoint_url: str
+    api_key: str | None = None
+    headers_json: str | None = None
+
+    @field_validator("endpoint_url")
+    @classmethod
+    def url_must_not_be_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Endpoint URL must not be blank")
         return v
 
 
@@ -642,8 +535,7 @@ async def _evaluate_experiment_row(
 ) -> dict:
     """Evaluate a generated answer against reference using selected metrics.
 
-    Unlike evaluate_row, this properly separates generated_answer from reference_answer
-    for metrics that compare the two.
+    Properly separates generated_answer from reference_answer for metrics that compare the two.
     """
     results = {}
 
@@ -697,25 +589,6 @@ async def _evaluate_experiment_row(
 
 
 # --- API Routes ---
-
-@app.post("/api/evaluate")
-async def evaluate(req: EvalRequest):
-    all_scorers = get_scorers()
-    selected_scorers = all_scorers
-    if req.metrics:
-        selected_scorers = {k: v for k, v in all_scorers.items() if k in req.metrics}
-    scores = await evaluate_row(selected_scorers, req.question, req.answer, req.retrieve_context)
-    return {
-        "question": req.question,
-        "answer": req.answer,
-        **scores,
-    }
-
-
-@app.get("/api/metrics")
-async def list_metrics():
-    return {"available_metrics": ALL_METRICS}
-
 
 @app.get("/api/health")
 async def health_check():
@@ -871,6 +744,201 @@ async def delete_project(project_id: int):
     conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     conn.commit()
     return {"detail": "Project deleted"}
+
+
+# --- External Baselines Routes ---
+
+MAX_BASELINE_CSV_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_BASELINE_ROWS = 1000
+
+
+def _sanitize_csv_value(val: str) -> str:
+    """Strip whitespace and prevent CSV injection."""
+    val = val.strip()
+    if val and val[0] in ("=", "+", "-", "@"):
+        val = "'" + val
+    return val
+
+
+@app.post("/api/projects/{project_id}/baselines/upload-csv", status_code=201)
+async def upload_baseline_csv(project_id: int, file: UploadFile = File(...)):
+    conn = get_db_conn()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are accepted")
+
+    content = await file.read()
+    if len(content) > MAX_BASELINE_CSV_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum 10MB.")
+
+    try:
+        text = content.decode("utf-8", errors="replace")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode file as UTF-8")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise HTTPException(status_code=400, detail="CSV file is empty or has no headers")
+
+    lower_fields = [f.strip().lower() for f in reader.fieldnames]
+    if "question" not in lower_fields or "answer" not in lower_fields:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must have 'question' and 'answer' columns. Found: {', '.join(reader.fieldnames)}",
+        )
+
+    # Build column name mapping (case-insensitive)
+    col_map = {}
+    for orig, low in zip(reader.fieldnames, lower_fields):
+        if low == "question":
+            col_map["question"] = orig
+        elif low == "answer":
+            col_map["answer"] = orig
+        elif low in ("sources", "source", "context", "contexts"):
+            col_map["sources"] = orig
+
+    rows = []
+    for i, row in enumerate(reader):
+        if i >= MAX_BASELINE_ROWS:
+            break
+        q = _sanitize_csv_value(row.get(col_map["question"], ""))
+        a = _sanitize_csv_value(row.get(col_map["answer"], ""))
+        if not q or not a:
+            continue
+        s = _sanitize_csv_value(row.get(col_map.get("sources", ""), "") or "")
+        rows.append((project_id, q, a, s, "csv"))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="No valid rows found in CSV")
+
+    conn.executemany(
+        "INSERT INTO external_baselines (project_id, question, answer, sources, source_type) VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+    return {
+        "imported": len(rows),
+        "preview": [
+            {"question": r[1], "answer": r[2], "sources": r[3]}
+            for r in rows[:5]
+        ],
+    }
+
+
+@app.get("/api/projects/{project_id}/baselines")
+async def list_baselines(project_id: int):
+    conn = get_db_conn()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = conn.execute(
+        "SELECT id, project_id, question, answer, sources, source_type, created_at FROM external_baselines WHERE project_id = ? ORDER BY id",
+        (project_id,),
+    ).fetchall()
+
+    return [
+        {
+            "id": r[0], "project_id": r[1], "question": r[2], "answer": r[3],
+            "sources": r[4], "source_type": r[5], "created_at": r[6],
+        }
+        for r in rows
+    ]
+
+
+@app.delete("/api/projects/{project_id}/baselines/{baseline_id}")
+async def delete_baseline(project_id: int, baseline_id: int):
+    conn = get_db_conn()
+    existing = conn.execute(
+        "SELECT id FROM external_baselines WHERE id = ? AND project_id = ?",
+        (baseline_id, project_id),
+    ).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    conn.execute("DELETE FROM external_baselines WHERE id = ?", (baseline_id,))
+    conn.commit()
+    return {"detail": "Baseline deleted"}
+
+
+@app.delete("/api/projects/{project_id}/baselines")
+async def clear_baselines(project_id: int):
+    conn = get_db_conn()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    conn.execute("DELETE FROM external_baselines WHERE project_id = ?", (project_id,))
+    conn.commit()
+    return {"detail": "All baselines cleared"}
+
+
+# --- API Config Routes ---
+
+
+@app.post("/api/projects/{project_id}/api-config", status_code=201)
+async def save_api_config(project_id: int, payload: ApiConfigCreate):
+    conn = get_db_conn()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    existing = conn.execute("SELECT id FROM api_configs WHERE project_id = ?", (project_id,)).fetchone()
+
+    if existing:
+        conn.execute(
+            "UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = CURRENT_TIMESTAMP WHERE project_id = ?",
+            (payload.endpoint_url, payload.api_key, payload.headers_json, project_id),
+        )
+        config_id = existing[0]
+    else:
+        cur = conn.execute(
+            "INSERT INTO api_configs (project_id, endpoint_url, api_key, headers_json) VALUES (?, ?, ?, ?)",
+            (project_id, payload.endpoint_url, payload.api_key, payload.headers_json),
+        )
+        config_id = cur.lastrowid
+
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT id, project_id, endpoint_url, api_key, headers_json, created_at, updated_at FROM api_configs WHERE id = ?",
+        (config_id,),
+    ).fetchone()
+
+    return {
+        "id": row[0], "project_id": row[1], "endpoint_url": row[2],
+        "api_key": row[3], "headers_json": row[4],
+        "created_at": row[5], "updated_at": row[6],
+    }
+
+
+@app.get("/api/projects/{project_id}/api-config")
+async def get_api_config(project_id: int):
+    conn = get_db_conn()
+    row = conn.execute(
+        "SELECT id, project_id, endpoint_url, api_key, headers_json, created_at, updated_at FROM api_configs WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No API config found for this project")
+    return {
+        "id": row[0], "project_id": row[1], "endpoint_url": row[2],
+        "api_key": row[3], "headers_json": row[4],
+        "created_at": row[5], "updated_at": row[6],
+    }
+
+
+@app.delete("/api/projects/{project_id}/api-config")
+async def delete_api_config(project_id: int):
+    conn = get_db_conn()
+    existing = conn.execute("SELECT id FROM api_configs WHERE project_id = ?", (project_id,)).fetchone()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="No API config found for this project")
+    conn.execute("DELETE FROM api_configs WHERE project_id = ?", (project_id,))
+    conn.commit()
+    return {"detail": "API config deleted"}
 
 
 # --- Document Routes ---
@@ -1385,6 +1453,52 @@ async def list_rag_configs(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
     rows = conn.execute("SELECT * FROM rag_configs WHERE project_id = ?", (project_id,)).fetchall()
     return [_parse_rag_config_row(r) for r in rows]
+
+
+def _expand_rag_config(rag_row, conn) -> dict:
+    """Add linked chunk_config and embedding_config details to a parsed rag config dict."""
+    d = _parse_rag_config_row(rag_row)
+    cc = conn.execute(
+        "SELECT name, method, params_json FROM chunk_configs WHERE id = ?",
+        (rag_row["chunk_config_id"],),
+    ).fetchone()
+    if cc:
+        d["chunk_config"] = {"name": cc["name"], "method": cc["method"], "params": json.loads(cc["params_json"])}
+    else:
+        d["chunk_config"] = None
+    ec = conn.execute(
+        "SELECT name, type, model_name FROM embedding_configs WHERE id = ?",
+        (rag_row["embedding_config_id"],),
+    ).fetchone()
+    if ec:
+        d["embedding_config"] = {"name": ec["name"], "type": ec["type"], "model_name": ec["model_name"]}
+    else:
+        d["embedding_config"] = None
+    return d
+
+
+@app.get("/api/projects/{project_id}/rag-configs/expanded")
+async def list_rag_configs_expanded(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = conn.execute("SELECT * FROM rag_configs WHERE project_id = ?", (project_id,)).fetchall()
+    return [_expand_rag_config(r, conn) for r in rows]
+
+
+@app.get("/api/projects/{project_id}/rag-configs/{config_id}/expanded")
+async def get_rag_config_expanded(project_id: int, config_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (config_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="RAG config not found")
+    return _expand_rag_config(row, conn)
 
 
 @app.get("/api/projects/{project_id}/rag-configs/{config_id}")
@@ -3429,36 +3543,3 @@ else:
     async def root_redirect_no_build():
         """Redirect root even without frontend build."""
         return RedirectResponse(url="/app/setup")
-
-
-# --- CLI Entry Point ---
-
-def run_api(host: str = "0.0.0.0", port: int = 8000):
-    import uvicorn
-    uvicorn.run("main:app", host=host, port=port, reload=True)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ragas Evaluation Tool")
-    subparsers = parser.add_subparsers(dest="mode", required=True)
-
-    csv_parser = subparsers.add_parser("csv", help="Evaluate from a CSV file in input/")
-    csv_parser.add_argument("file", help="CSV filename in the input/ directory")
-    csv_parser.add_argument(
-        "--metrics",
-        nargs="+",
-        choices=ALL_METRICS,
-        default=None,
-        help="Specific metrics to run (default: all)",
-    )
-
-    api_parser = subparsers.add_parser("api", help="Run as a REST API server")
-    api_parser.add_argument("--host", default="0.0.0.0")
-    api_parser.add_argument("--port", type=int, default=8000)
-
-    args = parser.parse_args()
-
-    if args.mode == "csv":
-        asyncio.run(process_csv(args.file, getattr(args, "metrics", None)))
-    elif args.mode == "api":
-        run_api(args.host, args.port)

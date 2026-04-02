@@ -48,6 +48,7 @@ None — all v0.2.0 features shipped. v0.3 polish in progress.
 
 ### Validated (Shipped)
 
+- [x] Expanded RAG config display in Build tab and Experiment creation — v0.3.0 (Phase 16)
 - [x] Build tab delete error feedback and help text on all config fields — v0.3.0 (Phase 15)
 - [x] Docker + Railway migration — v0.1.0-dev
 - [x] Document pipeline & chunking engine — v0.1.0-dev
@@ -152,4 +153,4 @@ Quick Reference:
 
 ---
 *PROJECT.md -- Updated when requirements or context change*
-*Last updated: 2026-04-03 after Phase 15 — Build Tab Polish complete*
+*Last updated: 2026-04-03 after Phase 16 — Build Save & Use RAG Config complete*

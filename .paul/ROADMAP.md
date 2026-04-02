@@ -41,7 +41,7 @@ Completed: 2026-04-02
 
 **v0.3 Process Flow & Fixes** (v0.3.0)
 Status: In Progress
-Phases: 2 of 6 complete
+Phases: 3 of 6 complete
 
 ## Phases
 
@@ -49,7 +49,7 @@ Phases: 2 of 6 complete
 |-------|------|-------|--------|-----------|
 | 14 | Setup Page | 1 | Complete | 2026-04-02 |
 | 15 | Build Tab Polish | 1 | Complete | 2026-04-03 |
-| 16 | Build — Save & Use RAG Config | TBD | Not started | - |
+| 16 | Build — Save & Use RAG Config | 1 | Complete | 2026-04-03 |
 | 17 | Test Tab Fixes | TBD | Not started | - |
 | 18 | Experiment Runner | TBD | Not started | - |
 | 19 | Analyze Fixes | TBD | Not started | - |
@@ -230,4 +230,4 @@ Phases: 2 of 6 complete
 
 ---
 *Roadmap created: 2026-03-31*
-*Last updated: 2026-04-03 — Phase 15 complete*
+*Last updated: 2026-04-03 — Phase 16 complete*

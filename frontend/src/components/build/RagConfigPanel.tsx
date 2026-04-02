@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type {
   RagConfig,
   RagConfigCreate,
+  RagConfigExpanded,
   EmbeddingConfig,
   ChunkConfig,
 } from "../../lib/api";
@@ -9,6 +10,7 @@ import {
   fetchRagConfigs,
   createRagConfig,
   deleteRagConfig,
+  fetchRagConfigExpanded,
 } from "../../lib/api";
 import RagTestQuery from "./RagTestQuery";
 
@@ -75,9 +77,16 @@ export default function RagConfigPanel({
   // Test inline
   const [testConfigId, setTestConfigId] = useState<number | null>(null);
 
+  // Expand config summary
+  const [expandedConfigId, setExpandedConfigId] = useState<number | null>(null);
+  const [expandedCache, setExpandedCache] = useState<Map<number, RagConfigExpanded>>(new Map());
+  const [expandLoading, setExpandLoading] = useState(false);
+  const [expandError, setExpandError] = useState<string | null>(null);
+
   const loadConfigs = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setExpandedCache(new Map());
     try {
       const data = await fetchRagConfigs(projectId);
       setConfigs(data);
@@ -179,6 +188,26 @@ export default function RagConfigPanel({
     );
   }
 
+  async function handleToggleExpand(configId: number) {
+    if (expandedConfigId === configId) {
+      setExpandedConfigId(null);
+      setExpandError(null);
+      return;
+    }
+    setExpandedConfigId(configId);
+    setExpandError(null);
+    if (expandedCache.has(configId)) return;
+    setExpandLoading(true);
+    try {
+      const expanded = await fetchRagConfigExpanded(projectId, configId);
+      setExpandedCache((prev) => new Map(prev).set(configId, expanded));
+    } catch (err) {
+      setExpandError(err instanceof Error ? err.message : "Failed to load details");
+    } finally {
+      setExpandLoading(false);
+    }
+  }
+
   function renderConfigsList() {
     return (
       <div>
@@ -260,6 +289,21 @@ export default function RagConfigPanel({
 
                   <div className="flex shrink-0 items-center gap-1">
                     <button
+                      onClick={() => handleToggleExpand(cfg.id)}
+                      className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+                      title="Toggle config details"
+                    >
+                      <svg
+                        className={`h-3.5 w-3.5 transition-transform ${expandedConfigId === cfg.id ? "rotate-90" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                    <button
                       onClick={() =>
                         setTestConfigId(
                           testConfigId === cfg.id ? null : cfg.id,
@@ -308,6 +352,46 @@ export default function RagConfigPanel({
                     )}
                   </div>
                 </div>
+
+                {/* Expanded config summary */}
+                {expandedConfigId === cfg.id && (
+                  <div className="mt-3 border-t border-border pt-3">
+                    {expandLoading && !expandedCache.has(cfg.id) ? (
+                      <p className="text-xs text-text-muted">Loading details...</p>
+                    ) : expandError && !expandedCache.has(cfg.id) ? (
+                      <p className="text-xs text-score-low">Failed to load details</p>
+                    ) : expandedCache.has(cfg.id) ? (
+                      <div className="space-y-1 text-xs text-text-muted">
+                        {expandedCache.get(cfg.id)!.chunk_config ? (
+                          <p>
+                            <span className="text-text-secondary">Chunk:</span>{" "}
+                            {expandedCache.get(cfg.id)!.chunk_config!.name} — {expandedCache.get(cfg.id)!.chunk_config!.method}
+                          </p>
+                        ) : (
+                          <p><span className="text-text-secondary">Chunk:</span> (deleted)</p>
+                        )}
+                        {expandedCache.get(cfg.id)!.embedding_config ? (
+                          <p>
+                            <span className="text-text-secondary">Embedding:</span>{" "}
+                            {expandedCache.get(cfg.id)!.embedding_config!.name} — {expandedCache.get(cfg.id)!.embedding_config!.type}, {expandedCache.get(cfg.id)!.embedding_config!.model_name}
+                          </p>
+                        ) : (
+                          <p><span className="text-text-secondary">Embedding:</span> (deleted)</p>
+                        )}
+                        <p>
+                          <span className="text-text-secondary">RAG:</span>{" "}
+                          search={cfg.search_type}, LLM={cfg.llm_model}, top_k={cfg.top_k}, mode={cfg.response_mode}
+                        </p>
+                        {cfg.system_prompt && (
+                          <p>
+                            <span className="text-text-secondary">System prompt:</span>{" "}
+                            {cfg.system_prompt.length > 80 ? cfg.system_prompt.slice(0, 80) + "..." : cfg.system_prompt}
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
 
                 {/* Inline test query */}
                 {testConfigId === cfg.id && (
