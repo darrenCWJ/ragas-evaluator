@@ -27,6 +27,15 @@ const METHOD_LABELS: Record<string, string> = {
   overlap: "Overlap",
 };
 
+const PARAM_HELP: Record<string, string> = {
+  chunk_size: "Target size in characters for each chunk (typical: 500-2000)",
+  chunk_overlap: "Number of overlapping characters between chunks (typical: 50-200)",
+  parent_chunk_size: "Target size in characters for each chunk (typical: 500-2000)",
+  child_chunk_size: "Target size in characters for each chunk (typical: 500-2000)",
+  threshold: "Similarity threshold for semantic splitting (0.0-1.0, typical: 0.5)",
+  overlap: "Number of overlapping characters between chunks (typical: 50-200)",
+};
+
 interface Props {
   projectId: number;
   documents: Doc[];
@@ -80,6 +89,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
   // Delete state
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Preview / Generate state
   const [previewConfigId, setPreviewConfigId] = useState<number | null>(null);
@@ -152,12 +162,14 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
 
   async function handleDelete(configId: number) {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteChunkConfig(projectId, configId);
       setConfirmDeleteId(null);
       loadConfigs();
-    } catch {
-      // keep inline
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+      setConfirmDeleteId(null);
     } finally {
       setDeleting(false);
     }
@@ -175,6 +187,9 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
             <span className="mb-1 block text-xs text-text-secondary">
               {METHOD_LABELS[key] ?? key}
             </span>
+            {PARAM_HELP[key] && (
+              <p className="mt-0.5 text-xs text-text-muted">{PARAM_HELP[key]}</p>
+            )}
             {key === "threshold" ? (
               <div className="flex items-center gap-2">
                 <input
@@ -214,6 +229,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
 
         <label className="block">
           <span className="mb-1 block text-xs text-text-secondary">Name</span>
+          <p className="mt-0.5 text-xs text-text-muted">A descriptive name for this chunking configuration</p>
           <input
             type="text"
             value={name}
@@ -225,6 +241,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
 
         <label className="mt-3 block">
           <span className="mb-1 block text-xs text-text-secondary">Method</span>
+          <p className="mt-0.5 text-xs text-text-muted">recursive: splits by separators recursively | parent_child: creates parent-child chunk pairs | semantic: splits by semantic similarity | fixed_overlap: fixed-size chunks with overlap</p>
           <select
             value={method}
             onChange={(e) => setMethod(e.target.value as Method)}
@@ -264,6 +281,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
                 <span className="mb-1 block text-xs text-text-secondary">
                   2nd Pass Method
                 </span>
+                <p className="mt-0.5 text-xs text-text-muted">Optional second pass to further refine chunks from the first pass</p>
                 <select
                   value={step2Method}
                   onChange={(e) => setStep2Method(e.target.value as Method)}
@@ -343,6 +361,18 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
             No configs yet. Create one above.
           </p>
         ) : (
+          <>
+          {deleteError && (
+            <div className="mb-2 flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
+              <span>{deleteError}</span>
+              <button
+                onClick={() => setDeleteError(null)}
+                className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <ul className="space-y-2">
             {configs.map((cfg) => (
               <li
@@ -451,6 +481,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
               </li>
             ))}
           </ul>
+          </>
         )}
       </div>
     </div>

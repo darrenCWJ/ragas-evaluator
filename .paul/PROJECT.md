@@ -44,10 +44,11 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 
 ### Active (In Progress)
 
-None — all v0.2.0 features shipped.
+None — all v0.2.0 features shipped. v0.3 polish in progress.
 
 ### Validated (Shipped)
 
+- [x] Build tab delete error feedback and help text on all config fields — v0.3.0 (Phase 15)
 - [x] Docker + Railway migration — v0.1.0-dev
 - [x] Document pipeline & chunking engine — v0.1.0-dev
 - [x] Embedding & vector storage (OpenAI, sentence-transformers, BM25, hybrid search) — v0.1.0-dev
@@ -151,4 +152,4 @@ Quick Reference:
 
 ---
 *PROJECT.md -- Updated when requirements or context change*
-*Last updated: 2026-04-02 after Phase 13 — Feedback Loop & Polish complete (v0.2.0 milestone complete)*
+*Last updated: 2026-04-03 after Phase 15 — Build Tab Polish complete*

@@ -1,15 +1,15 @@
 {
   "name": "ragas-platform",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "milestone": {
-    "name": "v0.2 Frontend Rewrite",
-    "version": "0.2.0",
-    "status": "complete"
+    "name": "v0.3 Process Flow & Fixes",
+    "version": "0.3.0",
+    "status": "in_progress"
   },
   "phase": {
-    "number": 13,
-    "name": "Feedback Loop & Polish",
-    "status": "complete"
+    "number": 16,
+    "name": "Build — Save & Use RAG Config",
+    "status": "not_started"
   },
   "loop": {
     "plan": null,
@@ -17,7 +17,7 @@
   },
   "timestamps": {
     "created_at": "2026-03-31T00:00:00Z",
-    "updated_at": "2026-04-02T22:30:00Z"
+    "updated_at": "2026-04-03T00:00:00Z"
   },
   "satellite": {
     "groom": true

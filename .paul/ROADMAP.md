@@ -23,13 +23,11 @@ Completed: 2026-04-02
 | 7 | Results Dashboard & Improvement Suggestions | 2 | Complete | 2026-04-01 |
 | 8 | Feedback Loop & Iteration | 2 | Complete | 2026-04-02 |
 
-## Current Milestone
+### v0.2 Frontend Rewrite (v0.2.0)
 
-**v0.2 Frontend Rewrite** (v0.2.0)
-Status: In Progress
+Status: Complete
 Phases: 5 of 5 complete
-
-## Phases
+Completed: 2026-04-02
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
@@ -39,7 +37,112 @@ Phases: 5 of 5 complete
 | 12 | Experiments & Results | 3 | Complete | 2026-04-02 |
 | 13 | Feedback Loop & Polish | 2 | Complete | 2026-04-02 |
 
+## Current Milestone
+
+**v0.3 Process Flow & Fixes** (v0.3.0)
+Status: In Progress
+Phases: 2 of 6 complete
+
+## Phases
+
+| Phase | Name | Plans | Status | Completed |
+|-------|------|-------|--------|-----------|
+| 14 | Setup Page | 1 | Complete | 2026-04-02 |
+| 15 | Build Tab Polish | 1 | Complete | 2026-04-03 |
+| 16 | Build — Save & Use RAG Config | TBD | Not started | - |
+| 17 | Test Tab Fixes | TBD | Not started | - |
+| 18 | Experiment Runner | TBD | Not started | - |
+| 19 | Analyze Fixes | TBD | Not started | - |
+
 ## Phase Details
+
+### Phase 14: Setup Page
+
+**Goal:** Build the Setup page with API endpoint connection for external bot evaluation, and CSV upload for importing Q&A pairs with sources for judging against the RAG bot.
+**Depends on:** v0.2 complete (existing app shell)
+**Research:** Unlikely
+
+**Scope:**
+- Replace placeholder StagePlaceholder with real Setup content
+- API endpoint configuration (connect to external service for relevance info)
+- CSV upload for external bot questions, answers, and sources
+- Validation and preview of imported data
+- Integration with downstream stages (data available for experiments)
+
+**Plans:**
+- [ ] TBD during /paul:plan
+
+### Phase 15: Build Tab Polish
+
+**Goal:** Fix PDF reading, add help/documentation links for all config fields, and fix the delete confirmation button.
+**Depends on:** Phase 14 (or can run independently)
+**Research:** Unlikely
+
+**Scope:**
+- Fix PDF file reading issue (backend has pypdf support, diagnose frontend/dependency gap)
+- Add help text / tooltips / documentation links for each config field name and option
+- Fix "Yes" delete confirmation button not working
+- Improve UX clarity across all Build sub-panels
+
+**Plans:**
+- [ ] TBD during /paul:plan
+
+### Phase 16: Build — Save & Use RAG Config
+
+**Goal:** Allow saving a complete RAG configuration (chunking + embedding + RAG as one unit) that can be selected in the Experiment phase.
+**Depends on:** Phase 15 (build tab working correctly)
+**Research:** Unlikely
+
+**Scope:**
+- "Save full config" action that bundles chunk config + embedding config + RAG config
+- Saved config selectable when creating experiments
+- Config summary display showing all component settings
+
+**Plans:**
+- [ ] TBD during /paul:plan
+
+### Phase 17: Test Tab Fixes
+
+**Goal:** Enable custom persona editing and fix color scheme issues (white boxes).
+**Depends on:** v0.2 complete
+**Research:** Unlikely
+
+**Scope:**
+- Custom persona editor (name, description, traits — not just toggle + count)
+- Fix white background boxes to match dark theme color scheme
+- Ensure all test tab elements follow design system tokens
+
+**Plans:**
+- [ ] TBD during /paul:plan
+
+### Phase 18: Experiment Runner
+
+**Goal:** Ensure experiments actually test the RAG bot against test questions end-to-end.
+**Depends on:** Phase 16 (saved RAG configs), Phase 17 (working test sets)
+**Research:** May need debugging
+
+**Scope:**
+- Verify experiment runner queries RAG bot per approved question
+- Diagnose and fix any wiring issues preventing end-to-end execution
+- Ensure results are stored and displayed correctly
+- Error handling and recovery for failed runs
+
+**Plans:**
+- [ ] TBD during /paul:plan
+
+### Phase 19: Analyze Fixes
+
+**Goal:** Fix generate suggestion button and apply suggestion flow.
+**Depends on:** Phase 18 (completed experiments needed)
+**Research:** Unlikely
+
+**Scope:**
+- Fix response type mismatch between backend and frontend for suggestion generation
+- Fix apply suggestion flow (backend returns different structure than frontend expects)
+- Verify full analyze workflow: generate → view → apply → iterate
+
+**Plans:**
+- [ ] TBD during /paul:plan
 
 ### Phase 9: Foundation & Design System
 
@@ -127,4 +230,4 @@ Phases: 5 of 5 complete
 
 ---
 *Roadmap created: 2026-03-31*
-*Last updated: 2026-04-02*
+*Last updated: 2026-04-03 — Phase 15 complete*
