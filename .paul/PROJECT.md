@@ -154,4 +154,4 @@ Quick Reference:
 
 ---
 *PROJECT.md -- Updated when requirements or context change*
-*Last updated: 2026-04-03 after Phase 17 — Test Tab Fixes complete*
+*Last updated: 2026-04-03 after Phase 18 — Experiment Runner complete*

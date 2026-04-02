@@ -673,6 +673,16 @@ export async function deleteExperiment(
   );
 }
 
+export async function resetExperiment(
+  projectId: number,
+  experimentId: number,
+): Promise<Experiment> {
+  return request<Experiment>(
+    `/api/projects/${projectId}/experiments/${experimentId}/reset`,
+    { method: "POST" },
+  );
+}
+
 export async function fetchExperimentResults(
   projectId: number,
   experimentId: number,
@@ -695,6 +705,7 @@ export interface SSEProgressEvent {
   total: number;
   question_id: number;
   question: string;
+  error?: string;
 }
 
 export interface SSECompletedEvent {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useProject } from "../contexts/ProjectContext";
-import { fetchExperiments } from "../lib/api";
+import { fetchExperiments, resetExperiment } from "../lib/api";
 import type { Experiment } from "../lib/api";
 import ExperimentCreate from "../components/experiment/ExperimentCreate";
 import ExperimentList from "../components/experiment/ExperimentList";
@@ -170,16 +170,38 @@ export default function ExperimentPage() {
             </section>
           )}
 
-          {/* Runner — only for pending experiments, and not during comparison */}
+          {/* Runner — for pending or failed experiments, and not during comparison */}
           {comparingIds.length === 0 &&
             selected &&
-            selected.status === "pending" && (
+            (selected.status === "pending" || selected.status === "failed") && (
               <section className="rounded-xl border border-accent/30 bg-accent/5 p-5">
-                <ExperimentRunner
-                  projectId={project.id}
-                  experiment={selected}
-                  onComplete={loadExperiments}
-                />
+                {selected.status === "failed" && (
+                  <div className="mb-4 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5">
+                    <span className="text-xs text-red-300">
+                      This experiment failed. Reset to re-run with new metrics.
+                    </span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await resetExperiment(project.id, selected.id);
+                          await loadExperiments();
+                        } catch (err) {
+                          setError((err as Error).message || "Failed to reset experiment");
+                        }
+                      }}
+                      className="rounded-lg bg-red-500/15 px-3 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/25"
+                    >
+                      Reset & Re-run
+                    </button>
+                  </div>
+                )}
+                {selected.status === "pending" && (
+                  <ExperimentRunner
+                    projectId={project.id}
+                    experiment={selected}
+                    onComplete={loadExperiments}
+                  />
+                )}
               </section>
             )}
 
