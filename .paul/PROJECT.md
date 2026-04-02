@@ -14,7 +14,7 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 |-----------|-------|
 | Type | Application |
 | Version | 0.0.0 |
-| Status | v0.2.0 Complete |
+| Status | v0.3.0 Complete |
 | Last Updated | 2026-04-02 (after Phase 8) |
 
 **Existing Functionality:**
@@ -44,10 +44,12 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 
 ### Active (In Progress)
 
-None — all v0.2.0 features shipped. v0.3 polish in progress.
+None — all v0.3.0 features shipped.
 
 ### Validated (Shipped)
 
+- [x] Analyze suggestion generation and apply flow fixes — v0.3.0 (Phase 19)
+- [x] Resilient experiment runner with re-run and error visibility — v0.3.0 (Phase 18)
 - [x] Test tab dark theme fix and custom persona editor — v0.3.0 (Phase 17)
 - [x] Expanded RAG config display in Build tab and Experiment creation — v0.3.0 (Phase 16)
 - [x] Build tab delete error feedback and help text on all config fields — v0.3.0 (Phase 15)
@@ -154,4 +156,4 @@ Quick Reference:
 
 ---
 *PROJECT.md -- Updated when requirements or context change*
-*Last updated: 2026-04-03 after Phase 18 — Experiment Runner complete*
+*Last updated: 2026-04-03 after Phase 19 — v0.3 Milestone complete*
