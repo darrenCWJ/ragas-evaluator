@@ -688,6 +688,140 @@ export function runExperimentSSE(
   return { abort: () => controller.abort() };
 }
 
+// --- Suggestion Types ---
+
+export interface Suggestion {
+  id: number;
+  experiment_id: number;
+  category: string;
+  signal: string;
+  suggestion: string;
+  priority: "high" | "medium" | "low";
+  config_field: string | null;
+  suggested_value: string | null;
+  implemented: boolean;
+  created_at: string;
+}
+
+export interface ApplySuggestionResult {
+  suggestion: Suggestion;
+  new_experiment: Experiment;
+  new_rag_config: { id: number; name: string };
+  changes: Record<string, { old: unknown; new: unknown }>;
+}
+
+// --- Delta Types ---
+
+export interface ConfigChange {
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+}
+
+export interface MetricDelta {
+  baseline: number | null;
+  iteration: number | null;
+  delta: number | null;
+  improved: boolean | null;
+}
+
+export interface QuestionDelta {
+  test_question_id: number;
+  question: string | null;
+  metrics: Record<
+    string,
+    { baseline: number | null; iteration: number | null; delta: number | null }
+  >;
+}
+
+export interface DeltaResult {
+  experiment_id: number;
+  experiment_name: string;
+  baseline_experiment_id: number;
+  baseline_experiment_name: string;
+  config_changes: ConfigChange[];
+  metric_deltas: Record<string, MetricDelta>;
+  per_question_deltas: QuestionDelta[];
+}
+
+// --- Suggestion API ---
+
+export async function generateSuggestions(
+  projectId: number,
+  experimentId: number,
+): Promise<{ suggestions: Suggestion[]; count: number }> {
+  return request<{ suggestions: Suggestion[]; count: number }>(
+    `/api/projects/${projectId}/experiments/${experimentId}/suggestions/generate`,
+    { method: "POST" },
+  );
+}
+
+export async function fetchSuggestions(
+  projectId: number,
+  experimentId: number,
+): Promise<Suggestion[]> {
+  const data = await request<{ suggestions: Suggestion[] }>(
+    `/api/projects/${projectId}/experiments/${experimentId}/suggestions`,
+  );
+  return data.suggestions;
+}
+
+export async function applySuggestion(
+  projectId: number,
+  suggestionId: number,
+  body?: { override_value?: string; experiment_name?: string },
+): Promise<ApplySuggestionResult> {
+  return request<ApplySuggestionResult>(
+    `/api/projects/${projectId}/suggestions/${suggestionId}/apply`,
+    {
+      method: "POST",
+      body: body ? JSON.stringify(body) : undefined,
+    },
+  );
+}
+
+// --- Delta API ---
+
+export async function fetchExperimentDelta(
+  projectId: number,
+  experimentId: number,
+): Promise<DeltaResult> {
+  return request<DeltaResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/delta`,
+  );
+}
+
+// --- Export API ---
+
+export async function exportExperiment(
+  projectId: number,
+  experimentId: number,
+  format: "csv" | "json",
+): Promise<void> {
+  const res = await fetch(
+    `/api/projects/${projectId}/experiments/${experimentId}/export?format=${format}`,
+  );
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "Unknown error");
+    throw new ApiError(res.status, body);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] ?? `export.${format}`;
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // --- Comparison Types ---
 
 export interface CompareQuestionExperimentData {
