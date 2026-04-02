@@ -507,11 +507,11 @@ class ApplySuggestionRequest(BaseModel):
         return v
 
 
-def _build_virtual_rag_config_row(experiment_row, rag_config_row) -> dict:
+def _build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
     """Build a dict satisfying the rag_config_row interface for RAG query functions."""
     retrieval_config = json.loads(experiment_row["retrieval_config_json"]) if experiment_row["retrieval_config_json"] else {}
     return {
-        "project_id": rag_config_row["project_id"],
+        "project_id": project_id,
         "llm_model": experiment_row["model"],
         "llm_params_json": experiment_row["model_params_json"],
         "chunk_config_id": experiment_row["chunk_config_id"],
@@ -2617,22 +2617,14 @@ async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRun
     if experiment is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
-    if experiment["status"] != "pending":
+    if experiment["status"] not in ("pending", "failed"):
         raise HTTPException(
             status_code=409,
-            detail=f"Experiment already {experiment['status']}. Only pending experiments can be run.",
+            detail=f"Experiment already {experiment['status']}. Only pending or failed experiments can be run.",
         )
 
-    # Validate rag_config still exists (needed for project_id in collection naming)
-    rag_config = conn.execute(
-        "SELECT * FROM rag_configs WHERE id = ?",
-        (experiment["rag_config_id"],),
-    ).fetchone()
-    if rag_config is None:
-        raise HTTPException(
-            status_code=422,
-            detail="RAG config has been deleted. Cannot run experiment without retrieval pipeline.",
-        )
+    # Note: rag_config may have been deleted after experiment creation.
+    # All config is snapshotted in the experiment row; project_id comes from URL.
 
     # Silently filter metrics to valid ones
     requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
@@ -2648,7 +2640,7 @@ async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRun
         try:
             # Atomic status claim — prevents concurrent run race condition
             cursor = run_conn.execute(
-                "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending'",
+                "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status IN ('pending', 'failed')",
                 (datetime.utcnow().isoformat(), experiment_id),
             )
             run_conn.commit()
@@ -2656,6 +2648,14 @@ async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRun
             if cursor.rowcount != 1:
                 yield f"event: error\ndata: {json.dumps({'message': 'Experiment already claimed by another request'})}\n\n"
                 return
+
+            # Clean up partial results from prior failed run (if any)
+            deleted = run_conn.execute(
+                "DELETE FROM experiment_results WHERE experiment_id = ?", (experiment_id,)
+            )
+            if deleted.rowcount > 0:
+                run_conn.commit()
+                logger.info("Experiment %d re-run: deleted %d partial results from prior attempt", experiment_id, deleted.rowcount)
 
             # Fetch approved/edited test questions
             questions = run_conn.execute(
@@ -2669,8 +2669,8 @@ async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRun
             # Setup scorers
             scorers = setup_scorers(selected_metrics)
 
-            # Build virtual rag_config row
-            virtual_config = _build_virtual_rag_config_row(experiment, rag_config)
+            # Build virtual rag_config row (uses snapshotted config + URL project_id)
+            virtual_config = _build_virtual_rag_config_row(experiment, project_id)
             response_mode = virtual_config["response_mode"]
 
             for i, q_row in enumerate(questions, 1):
@@ -2768,6 +2768,52 @@ async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRun
                 pass  # Best-effort cleanup
 
     return StreamingResponse(_run_generator(), media_type="text/event-stream")
+
+
+@app.post("/api/projects/{project_id}/experiments/{experiment_id}/reset")
+async def reset_experiment(project_id: int, experiment_id: int):
+    """Reset a failed experiment so it can be re-run. Deletes partial results."""
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Atomic guard: only reset if status is 'failed' and belongs to project
+    cursor = conn.execute(
+        "UPDATE experiments SET status = 'pending', started_at = NULL, completed_at = NULL "
+        "WHERE id = ? AND project_id = ? AND status = 'failed'",
+        (experiment_id, project_id),
+    )
+    conn.commit()
+
+    if cursor.rowcount != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Only failed experiments can be reset.",
+        )
+
+    # Delete partial results
+    deleted = conn.execute(
+        "DELETE FROM experiment_results WHERE experiment_id = ?", (experiment_id,)
+    )
+    conn.commit()
+    logger.info("Experiment %d reset: deleted %d partial results", experiment_id, deleted.rowcount)
+
+    # Return updated experiment
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ?", (experiment_id,)
+    ).fetchone()
+
+    return {
+        "id": experiment["id"],
+        "project_id": experiment["project_id"],
+        "test_set_id": experiment["test_set_id"],
+        "rag_config_id": experiment["rag_config_id"],
+        "name": experiment["name"],
+        "model": experiment["model"],
+        "status": experiment["status"],
+        "created_at": experiment["created_at"],
+        "started_at": experiment["started_at"],
+        "completed_at": experiment["completed_at"],
+    }
 
 
 # --- Suggestion Engine Routes ---
