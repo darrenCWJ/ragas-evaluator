@@ -469,6 +469,7 @@ export interface TestSetCreate {
   name?: string;
   testset_size?: number;
   num_personas?: number;
+  custom_personas?: { name: string; role_description: string }[];
   use_personas?: boolean;
 }
 

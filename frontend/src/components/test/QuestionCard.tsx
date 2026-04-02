@@ -153,7 +153,7 @@ export default function QuestionCard({
                 <p className="text-xs font-medium text-text-muted">
                   Original reference answer
                 </p>
-                <p className="mt-1 rounded-lg bg-surface px-3 py-2 text-xs text-text-muted">
+                <p className="mt-1 rounded-lg bg-deep px-3 py-2 text-xs text-text-muted">
                   {refAnswer}
                 </p>
               </div>
@@ -224,7 +224,7 @@ export default function QuestionCard({
 
             {/* Question type badge */}
             {q.question_type && (
-              <span className="rounded-full bg-surface px-2 py-0.5 text-text-muted">
+              <span className="rounded-full bg-elevated px-2 py-0.5 text-text-muted">
                 {q.question_type}
               </span>
             )}

@@ -156,7 +156,7 @@ export default function QuestionList({
 
       {/* Status filter tabs + Select all */}
       <div className="flex items-center gap-2">
-        <div className="flex flex-1 gap-1 rounded-lg border border-border bg-surface p-1">
+        <div className="flex flex-1 gap-1 rounded-lg border border-border bg-elevated p-1">
           {STATUS_FILTERS.map((f) => (
             <button
               key={f}
