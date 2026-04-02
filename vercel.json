@@ -6,22 +6,42 @@
       "use": "@vercel/python"
     },
     {
-      "src": "public/**",
+      "src": "api/generate_testset.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "frontend/dist/**",
       "use": "@vercel/static"
     }
   ],
   "routes": [
     {
+      "src": "/api/generate-testset",
+      "dest": "/api/generate_testset.py"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api/evaluate.py"
     },
     {
-      "src": "/(.*)",
-      "dest": "/public/$1"
+      "src": "/app/assets/(.*)",
+      "dest": "/frontend/dist/assets/$1"
+    },
+    {
+      "src": "/app/(.*)",
+      "dest": "/frontend/dist/index.html"
+    },
+    {
+      "src": "/",
+      "status": 308,
+      "headers": { "Location": "/app/setup" }
     }
   ],
   "functions": {
     "api/evaluate.py": {
+      "maxDuration": 120
+    },
+    "api/generate_testset.py": {
       "maxDuration": 120
     }
   }

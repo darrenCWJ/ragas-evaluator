@@ -14,7 +14,7 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 |-----------|-------|
 | Type | Application |
 | Version | 0.0.0 |
-| Status | v0.1.0 Complete |
+| Status | v0.2.0 Complete |
 | Last Updated | 2026-04-02 (after Phase 8) |
 
 **Existing Functionality:**
@@ -44,10 +44,7 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 
 ### Active (In Progress)
 
-- [ ] Frontend rewrite: React+Vite+Tailwind SPA with guided stepper workflow (v0.2.0)
-- [x] Build stage UI: document upload, chunking, embedding, RAG config, test query, pipeline status — v0.2.0-dev (Phase 10)
-- [x] Test stage UI: test set generation, question browsing, inline annotation (approve/reject/edit), bulk actions — v0.2.0-dev (Phase 11)
-- [x] Experiment stage UI: creation, SSE runner, results dashboard, comparison, history timeline — v0.2.0-dev (Phase 12)
+None — all v0.2.0 features shipped.
 
 ### Validated (Shipped)
 
@@ -59,6 +56,12 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 - [x] Multi-model experiment runner with SSE progress & results UI — v0.1.0-dev
 - [x] Results dashboard with comparison, suggestions engine & history timeline — v0.1.0-dev
 - [x] Feedback loop & iteration workflow (apply suggestions, delta comparison, export) — v0.1.0
+- [x] Frontend rewrite: React+Vite+Tailwind SPA with guided stepper workflow — v0.2.0
+- [x] Build stage UI: document upload, chunking, embedding, RAG config, pipeline status — v0.2.0 (Phase 10)
+- [x] Test stage UI: test set generation, annotation with bulk actions — v0.2.0 (Phase 11)
+- [x] Experiment stage UI: creation, SSE runner, results, comparison, history — v0.2.0 (Phase 12)
+- [x] Analyze stage UI: suggestions with Apply, delta comparison, CSV/JSON export — v0.2.0 (Phase 13)
+- [x] Stepper completion indicators and legacy HTML cleanup — v0.2.0 (Phase 13)
 
 ### Planned (Next)
 
@@ -148,4 +151,4 @@ Quick Reference:
 
 ---
 *PROJECT.md -- Updated when requirements or context change*
-*Last updated: 2026-04-02 after Phase 12 — Experiments & Results complete*
+*Last updated: 2026-04-02 after Phase 13 — Feedback Loop & Polish complete (v0.2.0 milestone complete)*

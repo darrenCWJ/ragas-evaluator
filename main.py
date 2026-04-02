@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
@@ -3420,8 +3420,15 @@ if _frontend_dist.is_dir():
         """Serve index.html for all SPA routes (React Router handles client-side routing)."""
         return FileResponse(str(_frontend_dist / "index.html"))
 
-# Mount legacy static files AFTER /app routes
-app.mount("/", StaticFiles(directory="public", html=True), name="static")
+    @app.get("/")
+    async def root_redirect():
+        """Redirect root to the React SPA."""
+        return RedirectResponse(url="/app/setup")
+else:
+    @app.get("/")
+    async def root_redirect_no_build():
+        """Redirect root even without frontend build."""
+        return RedirectResponse(url="/app/setup")
 
 
 # --- CLI Entry Point ---
