@@ -51,7 +51,7 @@ export default function BulkActions({
   if (!hasSelection && !hasPending) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2.5 text-xs">
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-elevated px-4 py-2.5 text-xs">
       {/* Selection actions */}
       {hasSelection && (
         <>

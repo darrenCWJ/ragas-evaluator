@@ -2,7 +2,7 @@
 
 ## Project Reference
 
-See: .paul/PROJECT.md (updated 2026-04-02)
+See: .paul/PROJECT.md (updated 2026-04-03)
 
 **Core value:** AI engineers can systematically build, test, compare, and improve RAG pipelines against multiple LLM providers in one integrated platform.
 **Current focus:** Milestone v0.3 Process Flow & Fixes
@@ -10,14 +10,14 @@ See: .paul/PROJECT.md (updated 2026-04-02)
 ## Current Position
 
 Milestone: v0.3 Process Flow & Fixes (v0.3.0)
-Phase: 17 of 19 (Test Tab Fixes)
+Phase: 18 of 19 (Experiment Runner)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-04-03 — Phase 16 complete, transitioned to Phase 17
+Last activity: 2026-04-03 — Phase 17 complete, transitioned to Phase 18
 
 Progress:
-- Milestone: [█████░░░░░] 50% (3/6 phases)
-- Phase 17: [░░░░░░░░░░] 0%
+- Milestone: [██████░░░░] 67% (4/6 phases)
+- Phase 18: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
@@ -50,6 +50,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Enterprise audit on Phase 16 plan: 3 must-have + 2 strongly-recommended applied | Phase 16 | Plan strengthened for route ordering, authorization, error handling |
 | Expanded endpoint pattern with _expand_rag_config helper | Phase 16 | Reusable for future entity expansion endpoints |
 | Route ordering: static paths before path params in FastAPI | Phase 16 | Must maintain for all future /rag-configs/* routes |
+| Enterprise audit on Phase 17 plan: 1 must-have + 2 strongly-recommended applied | Phase 17 | Plan strengthened for persona validation, AC max-count, error-path verification |
+| bg-input for form controls, bg-elevated for containers, bg-deep for inset blocks | Phase 17 | Design token mapping pattern for dark theme consistency |
+| Functional setState with .map() for array updates | Phase 17 | Avoids TS array index type inference issues |
 
 ### Deferred Issues
 
@@ -60,7 +63,7 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: (pending phase 16 commit)
+Last commit: c06e312
 Branch: main
 Feature branches merged: all v0.2 branches merged
 
@@ -71,8 +74,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-03
-Stopped at: Phase 16 complete, ready to plan Phase 17
-Next action: /paul:plan for Phase 17
+Stopped at: Phase 17 complete, ready to plan Phase 18
+Next action: /paul:plan for Phase 18
 Resume file: .paul/ROADMAP.md
 
 ---
