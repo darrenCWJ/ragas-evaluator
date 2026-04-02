@@ -1,16 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import type { TestQuestion, TestSetSummary, TestSet } from "../../lib/api";
 import { fetchTestQuestions, fetchTestSetSummary } from "../../lib/api";
+import QuestionCard from "./QuestionCard";
+import BulkActions from "./BulkActions";
 
 const STATUS_FILTERS = ["all", "pending", "approved", "rejected", "edited"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-yellow-500/15 text-yellow-300",
-  approved: "bg-green-500/15 text-green-300",
-  rejected: "bg-red-500/15 text-red-300",
-  edited: "bg-blue-500/15 text-blue-300",
-};
 
 interface Props {
   projectId: number;
@@ -28,7 +23,7 @@ export default function QuestionList({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<StatusFilter>("all");
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const loadQuestions = useCallback(
     async (status: StatusFilter) => {
@@ -67,14 +62,34 @@ export default function QuestionList({
     loadQuestions(filter);
   }, [loadQuestions, filter]);
 
-  const toggleExpand = (id: number) => {
-    setExpanded((prev) => {
+  const refresh = () => {
+    loadQuestions(filter);
+    loadSummary();
+  };
+
+  const handleBulkComplete = () => {
+    setSelectedIds(new Set());
+    refresh();
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
   };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === questions.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(questions.map((q) => q.id)));
+    }
+  };
+
+  const allSelected = questions.length > 0 && selectedIds.size === questions.length;
 
   return (
     <div className="space-y-4">
@@ -130,21 +145,40 @@ export default function QuestionList({
         </div>
       )}
 
-      {/* Status filter tabs */}
-      <div className="flex gap-1 rounded-lg border border-border bg-surface p-1">
-        {STATUS_FILTERS.map((f) => (
+      {/* Bulk actions bar */}
+      <BulkActions
+        projectId={projectId}
+        testSetId={testSet.id}
+        selectedIds={selectedIds}
+        pendingCount={summary?.pending ?? 0}
+        onBulkComplete={handleBulkComplete}
+      />
+
+      {/* Status filter tabs + Select all */}
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 gap-1 rounded-lg border border-border bg-surface p-1">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${
+                filter === f
+                  ? "bg-accent/15 text-accent"
+                  : "text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        {questions.length > 0 && (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${
-              filter === f
-                ? "bg-accent/15 text-accent"
-                : "text-text-muted hover:text-text-secondary"
-            }`}
+            onClick={toggleSelectAll}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted transition hover:border-accent hover:text-accent"
           >
-            {f}
+            {allSelected ? "Deselect All" : "Select All"}
           </button>
-        ))}
+        )}
       </div>
 
       {/* Error */}
@@ -174,65 +208,17 @@ export default function QuestionList({
 
       {!loading && questions.length > 0 && (
         <div className="space-y-2">
-          {questions.map((q) => {
-            const isExpanded = expanded.has(q.id);
-            const refAnswer = q.reference_answer || "";
-            const needsTruncate = refAnswer.length > 150;
-
-            return (
-              <div
-                key={q.id}
-                className="rounded-xl border border-border bg-card px-4 py-3"
-              >
-                {/* Question text */}
-                <p className="text-sm font-medium text-text-primary">
-                  {q.question}
-                </p>
-
-                {/* Reference answer */}
-                <div className="mt-2">
-                  <p className="text-xs text-text-muted">Reference answer:</p>
-                  <p className="mt-0.5 text-sm text-text-secondary">
-                    {isExpanded || !needsTruncate
-                      ? refAnswer
-                      : refAnswer.slice(0, 150) + "…"}
-                  </p>
-                  {needsTruncate && (
-                    <button
-                      onClick={() => toggleExpand(q.id)}
-                      className="mt-1 text-xs text-accent hover:underline"
-                    >
-                      {isExpanded ? "Show less" : "Show more"}
-                    </button>
-                  )}
-                </div>
-
-                {/* Badges */}
-                <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-                  {/* Status badge */}
-                  <span
-                    className={`rounded-full px-2 py-0.5 font-medium ${STATUS_COLORS[q.status] || "bg-gray-500/15 text-gray-300"}`}
-                  >
-                    {q.status}
-                  </span>
-
-                  {/* Question type badge */}
-                  {q.question_type && (
-                    <span className="rounded-full bg-surface px-2 py-0.5 text-text-muted">
-                      {q.question_type}
-                    </span>
-                  )}
-
-                  {/* Persona badge */}
-                  {q.persona && (
-                    <span className="text-text-muted italic">
-                      {q.persona}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {questions.map((q) => (
+            <QuestionCard
+              key={q.id}
+              question={q}
+              projectId={projectId}
+              testSetId={testSet.id}
+              selected={selectedIds.has(q.id)}
+              onToggleSelect={toggleSelect}
+              onAnnotated={refresh}
+            />
+          ))}
         </div>
       )}
     </div>
