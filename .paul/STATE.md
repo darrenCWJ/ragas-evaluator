@@ -5,25 +5,26 @@
 See: .paul/PROJECT.md (updated 2026-04-02)
 
 **Core value:** AI engineers can systematically build, test, compare, and improve RAG pipelines against multiple LLM providers in one integrated platform.
-**Current focus:** Phase 12 — Experiments & Results
+**Current focus:** Phase 13 — Feedback Loop & Polish
 
 ## Current Position
 
 Milestone: v0.2 Frontend Rewrite (v0.2.0)
-Phase: 12 of 13 (Experiments & Results) — Not started
+Phase: 13 of 13 (Feedback Loop & Polish) — Not started
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-04-02 — Phase 11 complete, transitioned to Phase 12
+Last activity: 2026-04-02 — Phase 12 complete, transitioned to Phase 13
 
 Progress:
-- Milestone: [██████░░░░] 60% (3/5 phases)
+- Milestone: [████████░░] 80% (4/5 phases)
+- Phase 13: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ○        ○        ○     [Phase 12 — ready for first PLAN]
+  ○        ○        ○     [Idle — ready for PLAN]
 ```
 
 ## Accumulated Context
@@ -37,8 +38,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Backend API unchanged | v0.2 init | Frontend-only rewrite, all FastAPI endpoints stay |
 | Refresh callbacks for mutation-driven list updates | Phase 10 | Reusable pattern for future config panels |
 | Dynamic form fields based on config type | Phase 10 | Pattern for conditional form sections |
-| 2026-04-02: Enterprise audit on 11-01-PLAN.md. Applied 2 must-have, 3 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | Phase 11 | Plan strengthened for enterprise standards |
-| 2026-04-02: Enterprise audit on 11-02-PLAN.md. Applied 2 must-have, 2 strongly-recommended upgrades. Deferred 3. Verdict: conditionally acceptable | Phase 11 | Plan strengthened for enterprise standards |
+| fetch ReadableStream for SSE over POST | Phase 12 | EventSource is GET-only; established SSE-over-POST pattern |
+| Score bar pattern with humanizeMetric | Phase 12 | Reusable across results, comparison, history |
+| Lazy-load history on expand | Phase 12 | Prevents unnecessary API calls |
 
 ### Deferred Issues
 
@@ -49,9 +51,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: 39b8e53
-Branch: feature/10-document-rag-pipeline
-Feature branches merged: pending
+Last commit: a89a392
+Branch: feature/11-test-generation-annotation
+Feature branches merged: pending (feature/11 ready to merge to main)
 
 ### Blockers/Concerns
 
@@ -60,12 +62,12 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-02
-Stopped at: Phase 11 complete, transitioned to Phase 12
-Next action: /paul:plan for Phase 12
+Stopped at: Phase 12 complete, ready to plan Phase 13
+Next action: /paul:plan for Phase 13
 Resume file: .paul/ROADMAP.md
 Resume context:
-- Phase 11 complete (2 plans shipped: test gen/browse + annotation)
-- Phase 12 scope: experiment creation, SSE runner, results dashboard, comparison, history
+- Phase 12 complete: experiment creation, SSE runner, results dashboard, comparison, history timeline
+- Phase 13 scope: improvement suggestions, delta comparison, export, polish, remove old HTML pages
 
 ---
 *STATE.md -- Updated after every significant action*

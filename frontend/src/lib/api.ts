@@ -464,3 +464,278 @@ export async function bulkAnnotateQuestions(
     { method: "POST", body: JSON.stringify(bulk) },
   );
 }
+
+// --- Experiment Types ---
+
+export interface Experiment {
+  id: number;
+  project_id: number;
+  test_set_id: number;
+  name: string;
+  model: string;
+  model_params: Record<string, unknown> | null;
+  retrieval_config: Record<string, unknown> | null;
+  chunk_config_id: number;
+  embedding_config_id: number;
+  rag_config_id: number;
+  baseline_experiment_id: number | null;
+  status: "pending" | "running" | "completed" | "failed";
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  // Optional aggregate fields (present on GET single / list)
+  test_set_name?: string;
+  rag_config_name?: string;
+  approved_question_count?: number;
+  result_count?: number;
+  aggregate_metrics?: Record<string, number | null> | null;
+}
+
+export interface ExperimentCreate {
+  test_set_id: number;
+  rag_config_id: number;
+  name: string;
+}
+
+export interface ExperimentResult {
+  id: number;
+  test_question_id: number;
+  question: string;
+  reference_answer: string;
+  question_type: string;
+  persona: string | null;
+  response: string | null;
+  retrieved_contexts: { content: string; chunk_id?: number }[];
+  metrics: Record<string, number>;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// --- Experiment API ---
+
+export async function fetchExperiments(
+  projectId: number,
+): Promise<Experiment[]> {
+  return request<Experiment[]>(`/api/projects/${projectId}/experiments`);
+}
+
+export async function createExperiment(
+  projectId: number,
+  data: ExperimentCreate,
+): Promise<Experiment> {
+  return request<Experiment>(`/api/projects/${projectId}/experiments`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function fetchExperiment(
+  projectId: number,
+  experimentId: number,
+): Promise<Experiment> {
+  return request<Experiment>(
+    `/api/projects/${projectId}/experiments/${experimentId}`,
+  );
+}
+
+export async function deleteExperiment(
+  projectId: number,
+  experimentId: number,
+): Promise<void> {
+  await request<void>(
+    `/api/projects/${projectId}/experiments/${experimentId}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchExperimentResults(
+  projectId: number,
+  experimentId: number,
+): Promise<ExperimentResult[]> {
+  return request<ExperimentResult[]>(
+    `/api/projects/${projectId}/experiments/${experimentId}/results`,
+  );
+}
+
+// --- SSE Experiment Runner ---
+
+export interface SSEStartedEvent {
+  experiment_id: number;
+  total_questions: number;
+  metrics: string[];
+}
+
+export interface SSEProgressEvent {
+  current: number;
+  total: number;
+  question_id: number;
+  question: string;
+}
+
+export interface SSECompletedEvent {
+  experiment_id: number;
+  result_count: number;
+}
+
+export interface SSEErrorEvent {
+  message: string;
+}
+
+export interface ExperimentSSECallbacks {
+  onStarted?: (data: SSEStartedEvent) => void;
+  onProgress?: (data: SSEProgressEvent) => void;
+  onCompleted?: (data: SSECompletedEvent) => void;
+  onError?: (data: SSEErrorEvent) => void;
+  onConnectionError?: (error: Error, lastProgress: SSEProgressEvent | null) => void;
+}
+
+export interface ExperimentSSEHandle {
+  abort: () => void;
+}
+
+export function runExperimentSSE(
+  projectId: number,
+  experimentId: number,
+  metrics: string[] | null,
+  callbacks: ExperimentSSECallbacks,
+): ExperimentSSEHandle {
+  const controller = new AbortController();
+  let lastProgress: SSEProgressEvent | null = null;
+
+  (async () => {
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/experiments/${experimentId}/run`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ metrics }),
+          signal: controller.signal,
+        },
+      );
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "Unknown error");
+        callbacks.onError?.({ message: `${res.status}: ${body}` });
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        callbacks.onError?.({ message: "No response stream" });
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split on double newline (SSE event boundary)
+        const parts = buffer.split("\n\n");
+        // Keep the last part (may be incomplete)
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+
+          let eventType = "message";
+          let dataStr = "";
+
+          for (const line of part.split("\n")) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataStr = line.slice(5).trim();
+            }
+          }
+
+          if (!dataStr) continue;
+
+          try {
+            const data = JSON.parse(dataStr);
+
+            switch (eventType) {
+              case "started":
+                callbacks.onStarted?.(data as SSEStartedEvent);
+                break;
+              case "progress":
+                lastProgress = data as SSEProgressEvent;
+                callbacks.onProgress?.(lastProgress);
+                break;
+              case "completed":
+                callbacks.onCompleted?.(data as SSECompletedEvent);
+                break;
+              case "error":
+                callbacks.onError?.(data as SSEErrorEvent);
+                break;
+            }
+          } catch {
+            // Skip malformed JSON chunks
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as DOMException).name === "AbortError") return;
+      callbacks.onConnectionError?.(err as Error, lastProgress);
+    }
+  })();
+
+  return { abort: () => controller.abort() };
+}
+
+// --- Comparison Types ---
+
+export interface CompareQuestionExperimentData {
+  response: string | null;
+  metrics: Record<string, number>;
+  retrieved_contexts: { content: string; chunk_id?: number }[];
+  metadata: Record<string, unknown> | null;
+}
+
+export interface CompareQuestionData {
+  test_question_id: number;
+  question: string;
+  reference_answer: string;
+  question_type: string;
+  persona: string | null;
+  experiments: Record<number, CompareQuestionExperimentData>;
+}
+
+export interface CompareResult {
+  experiments: Experiment[];
+  questions: CompareQuestionData[];
+}
+
+// --- History Types ---
+
+export interface HistoryExperiment extends Experiment {
+  overall_score: number | null;
+}
+
+// --- Comparison API ---
+
+export async function compareExperiments(
+  projectId: number,
+  experimentIds: number[],
+): Promise<CompareResult> {
+  const ids = experimentIds.join(",");
+  return request<CompareResult>(
+    `/api/projects/${projectId}/experiments/compare?ids=${ids}`,
+  );
+}
+
+// --- History API ---
+
+export async function fetchExperimentHistory(
+  projectId: number,
+): Promise<HistoryExperiment[]> {
+  const data = await request<{ experiments: HistoryExperiment[] }>(
+    `/api/projects/${projectId}/experiments/history`,
+  );
+  return data.experiments;
+}
