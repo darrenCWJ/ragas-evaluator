@@ -47,6 +47,7 @@ AI engineers can systematically build, test, compare, and improve RAG pipelines 
 - [ ] Frontend rewrite: React+Vite+Tailwind SPA with guided stepper workflow (v0.2.0)
 - [x] Build stage UI: document upload, chunking, embedding, RAG config, test query, pipeline status — v0.2.0-dev (Phase 10)
 - [x] Test stage UI: test set generation, question browsing, inline annotation (approve/reject/edit), bulk actions — v0.2.0-dev (Phase 11)
+- [x] Experiment stage UI: creation, SSE runner, results dashboard, comparison, history timeline — v0.2.0-dev (Phase 12)
 
 ### Validated (Shipped)
 
@@ -147,4 +148,4 @@ Quick Reference:
 
 ---
 *PROJECT.md -- Updated when requirements or context change*
-*Last updated: 2026-04-02 after Phase 11 — Test Generation & Annotation complete*
+*Last updated: 2026-04-02 after Phase 12 — Experiments & Results complete*
