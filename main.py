@@ -3277,11 +3277,19 @@ async def apply_suggestion(project_id: int, suggestion_id: int, req: ApplySugges
         conn.rollback()
         raise
 
+    # Re-read suggestion (now marked implemented) and new experiment for response
+    updated_suggestion = conn.execute(
+        "SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)
+    ).fetchone()
+    new_experiment_row = conn.execute(
+        "SELECT * FROM experiments WHERE id = ?", (new_experiment_id,)
+    ).fetchone()
+
     return {
-        "experiment_id": new_experiment_id,
-        "rag_config_id": new_config_id,
-        "experiment_name": new_experiment_name,
-        "config_changes": changes,
+        "suggestion": dict(updated_suggestion),
+        "new_experiment": _parse_experiment_row(new_experiment_row),
+        "new_rag_config": {"id": new_config_id, "name": new_config_name},
+        "changes": changes,
     }
 
 
