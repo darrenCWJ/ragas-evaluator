@@ -422,3 +422,45 @@ export async function fetchTestSetSummary(
     `/api/projects/${projectId}/test-sets/${testSetId}/summary`,
   );
 }
+
+// --- Annotation Types ---
+
+export interface QuestionAnnotation {
+  status: "approved" | "rejected" | "edited";
+  user_edited_answer?: string;
+  user_notes?: string;
+}
+
+export interface BulkAnnotation {
+  action: "approve" | "reject" | "approve_all" | "reject_all";
+  question_ids?: number[];
+}
+
+export interface BulkAnnotationResult {
+  updated_count: number;
+}
+
+// --- Annotation API ---
+
+export async function annotateQuestion(
+  projectId: number,
+  testSetId: number,
+  questionId: number,
+  annotation: QuestionAnnotation,
+): Promise<TestQuestion> {
+  return request<TestQuestion>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/questions/${questionId}`,
+    { method: "PATCH", body: JSON.stringify(annotation) },
+  );
+}
+
+export async function bulkAnnotateQuestions(
+  projectId: number,
+  testSetId: number,
+  bulk: BulkAnnotation,
+): Promise<BulkAnnotationResult> {
+  return request<BulkAnnotationResult>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/questions/bulk`,
+    { method: "POST", body: JSON.stringify(bulk) },
+  );
+}

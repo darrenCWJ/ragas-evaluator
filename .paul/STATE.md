@@ -5,25 +5,25 @@
 See: .paul/PROJECT.md (updated 2026-04-02)
 
 **Core value:** AI engineers can systematically build, test, compare, and improve RAG pipelines against multiple LLM providers in one integrated platform.
-**Current focus:** Phase 11 — Test Generation & Annotation
+**Current focus:** Phase 12 — Experiments & Results
 
 ## Current Position
 
 Milestone: v0.2 Frontend Rewrite (v0.2.0)
-Phase: 11 of 13 (Test Generation & Annotation) — Planning
-Plan: 11-02 created + audited, awaiting approval
-Status: PLAN created, ready for APPLY
-Last activity: 2026-04-02 — Created 11-02-PLAN.md (Annotation Workflow)
+Phase: 12 of 13 (Experiments & Results) — Not started
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-02 — Phase 11 complete, transitioned to Phase 12
 
 Progress:
-- Milestone: [████░░░░░░] 40% (2/5 phases)
+- Milestone: [██████░░░░] 60% (3/5 phases)
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ○        ○     [Plan created, awaiting approval]
+  ○        ○        ○     [Phase 12 — ready for first PLAN]
 ```
 
 ## Accumulated Context
@@ -60,13 +60,12 @@ None.
 ## Session Continuity
 
 Last session: 2026-04-02
-Stopped at: Plan 11-02 created + audited, awaiting APPLY
-Next action: /paul:apply .paul/phases/11-test-generation-annotation/11-02-PLAN.md
-Resume file: .paul/HANDOFF-2026-04-02.md
+Stopped at: Phase 11 complete, transitioned to Phase 12
+Next action: /paul:plan for Phase 12
+Resume file: .paul/ROADMAP.md
 Resume context:
-- Plan 11-02 audited (2 must-have + 2 strongly-recommended applied)
-- Load /frontend-design skill before APPLY
-- Task 1: annotation API + QuestionCard, Task 2: BulkActions + QuestionList, Task 3: checkpoint
+- Phase 11 complete (2 plans shipped: test gen/browse + annotation)
+- Phase 12 scope: experiment creation, SSE runner, results dashboard, comparison, history
 
 ---
 *STATE.md -- Updated after every significant action*

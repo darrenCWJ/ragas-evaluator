@@ -27,7 +27,7 @@ Completed: 2026-04-02
 
 **v0.2 Frontend Rewrite** (v0.2.0)
 Status: In Progress
-Phases: 2 of 5 complete
+Phases: 3 of 5 complete
 
 ## Phases
 
@@ -35,7 +35,7 @@ Phases: 2 of 5 complete
 |-------|------|-------|--------|-----------|
 | 9 | Foundation & Design System | 1 | Complete | 2026-04-02 |
 | 10 | Document & RAG Pipeline | 2 | Complete | 2026-04-02 |
-| 11 | Test Generation & Annotation | TBD | In progress | - |
+| 11 | Test Generation & Annotation | 2 | Complete | 2026-04-02 |
 | 12 | Experiments & Results | TBD | Not started | - |
 | 13 | Feedback Loop & Polish | TBD | Not started | - |
 
