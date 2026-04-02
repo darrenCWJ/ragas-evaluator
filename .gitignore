@@ -1,5 +1,10 @@
 # Environment
 .env
+.claude
+.paul
+
+# Data
+data/
 
 # Input/Output data
 input/
@@ -8,6 +13,10 @@ output/
 # Python
 __pycache__/
 *.pyc
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
 
 # macOS
 .DS_Store

@@ -1,0 +1,25 @@
+{
+  "name": "ragas-platform",
+  "version": "0.2.0",
+  "milestone": {
+    "name": "v0.2 Frontend Rewrite",
+    "version": "0.2.0",
+    "status": "complete"
+  },
+  "phase": {
+    "number": 13,
+    "name": "Feedback Loop & Polish",
+    "status": "complete"
+  },
+  "loop": {
+    "plan": null,
+    "position": "IDLE"
+  },
+  "timestamps": {
+    "created_at": "2026-03-31T00:00:00Z",
+    "updated_at": "2026-04-02T22:30:00Z"
+  },
+  "satellite": {
+    "groom": true
+  }
+}

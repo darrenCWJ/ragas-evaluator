@@ -5,15 +5,16 @@ import io
 import json
 import logging
 import sqlite3
+import statistics
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, field_validator
@@ -22,6 +23,7 @@ from ragas.embeddings.base import embedding_factory
 
 from chunking import chunk_text_pipeline
 from db.init import get_db as get_db_conn
+from rag.query import single_shot_query, multi_step_query
 from embedding.engine import embed_texts_dispatch, embed_query_dispatch
 from embedding.vectorstore import (
     delete_collection as delete_vector_collection,
@@ -293,6 +295,62 @@ class PersonaGenRequest(BaseModel):
     custom_personas: list[dict] | None = None
 
 
+VALID_QUESTION_STATUSES = {"pending", "approved", "rejected", "edited"}
+VALID_ANNOTATION_STATUSES = {"approved", "rejected", "edited"}
+VALID_BULK_ACTIONS = {"approve", "reject", "approve_all", "reject_all"}
+BULK_ACTION_TO_STATUS = {"approve": "approved", "reject": "rejected", "approve_all": "approved", "reject_all": "rejected"}
+
+MAX_CHUNKS_FOR_GENERATION = 500
+
+
+class TestSetCreate(BaseModel):
+    chunk_config_id: int
+    name: str | None = None
+    testset_size: int = 10
+    num_personas: int = 3
+    custom_personas: list[dict] | None = None
+    use_personas: bool = True
+
+    @field_validator("testset_size")
+    @classmethod
+    def validate_testset_size(cls, v: int) -> int:
+        if v < 1 or v > 100:
+            raise ValueError("testset_size must be between 1 and 100")
+        return v
+
+    @field_validator("num_personas")
+    @classmethod
+    def validate_num_personas(cls, v: int) -> int:
+        if v < 1 or v > 10:
+            raise ValueError("num_personas must be between 1 and 10")
+        return v
+
+
+class QuestionAnnotation(BaseModel):
+    status: str
+    user_edited_answer: str | None = None
+    user_notes: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in VALID_ANNOTATION_STATUSES:
+            raise ValueError(f"Invalid status '{v}'. Must be one of: {', '.join(sorted(VALID_ANNOTATION_STATUSES))}")
+        return v
+
+
+class BulkAnnotation(BaseModel):
+    action: str
+    question_ids: list[int] | None = None
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        if v not in VALID_BULK_ACTIONS:
+            raise ValueError(f"Invalid action '{v}'. Must be one of: {', '.join(sorted(VALID_BULK_ACTIONS))}")
+        return v
+
+
 class ProjectCreate(BaseModel):
     name: str
     description: str | None = None
@@ -506,6 +564,136 @@ class RagQueryRequest(BaseModel):
         if len(v) > 10000:
             raise ValueError("query must not exceed 10000 characters")
         return v
+
+
+VALID_EXPERIMENT_STATUSES = {"pending", "running", "completed", "failed"}
+
+DEFAULT_EXPERIMENT_METRICS = [
+    "faithfulness", "answer_relevancy", "context_precision",
+    "context_recall", "factual_correctness", "semantic_similarity",
+]
+
+
+class ExperimentCreate(BaseModel):
+    test_set_id: int
+    rag_config_id: int
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+
+class ExperimentRunRequest(BaseModel):
+    metrics: list[str] | None = None
+
+
+class SuggestionUpdate(BaseModel):
+    implemented: bool
+
+
+class ApplySuggestionRequest(BaseModel):
+    override_value: str | None = None
+    experiment_name: str | None = None
+
+    @field_validator("experiment_name")
+    @classmethod
+    def validate_experiment_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("experiment_name must not be empty")
+            if len(v) > 200:
+                raise ValueError("experiment_name must not exceed 200 characters")
+        return v
+
+
+def _build_virtual_rag_config_row(experiment_row, rag_config_row) -> dict:
+    """Build a dict satisfying the rag_config_row interface for RAG query functions."""
+    retrieval_config = json.loads(experiment_row["retrieval_config_json"]) if experiment_row["retrieval_config_json"] else {}
+    return {
+        "project_id": rag_config_row["project_id"],
+        "llm_model": experiment_row["model"],
+        "llm_params_json": experiment_row["model_params_json"],
+        "chunk_config_id": experiment_row["chunk_config_id"],
+        "embedding_config_id": experiment_row["embedding_config_id"],
+        "search_type": retrieval_config.get("search_type", "dense"),
+        "sparse_config_id": retrieval_config.get("sparse_config_id"),
+        "alpha": retrieval_config.get("alpha"),
+        "top_k": retrieval_config.get("top_k", 5),
+        "system_prompt": retrieval_config.get("system_prompt"),
+        "response_mode": retrieval_config.get("response_mode", "single_shot"),
+        "max_steps": retrieval_config.get("max_steps", 3),
+    }
+
+
+async def _evaluate_experiment_row(
+    scorers: dict,
+    question: str,
+    generated_answer: str,
+    reference_answer: str,
+    contexts: list[str],
+) -> dict:
+    """Evaluate a generated answer against reference using selected metrics.
+
+    Unlike evaluate_row, this properly separates generated_answer from reference_answer
+    for metrics that compare the two.
+    """
+    results = {}
+
+    for name, scorer in scorers.items():
+        try:
+            if name == "faithfulness":
+                results[name] = await faithfulness.score(scorer, question, generated_answer, contexts)
+            elif name == "answer_relevancy":
+                results[name] = await answer_relevancy.score(scorer, question, generated_answer)
+            elif name == "context_precision":
+                results[name] = await context_precision.score(scorer, question, generated_answer, contexts)
+            elif name == "context_recall":
+                results[name] = await context_recall.score(scorer, question, generated_answer, contexts)
+            elif name == "context_entities_recall":
+                results[name] = await context_entities_recall.score(scorer, generated_answer, contexts)
+            elif name == "noise_sensitivity":
+                results[name] = await noise_sensitivity.score(scorer, question, generated_answer, reference_answer, contexts)
+            elif name == "factual_correctness":
+                results[name] = await factual_correctness.score(scorer, generated_answer, reference_answer)
+            elif name == "semantic_similarity":
+                results[name] = await semantic_similarity.score(scorer, generated_answer, reference_answer)
+            elif name == "non_llm_string_similarity":
+                results[name] = await non_llm_string_similarity.score(scorer, generated_answer, reference_answer)
+            elif name == "bleu_score":
+                results[name] = await bleu_score.score(scorer, generated_answer, reference_answer)
+            elif name == "rouge_score":
+                results[name] = await rouge_score.score(scorer, generated_answer, reference_answer)
+            elif name == "chrf_score":
+                results[name] = await chrf_score.score(scorer, generated_answer, reference_answer)
+            elif name == "exact_match":
+                results[name] = await exact_match.score(scorer, generated_answer, reference_answer)
+            elif name == "string_presence":
+                results[name] = await string_presence.score(scorer, generated_answer, reference_answer)
+            elif name == "summarization_score":
+                results[name] = await summarization_score.score(scorer, generated_answer, contexts)
+            elif name == "aspect_critic":
+                results[name] = await aspect_critic.score(scorer, question, generated_answer, contexts)
+            elif name == "rubrics_score":
+                results[name] = await rubrics_score.score(scorer, question, generated_answer, contexts)
+            elif name == "answer_accuracy":
+                results[name] = await answer_accuracy.score(scorer, question, generated_answer, reference_answer)
+            elif name == "context_relevance":
+                results[name] = await context_relevance.score(scorer, question, contexts)
+            elif name == "response_groundedness":
+                results[name] = await response_groundedness.score(scorer, generated_answer, contexts)
+        except Exception as e:
+            logger.warning("Metric %s failed: %s", name, e)
+            results[name] = None
+
+    return results
 
 
 # --- API Routes ---
@@ -1430,8 +1618,1817 @@ async def hybrid_search(project_id: int, req: HybridSearchRequest):
     return {"results": merged, "query": req.query, "top_k": req.top_k, "alpha": req.alpha}
 
 
-# Mount static files AFTER API routes
-app.mount("/", StaticFiles(directory="public", html=True), name="static")
+# --- Test Set Routes ---
+
+
+def _parse_test_question_row(row) -> dict:
+    d = dict(row)
+    rc = d.get("reference_contexts")
+    d["reference_contexts"] = json.loads(rc) if rc else []
+    return d
+
+
+@app.post("/api/projects/{project_id}/test-sets", status_code=201)
+async def create_test_set(project_id: int, req: TestSetCreate):
+    from ragas_test.testgen import generate_project_testset
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate chunk_config_id belongs to project
+    cc = conn.execute(
+        "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+        (req.chunk_config_id, project_id),
+    ).fetchone()
+    if cc is None:
+        raise HTTPException(status_code=404, detail="Chunk config not found")
+
+    # Fetch chunks for this config
+    chunk_rows = conn.execute(
+        "SELECT content FROM chunks WHERE chunk_config_id = ?",
+        (req.chunk_config_id,),
+    ).fetchall()
+    if not chunk_rows:
+        raise HTTPException(
+            status_code=422,
+            detail="No chunks found for this config. Generate chunks first.",
+        )
+
+    # Guard: chunk count limit
+    if len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many chunks ({len(chunk_rows)}). Maximum {MAX_CHUNKS_FOR_GENERATION} supported for test generation.",
+        )
+
+    chunks = [r["content"] for r in chunk_rows]
+
+    # Auto-generate name if not provided
+    name = req.name or f"Test Set ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
+
+    # Insert test_set row
+    generation_config = {
+        "chunk_config_id": req.chunk_config_id,
+        "testset_size": req.testset_size,
+        "num_personas": req.num_personas,
+        "custom_personas": req.custom_personas,
+        "use_personas": req.use_personas,
+    }
+    cursor = conn.execute(
+        "INSERT INTO test_sets (project_id, name, generation_config_json) VALUES (?, ?, ?)",
+        (project_id, name, json.dumps(generation_config)),
+    )
+    conn.commit()
+    test_set_id = cursor.lastrowid
+
+    # Generate questions — rollback test_set on failure
+    try:
+        result = await generate_project_testset(
+            chunks=chunks,
+            testset_size=req.testset_size,
+            use_personas=req.use_personas,
+            num_personas=req.num_personas,
+            custom_personas=req.custom_personas,
+        )
+    except Exception as e:
+        # Rollback: remove the test_set row so no orphan persists
+        conn.execute("DELETE FROM test_sets WHERE id = ?", (test_set_id,))
+        conn.commit()
+        err_msg = str(e).lower()
+        if "rate limit" in err_msg or "rate_limit" in err_msg:
+            raise HTTPException(status_code=429, detail="LLM rate limit exceeded during test generation")
+        logger.exception("Test set generation failed for test_set_id=%d", test_set_id)
+        raise HTTPException(status_code=502, detail=f"Test generation failed: {e}")
+
+    # Insert questions
+    questions = result.get("questions", [])
+    personas = result.get("personas", [])
+    persona_map = {p["name"]: p for p in personas} if personas else {}
+
+    inserted_questions = []
+    for q in questions:
+        persona_name = q.get("persona") or (q.get("synthesizer_name") if not persona_map else None)
+        conn.execute(
+            """INSERT INTO test_questions
+               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+            (
+                test_set_id,
+                q.get("user_input", ""),
+                q.get("reference", ""),
+                json.dumps(q.get("reference_contexts", [])),
+                q.get("synthesizer_name", ""),
+                persona_name,
+            ),
+        )
+        inserted_questions.append({
+            "question": q.get("user_input", ""),
+            "reference_answer": q.get("reference", ""),
+            "reference_contexts": q.get("reference_contexts", []),
+            "question_type": q.get("synthesizer_name", ""),
+            "persona": persona_name,
+            "status": "pending",
+        })
+    conn.commit()
+
+    return {
+        "id": test_set_id,
+        "name": name,
+        "project_id": project_id,
+        "question_count": len(inserted_questions),
+        "personas": personas,
+        "questions": inserted_questions,
+    }
+
+
+@app.get("/api/projects/{project_id}/test-sets")
+async def list_test_sets(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = conn.execute(
+        """SELECT ts.id, ts.name, ts.generation_config_json, ts.created_at,
+                  COUNT(tq.id) AS total_questions,
+                  SUM(CASE WHEN tq.status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                  SUM(CASE WHEN tq.status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
+                  SUM(CASE WHEN tq.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count
+           FROM test_sets ts
+           LEFT JOIN test_questions tq ON tq.test_set_id = ts.id
+           WHERE ts.project_id = ?
+           GROUP BY ts.id
+           ORDER BY ts.created_at DESC""",
+        (project_id,),
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        d = dict(row)
+        gcj = d.pop("generation_config_json", None)
+        d["generation_config"] = json.loads(gcj) if gcj else None
+        result.append(d)
+
+    return {"test_sets": result}
+
+
+@app.get("/api/projects/{project_id}/test-sets/{test_set_id}/questions")
+async def list_test_questions(project_id: int, test_set_id: int, status: str | None = None):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate status param
+    if status is not None and status not in VALID_QUESTION_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status '{status}'. Must be one of: {', '.join(sorted(VALID_QUESTION_STATUSES))}",
+        )
+
+    # Validate test set belongs to project
+    ts = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if ts is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    query = "SELECT * FROM test_questions WHERE test_set_id = ?"
+    params: list = [test_set_id]
+    if status is not None:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY id"
+
+    rows = conn.execute(query, params).fetchall()
+    return {"questions": [_parse_test_question_row(r) for r in rows]}
+
+
+@app.delete("/api/projects/{project_id}/test-sets/{test_set_id}", status_code=204)
+async def delete_test_set(project_id: int, test_set_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate test set belongs to project
+    ts = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if ts is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    # Check referential integrity — cannot delete if experiments reference this test set
+    exp = conn.execute(
+        "SELECT id FROM experiments WHERE test_set_id = ?",
+        (test_set_id,),
+    ).fetchone()
+    if exp is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete test set referenced by experiments",
+        )
+
+    conn.execute("DELETE FROM test_sets WHERE id = ?", (test_set_id,))
+    conn.commit()
+    return None
+
+
+# --- Annotation Routes ---
+
+
+@app.patch("/api/projects/{project_id}/test-sets/{test_set_id}/questions/{question_id}")
+async def annotate_question(project_id: int, test_set_id: int, question_id: int, req: QuestionAnnotation):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate test set belongs to project
+    ts = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if ts is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    # Validate question belongs to test set
+    question = conn.execute(
+        "SELECT id FROM test_questions WHERE id = ? AND test_set_id = ?",
+        (question_id, test_set_id),
+    ).fetchone()
+    if question is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # If status='edited', user_edited_answer is required
+    if req.status == "edited" and not req.user_edited_answer:
+        raise HTTPException(
+            status_code=422,
+            detail="user_edited_answer required when status is 'edited'",
+        )
+
+    # Update question
+    conn.execute(
+        """UPDATE test_questions
+           SET status = ?, user_edited_answer = ?, user_notes = ?, reviewed_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (req.status, req.user_edited_answer, req.user_notes, question_id),
+    )
+    conn.commit()
+
+    # Re-read from DB to return truth
+    updated = conn.execute("SELECT * FROM test_questions WHERE id = ?", (question_id,)).fetchone()
+    return _parse_test_question_row(updated)
+
+
+@app.post("/api/projects/{project_id}/test-sets/{test_set_id}/questions/bulk")
+async def bulk_annotate_questions(project_id: int, test_set_id: int, req: BulkAnnotation):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate test set belongs to project
+    ts = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if ts is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    target_status = BULK_ACTION_TO_STATUS[req.action]
+
+    if req.action in ("approve", "reject"):
+        # Require non-empty question_ids
+        if not req.question_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="question_ids must not be empty for approve/reject actions",
+            )
+
+        # Validate all question_ids belong to this test set (parameterized query)
+        placeholders = ",".join("?" * len(req.question_ids))
+        valid_rows = conn.execute(
+            f"SELECT id FROM test_questions WHERE id IN ({placeholders}) AND test_set_id = ?",
+            (*req.question_ids, test_set_id),
+        ).fetchall()
+        valid_ids = {r["id"] for r in valid_rows}
+        invalid_ids = [qid for qid in req.question_ids if qid not in valid_ids]
+        if invalid_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Question IDs not found in this test set: {invalid_ids}",
+            )
+
+        # Update specified questions
+        cursor = conn.execute(
+            f"UPDATE test_questions SET status = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders}) AND test_set_id = ?",
+            (target_status, *req.question_ids, test_set_id),
+        )
+        conn.commit()
+        updated_count = cursor.rowcount
+
+    elif req.action in ("approve_all", "reject_all"):
+        # question_ids must be absent or empty
+        if req.question_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"question_ids must not be provided for {req.action} action",
+            )
+
+        # Update all pending questions in this test set
+        cursor = conn.execute(
+            "UPDATE test_questions SET status = ?, reviewed_at = CURRENT_TIMESTAMP WHERE test_set_id = ? AND status = 'pending'",
+            (target_status, test_set_id),
+        )
+        conn.commit()
+        updated_count = cursor.rowcount
+
+    return {"updated_count": updated_count}
+
+
+@app.get("/api/projects/{project_id}/test-sets/{test_set_id}/summary")
+async def test_set_summary(project_id: int, test_set_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate test set belongs to project
+    ts = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if ts is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    # Aggregate counts by status
+    rows = conn.execute(
+        "SELECT status, COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? GROUP BY status",
+        (test_set_id,),
+    ).fetchall()
+
+    counts = {"pending": 0, "approved": 0, "rejected": 0, "edited": 0}
+    for row in rows:
+        s = row["status"]
+        if s in counts:
+            counts[s] = row["cnt"]
+
+    total = sum(counts.values())
+    completion_pct = round(((counts["approved"] + counts["edited"]) / total) * 100, 1) if total > 0 else 0.0
+
+    return {
+        "test_set_id": test_set_id,
+        "total": total,
+        **counts,
+        "completion_pct": completion_pct,
+    }
+
+
+# --- Experiment Routes ---
+
+
+def _parse_experiment_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "test_set_id": row["test_set_id"],
+        "name": row["name"],
+        "model": row["model"],
+        "model_params": json.loads(row["model_params_json"]) if row["model_params_json"] else None,
+        "retrieval_config": json.loads(row["retrieval_config_json"]) if row["retrieval_config_json"] else None,
+        "chunk_config_id": row["chunk_config_id"],
+        "embedding_config_id": row["embedding_config_id"],
+        "rag_config_id": row["rag_config_id"],
+        "baseline_experiment_id": row["baseline_experiment_id"],
+        "status": row["status"],
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.post("/api/projects/{project_id}/experiments", status_code=201)
+async def create_experiment(project_id: int, req: ExperimentCreate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate project exists
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate rag_config belongs to project
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (req.rag_config_id, project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(
+            status_code=422,
+            detail="RAG config not found in this project",
+        )
+
+    # Validate test_set belongs to project
+    test_set = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (req.test_set_id, project_id),
+    ).fetchone()
+    if test_set is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Test set not found in this project",
+        )
+
+    # Check that test set has approved/edited questions
+    approved_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
+        (req.test_set_id,),
+    ).fetchone()["cnt"]
+    if approved_count == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Test set has no approved questions",
+        )
+
+    # Snapshot config from rag_config for reproducibility
+    retrieval_config = json.dumps({
+        "search_type": rag_config["search_type"],
+        "sparse_config_id": rag_config["sparse_config_id"],
+        "alpha": rag_config["alpha"],
+        "top_k": rag_config["top_k"],
+        "system_prompt": rag_config["system_prompt"],
+        "response_mode": rag_config["response_mode"],
+        "max_steps": rag_config["max_steps"],
+    })
+
+    cursor = conn.execute(
+        """INSERT INTO experiments
+           (project_id, test_set_id, name, model, model_params_json, retrieval_config_json,
+            chunk_config_id, embedding_config_id, rag_config_id, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+        (
+            project_id,
+            req.test_set_id,
+            req.name,
+            rag_config["llm_model"],
+            rag_config["llm_params_json"],
+            retrieval_config,
+            rag_config["chunk_config_id"],
+            rag_config["embedding_config_id"],
+            req.rag_config_id,
+        ),
+    )
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _parse_experiment_row(row)
+
+
+@app.get("/api/projects/{project_id}/experiments")
+async def list_experiments(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = conn.execute(
+        "SELECT * FROM experiments WHERE project_id = ? ORDER BY created_at DESC",
+        (project_id,),
+    ).fetchall()
+
+    experiments = []
+    for row in rows:
+        exp = _parse_experiment_row(row)
+        # Include approved question count from the referenced test set
+        q_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
+            (row["test_set_id"],),
+        ).fetchone()["cnt"]
+        exp["approved_question_count"] = q_count
+        experiments.append(exp)
+
+    return experiments
+
+
+# --- Experiment Comparison Route (must precede /{experiment_id} routes) ---
+
+
+@app.get("/api/projects/{project_id}/experiments/compare")
+async def compare_experiments(project_id: int, ids: str = Query(..., description="Comma-separated experiment IDs (2-5)")):
+    # Parse and validate IDs
+    raw_parts = ids.split(",")
+    try:
+        experiment_ids = [int(p.strip()) for p in raw_parts if p.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="All experiment IDs must be numeric")
+
+    if len(experiment_ids) < 2 or len(experiment_ids) > 5:
+        raise HTTPException(status_code=400, detail="Provide between 2 and 5 experiment IDs")
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Fetch all experiments with parameterized IN clause
+    placeholders = ",".join("?" for _ in experiment_ids)
+    rows = conn.execute(
+        f"SELECT * FROM experiments WHERE id IN ({placeholders}) AND project_id = ?",
+        (*experiment_ids, project_id),
+    ).fetchall()
+
+    if len(rows) != len(experiment_ids):
+        found_ids = {r["id"] for r in rows}
+        missing = [eid for eid in experiment_ids if eid not in found_ids]
+        raise HTTPException(status_code=404, detail=f"Experiments not found in this project: {missing}")
+
+    # Validate all completed
+    non_completed = [r["id"] for r in rows if r["status"] != "completed"]
+    if non_completed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"All experiments must be completed. Not completed: {non_completed}",
+        )
+
+    # Validate same test set
+    test_set_ids = {r["test_set_id"] for r in rows}
+    if len(test_set_ids) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="All experiments must use the same test set for comparison",
+        )
+
+    # Build experiment metadata
+    experiments_meta = []
+    for row in rows:
+        exp = _parse_experiment_row(row)
+
+        ts = conn.execute("SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)).fetchone()
+        exp["test_set_name"] = ts["name"] if ts else None
+
+        if row["rag_config_id"]:
+            rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)).fetchone()
+            exp["rag_config_name"] = rc["name"] if rc else None
+        else:
+            exp["rag_config_name"] = None
+
+        # Compute aggregate metrics
+        result_rows = conn.execute(
+            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+            (row["id"],),
+        ).fetchall()
+        exp["result_count"] = len(result_rows)
+
+        if result_rows:
+            metric_totals = {}
+            metric_counts = {}
+            for rr in result_rows:
+                metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+                for metric_name, value in metrics.items():
+                    if value is not None:
+                        metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                        metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+                    else:
+                        if metric_name not in metric_totals:
+                            metric_totals[metric_name] = 0.0
+                        if metric_name not in metric_counts:
+                            metric_counts[metric_name] = 0
+            aggregate = {}
+            for mn in metric_totals:
+                cnt = metric_counts[mn]
+                aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
+            exp["aggregate_metrics"] = aggregate
+        else:
+            exp["aggregate_metrics"] = None
+
+        experiments_meta.append(exp)
+
+    # Fetch all results for all experiments with parameterized IN clause
+    all_results = conn.execute(
+        f"""SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer,
+                   tq.question_type, tq.persona
+            FROM experiment_results er
+            JOIN test_questions tq ON er.test_question_id = tq.id
+            WHERE er.experiment_id IN ({placeholders})
+            ORDER BY tq.id""",
+        tuple(experiment_ids),
+    ).fetchall()
+
+    # Guard: payload size limit
+    if len(all_results) > 2500:
+        raise HTTPException(
+            status_code=413,
+            detail="Too many results for comparison. Reduce experiment count or use experiments with smaller test sets.",
+        )
+
+    # Build per-question aligned data
+    questions_map = {}  # test_question_id -> { question info + per-experiment data }
+    for r in all_results:
+        qid = r["test_question_id"]
+        if qid not in questions_map:
+            ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
+            questions_map[qid] = {
+                "test_question_id": qid,
+                "question": r["question"],
+                "reference_answer": ref_answer,
+                "question_type": r["question_type"],
+                "persona": r["persona"],
+                "experiments": {},
+            }
+
+        questions_map[qid]["experiments"][r["experiment_id"]] = {
+            "response": r["response"],
+            "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else {},
+            "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
+            "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
+        }
+
+    # Convert to ordered list
+    questions_list = sorted(questions_map.values(), key=lambda q: q["test_question_id"])
+
+    return {"experiments": experiments_meta, "questions": questions_list}
+
+
+# --- Experiment History Route (must precede /{experiment_id} routes) ---
+
+
+@app.get("/api/projects/{project_id}/experiments/history")
+async def get_experiment_history(project_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = conn.execute(
+        "SELECT * FROM experiments WHERE project_id = ? AND status = 'completed' ORDER BY completed_at DESC",
+        (project_id,),
+    ).fetchall()
+
+    experiments = []
+    for row in rows:
+        exp = _parse_experiment_row(row)
+
+        # Fetch rag_config_name
+        if row["rag_config_id"]:
+            rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)).fetchone()
+            exp["rag_config_name"] = rc["name"] if rc else None
+        else:
+            exp["rag_config_name"] = None
+
+        # Compute aggregate metrics and overall score
+        result_rows = conn.execute(
+            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+            (row["id"],),
+        ).fetchall()
+        exp["result_count"] = len(result_rows)
+
+        if result_rows:
+            metric_totals = {}
+            metric_counts = {}
+            for rr in result_rows:
+                metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+                for metric_name, value in metrics.items():
+                    if value is not None:
+                        metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                        metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+
+            aggregate = {}
+            for mn in metric_totals:
+                cnt = metric_counts[mn]
+                aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
+
+            exp["aggregate_metrics"] = aggregate
+
+            # Overall score = average of all non-null metric averages
+            valid_scores = [v for v in aggregate.values() if v is not None]
+            exp["overall_score"] = round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
+        else:
+            exp["aggregate_metrics"] = None
+            exp["overall_score"] = None
+
+        experiments.append(exp)
+
+    return {"experiments": experiments}
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}")
+async def get_experiment(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    row = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    exp = _parse_experiment_row(row)
+
+    # Include test_set name and rag_config name for display
+    ts = conn.execute("SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)).fetchone()
+    exp["test_set_name"] = ts["name"] if ts else None
+
+    if row["rag_config_id"]:
+        rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)).fetchone()
+        exp["rag_config_name"] = rc["name"] if rc else None
+    else:
+        exp["rag_config_name"] = None
+
+    # Include approved question count
+    q_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
+        (row["test_set_id"],),
+    ).fetchone()["cnt"]
+    exp["approved_question_count"] = q_count
+
+    # Include result count and aggregate metrics
+    result_rows = conn.execute(
+        "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+
+    exp["result_count"] = len(result_rows)
+
+    if result_rows:
+        metric_totals = {}
+        metric_counts = {}
+        for rr in result_rows:
+            metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+            for metric_name, value in metrics.items():
+                if value is not None:
+                    metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                    metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+                else:
+                    # Ensure metric appears even if all null
+                    if metric_name not in metric_totals:
+                        metric_totals[metric_name] = 0.0
+                    if metric_name not in metric_counts:
+                        metric_counts[metric_name] = 0
+
+        aggregate = {}
+        for metric_name in metric_totals:
+            count = metric_counts[metric_name]
+            if count > 0:
+                aggregate[metric_name] = round(metric_totals[metric_name] / count, 4)
+            else:
+                aggregate[metric_name] = None
+        exp["aggregate_metrics"] = aggregate
+    else:
+        exp["aggregate_metrics"] = None
+
+    return exp
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}/results")
+async def get_experiment_results(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rows = conn.execute(
+        """SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer,
+                  tq.question_type, tq.persona
+           FROM experiment_results er
+           JOIN test_questions tq ON er.test_question_id = tq.id
+           WHERE er.experiment_id = ?
+           ORDER BY er.id""",
+        (experiment_id,),
+    ).fetchall()
+
+    results = []
+    for r in rows:
+        ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
+        results.append({
+            "id": r["id"],
+            "test_question_id": r["test_question_id"],
+            "question": r["question"],
+            "reference_answer": ref_answer,
+            "question_type": r["question_type"],
+            "persona": r["persona"],
+            "response": r["response"],
+            "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
+            "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else {},
+            "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
+            "created_at": r["created_at"],
+        })
+
+    return results
+
+
+@app.delete("/api/projects/{project_id}/experiments/{experiment_id}", status_code=204)
+async def delete_experiment(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    row = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if row["status"] != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete experiment with status '{row['status']}'. Only pending experiments can be deleted.",
+        )
+
+    conn.execute("DELETE FROM experiments WHERE id = ?", (experiment_id,))
+    conn.commit()
+    return None
+
+
+# --- Model Registry Route ---
+
+
+@app.get("/api/models")
+async def get_models():
+    from llm.connector import list_providers
+    return list_providers()
+
+
+# --- Experiment Runner Route ---
+
+
+@app.post("/api/projects/{project_id}/experiments/{experiment_id}/run")
+async def run_experiment(project_id: int, experiment_id: int, req: ExperimentRunRequest):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Pre-validation (non-authoritative — atomic guard is inside generator)
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["status"] != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Experiment already {experiment['status']}. Only pending experiments can be run.",
+        )
+
+    # Validate rag_config still exists (needed for project_id in collection naming)
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ?",
+        (experiment["rag_config_id"],),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(
+            status_code=422,
+            detail="RAG config has been deleted. Cannot run experiment without retrieval pipeline.",
+        )
+
+    # Silently filter metrics to valid ones
+    requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
+    selected_metrics = [m for m in requested_metrics if m in ALL_METRICS]
+    if not selected_metrics:
+        raise HTTPException(status_code=400, detail="No valid metrics selected")
+
+    async def _run_generator():
+        run_conn = get_db_conn()
+        run_conn.row_factory = sqlite3.Row
+        completed_count = 0
+
+        try:
+            # Atomic status claim — prevents concurrent run race condition
+            cursor = run_conn.execute(
+                "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending'",
+                (datetime.utcnow().isoformat(), experiment_id),
+            )
+            run_conn.commit()
+
+            if cursor.rowcount != 1:
+                yield f"event: error\ndata: {json.dumps({'message': 'Experiment already claimed by another request'})}\n\n"
+                return
+
+            # Fetch approved/edited test questions
+            questions = run_conn.execute(
+                "SELECT * FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited') ORDER BY id",
+                (experiment["test_set_id"],),
+            ).fetchall()
+
+            total = len(questions)
+            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': total, 'metrics': selected_metrics})}\n\n"
+
+            # Setup scorers
+            scorers = setup_scorers(selected_metrics)
+
+            # Build virtual rag_config row
+            virtual_config = _build_virtual_rag_config_row(experiment, rag_config)
+            response_mode = virtual_config["response_mode"]
+
+            for i, q_row in enumerate(questions, 1):
+                question_text = q_row["question"]
+                qid = q_row["id"]
+
+                try:
+                    # Execute RAG query
+                    if response_mode == "multi_step":
+                        query_result = await multi_step_query(question_text, virtual_config, run_conn)
+                    else:
+                        query_result = await single_shot_query(question_text, virtual_config, run_conn)
+
+                    generated_answer = query_result["answer"]
+                    full_context_dicts = query_result["contexts"]
+                    usage_info = query_result.get("usage", {})
+
+                    # Extract content strings for metric evaluation
+                    context_strings = [c["content"] for c in full_context_dicts]
+
+                    # Get reference answer (prefer user-edited)
+                    ref_answer = q_row["user_edited_answer"] if q_row["user_edited_answer"] else q_row["reference_answer"]
+
+                    # Evaluate metrics
+                    metrics_result = await _evaluate_experiment_row(
+                        scorers, question_text, generated_answer, ref_answer, context_strings,
+                    )
+
+                    # Store result
+                    run_conn.execute(
+                        """INSERT INTO experiment_results
+                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            experiment_id,
+                            qid,
+                            generated_answer,
+                            json.dumps(full_context_dicts),
+                            json.dumps(metrics_result),
+                            json.dumps(usage_info),
+                        ),
+                    )
+                    run_conn.commit()
+                    completed_count += 1
+
+                    yield f"event: progress\ndata: {json.dumps({'current': i, 'total': total, 'question_id': qid, 'question': question_text[:100]})}\n\n"
+
+                except Exception as e:
+                    # Per-question error isolation: store error row, continue
+                    logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, e)
+                    run_conn.execute(
+                        """INSERT INTO experiment_results
+                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            experiment_id,
+                            qid,
+                            None,
+                            "[]",
+                            "{}",
+                            json.dumps({"error": str(e), "question_id": qid}),
+                        ),
+                    )
+                    run_conn.commit()
+                    completed_count += 1
+
+                    yield f"event: progress\ndata: {json.dumps({'current': i, 'total': total, 'question_id': qid, 'question': question_text[:100], 'error': str(e)})}\n\n"
+
+            # All questions processed — mark completed
+            run_conn.execute(
+                "UPDATE experiments SET status = 'completed', completed_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), experiment_id),
+            )
+            run_conn.commit()
+
+            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': completed_count})}\n\n"
+
+        except Exception as e:
+            logger.error("Experiment %d fatal error: %s", experiment_id, e)
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+        finally:
+            # Cleanup guarantee: if still "running", set to "failed"
+            try:
+                row = run_conn.execute(
+                    "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
+                ).fetchone()
+                if row and row["status"] == "running":
+                    run_conn.execute(
+                        "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
+                        (datetime.utcnow().isoformat(), experiment_id),
+                    )
+                    run_conn.commit()
+            except Exception:
+                pass  # Best-effort cleanup
+
+    return StreamingResponse(_run_generator(), media_type="text/event-stream")
+
+
+# --- Suggestion Engine Routes ---
+
+
+def _generate_suggestions(aggregate_metrics: dict, per_question_results: list[dict]) -> list[dict]:
+    """Rule-based suggestion engine: analyzes metrics and returns actionable suggestions."""
+    suggestions = []
+
+    if not aggregate_metrics:
+        return suggestions
+
+    def _priority(score):
+        if score < 0.4:
+            return "high"
+        elif score < 0.7:
+            return "medium"
+        else:
+            return "low"
+
+    # --- Retrieval rules ---
+    context_recall = aggregate_metrics.get("context_recall")
+    if context_recall is not None and context_recall < 0.7:
+        suggestions.append({
+            "category": "retrieval",
+            "signal": f"context_recall avg {context_recall:.2f}",
+            "suggestion": "Consider increasing top_k, adding hybrid search, or re-chunking with smaller chunk sizes for better recall",
+            "priority": _priority(context_recall),
+            "config_field": "top_k",
+            "suggested_value": "+5",
+        })
+
+    context_precision = aggregate_metrics.get("context_precision")
+    if context_precision is not None and context_precision < 0.7:
+        suggestions.append({
+            "category": "retrieval",
+            "signal": f"context_precision avg {context_precision:.2f}",
+            "suggestion": "Retrieved contexts are noisy — try reranking, reduce top_k, or use more specific embedding model",
+            "priority": _priority(context_precision),
+            "config_field": "top_k",
+            "suggested_value": "-2",
+        })
+
+    context_relevance = aggregate_metrics.get("context_relevance")
+    if context_relevance is not None and context_relevance < 0.5:
+        suggestions.append({
+            "category": "retrieval",
+            "signal": f"context_relevance avg {context_relevance:.2f}",
+            "suggestion": "Contexts are not relevant — review embedding model choice or chunking strategy",
+            "priority": _priority(context_relevance),
+            "config_field": "embedding_config_id",
+            "suggested_value": None,
+        })
+
+    # --- Generation rules ---
+    faithfulness = aggregate_metrics.get("faithfulness")
+    if faithfulness is not None and faithfulness < 0.7:
+        suggestions.append({
+            "category": "generation",
+            "signal": f"faithfulness avg {faithfulness:.2f}",
+            "suggestion": "Responses contain unsupported claims — add system prompt instruction to only use provided context",
+            "priority": _priority(faithfulness),
+            "config_field": "system_prompt",
+            "suggested_value": None,
+        })
+
+    answer_relevancy = aggregate_metrics.get("answer_relevancy")
+    if answer_relevancy is not None and answer_relevancy < 0.7:
+        suggestions.append({
+            "category": "generation",
+            "signal": f"answer_relevancy avg {answer_relevancy:.2f}",
+            "suggestion": "Responses are not addressing the question — check system prompt clarity and response_mode",
+            "priority": _priority(answer_relevancy),
+            "config_field": "response_mode",
+            "suggested_value": "multi_step",
+        })
+
+    answer_correctness = aggregate_metrics.get("answer_correctness")
+    if answer_correctness is not None and answer_correctness < 0.5:
+        suggestions.append({
+            "category": "generation",
+            "signal": f"answer_correctness avg {answer_correctness:.2f}",
+            "suggestion": "Low correctness — verify reference answers are accurate, then review retrieval quality",
+            "priority": _priority(answer_correctness),
+            "config_field": None,
+            "suggested_value": None,
+        })
+
+    # --- Embedding rules (cross-metric) ---
+    if (context_recall is not None and context_recall < 0.5
+            and context_precision is not None and context_precision < 0.5):
+        suggestions.append({
+            "category": "embedding",
+            "signal": f"context_recall {context_recall:.2f} AND context_precision {context_precision:.2f}",
+            "suggestion": "Both recall and precision low — embedding model may be mismatched for this domain. Try a different model or fine-tune",
+            "priority": "high",
+            "config_field": "embedding_config_id",
+            "suggested_value": None,
+        })
+
+    # --- Chunking rules (variance-based) ---
+    if per_question_results:
+        # Collect per-question scores for each metric
+        metric_scores: dict[str, list[float]] = {}
+        for r in per_question_results:
+            metrics = r.get("metrics", {})
+            for mn, val in metrics.items():
+                if val is not None:
+                    metric_scores.setdefault(mn, []).append(val)
+
+        for mn, scores in metric_scores.items():
+            if len(scores) >= 3:  # Need at least 3 data points for meaningful stdev
+                stdev = statistics.stdev(scores)
+                if stdev > 0.3:
+                    suggestions.append({
+                        "category": "chunking",
+                        "signal": f"{mn} stdev {stdev:.2f} across {len(scores)} questions",
+                        "suggestion": f"High variance in {mn} — inconsistent chunk quality. Review chunking strategy for uniformity",
+                        "priority": "medium",
+                        "config_field": "chunk_config_id",
+                        "suggested_value": None,
+                    })
+
+    return suggestions
+
+
+@app.post("/api/projects/{project_id}/experiments/{experiment_id}/suggestions/generate")
+async def generate_suggestions(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["status"] != "completed":
+        raise HTTPException(status_code=409, detail="Experiment must be completed to generate suggestions")
+
+    # Fetch results
+    result_rows = conn.execute(
+        "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+
+    if not result_rows:
+        raise HTTPException(status_code=409, detail="No results to analyze")
+
+    # Compute aggregate metrics
+    metric_totals = {}
+    metric_counts = {}
+    per_question_results = []
+    for rr in result_rows:
+        metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+        per_question_results.append({"metrics": metrics})
+        for metric_name, value in metrics.items():
+            if value is not None:
+                metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
+                metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+
+    aggregate = {}
+    for mn in metric_totals:
+        cnt = metric_counts[mn]
+        aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
+
+    # Generate suggestions
+    new_suggestions = _generate_suggestions(aggregate, per_question_results)
+
+    # Atomic: delete old + insert new in single transaction
+    conn.execute("DELETE FROM suggestions WHERE experiment_id = ?", (experiment_id,))
+    for s in new_suggestions:
+        conn.execute(
+            "INSERT INTO suggestions (experiment_id, category, signal, suggestion, priority, config_field, suggested_value) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (experiment_id, s["category"], s["signal"], s["suggestion"], s["priority"],
+             s.get("config_field"), s.get("suggested_value")),
+        )
+    conn.commit()
+
+    # Re-read from DB to return actual state
+    rows = conn.execute(
+        "SELECT * FROM suggestions WHERE experiment_id = ? ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, category",
+        (experiment_id,),
+    ).fetchall()
+    result = [dict(r) for r in rows]
+
+    return {"suggestions": result, "count": len(result)}
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}/suggestions")
+async def get_suggestions(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT id FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rows = conn.execute(
+        "SELECT * FROM suggestions WHERE experiment_id = ? ORDER BY CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, category",
+        (experiment_id,),
+    ).fetchall()
+
+    return {"suggestions": [dict(r) for r in rows]}
+
+
+@app.patch("/api/projects/{project_id}/suggestions/{suggestion_id}")
+async def update_suggestion(project_id: int, suggestion_id: int, req: SuggestionUpdate):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Single JOIN query for cross-project isolation
+    row = conn.execute(
+        """SELECT s.* FROM suggestions s
+           JOIN experiments e ON s.experiment_id = e.id
+           WHERE s.id = ? AND e.project_id = ?""",
+        (suggestion_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    conn.execute(
+        "UPDATE suggestions SET implemented = ? WHERE id = ?",
+        (req.implemented, suggestion_id),
+    )
+    conn.commit()
+
+    # Re-read from DB to return actual state
+    updated = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+    return dict(updated)
+
+
+# --- Apply Suggestion Route ---
+
+
+# Fields where override_value must be validated as a specific type
+_NUMERIC_CONFIG_FIELDS = {"top_k", "alpha", "max_steps"}
+_ENUM_CONFIG_FIELDS = {
+    "response_mode": VALID_RESPONSE_MODES,
+    "search_type": VALID_SEARCH_TYPES,
+}
+
+
+def _apply_config_change(config_row: dict, config_field: str, suggested_value: str | None, override_value: str | None) -> tuple[dict, dict]:
+    """Apply a suggestion's config change to a cloned config dict.
+
+    Returns (updated_fields_dict, changes_dict) where changes_dict is {field: {old, new}}.
+    """
+    value_to_use = override_value if override_value is not None else suggested_value
+    old_value = config_row.get(config_field)
+    new_value = old_value  # default: no change
+
+    if config_field == "top_k":
+        current = config_row["top_k"]
+        if value_to_use is not None and value_to_use.lstrip("+-").isdigit() and (value_to_use.startswith("+") or value_to_use.startswith("-")):
+            # Relative change
+            new_value = current + int(value_to_use)
+        elif value_to_use is not None and value_to_use.isdigit():
+            # Absolute value
+            new_value = int(value_to_use)
+        else:
+            raise ValueError(f"Invalid top_k value: '{value_to_use}'. Use relative (+5, -2) or absolute (10) integer.")
+        new_value = max(1, min(50, new_value))
+
+    elif config_field == "max_steps":
+        if value_to_use is None:
+            raise ValueError("max_steps requires a value")
+        try:
+            new_value = int(value_to_use)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid max_steps value: '{value_to_use}'. Must be integer 1-10.")
+        if new_value < 1 or new_value > 10:
+            raise ValueError("max_steps must be between 1 and 10")
+
+    elif config_field == "alpha":
+        if value_to_use is None:
+            raise ValueError("alpha requires a value")
+        try:
+            new_value = float(value_to_use)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid alpha value: '{value_to_use}'. Must be float 0.0-1.0.")
+        if new_value < 0.0 or new_value > 1.0:
+            raise ValueError("alpha must be between 0.0 and 1.0")
+
+    elif config_field in _ENUM_CONFIG_FIELDS:
+        allowed = _ENUM_CONFIG_FIELDS[config_field]
+        if value_to_use is not None and value_to_use in allowed:
+            new_value = value_to_use
+        elif value_to_use is not None:
+            raise ValueError(f"Invalid {config_field} value: '{value_to_use}'. Must be one of: {', '.join(sorted(allowed))}")
+        else:
+            raise ValueError(f"{config_field} requires a value. Provide override_value as one of: {', '.join(sorted(allowed))}")
+
+    elif config_field == "system_prompt":
+        if value_to_use is None:
+            raise ValueError("system_prompt requires an override_value with the new prompt text")
+        new_value = value_to_use
+
+    elif config_field in ("embedding_config_id", "chunk_config_id"):
+        if value_to_use is None:
+            raise ValueError(f"{config_field} requires an override_value with the new config ID")
+        try:
+            new_value = int(value_to_use)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid {config_field} value: '{value_to_use}'. Must be an integer ID.")
+
+    else:
+        if value_to_use is not None:
+            new_value = value_to_use
+
+    changes = {config_field: {"old": old_value, "new": new_value}}
+    return {config_field: new_value}, changes
+
+
+@app.post("/api/projects/{project_id}/suggestions/{suggestion_id}/apply")
+async def apply_suggestion(project_id: int, suggestion_id: int, req: ApplySuggestionRequest | None = None):
+    if req is None:
+        req = ApplySuggestionRequest()
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate suggestion exists and belongs to project (JOIN through experiments)
+    row = conn.execute(
+        """SELECT s.*, e.id as exp_id, e.project_id as exp_project_id, e.rag_config_id as exp_rag_config_id,
+                  e.test_set_id, e.model, e.model_params_json, e.retrieval_config_json,
+                  e.chunk_config_id as exp_chunk_config_id, e.embedding_config_id as exp_embedding_config_id,
+                  e.name as exp_name
+           FROM suggestions s
+           JOIN experiments e ON s.experiment_id = e.id
+           WHERE s.id = ? AND e.project_id = ?""",
+        (suggestion_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    # Idempotency guard: check if already implemented
+    if row["implemented"]:
+        raise HTTPException(status_code=409, detail="Suggestion already applied")
+
+    # Validate original experiment has a RAG config
+    if row["exp_rag_config_id"] is None:
+        raise HTTPException(status_code=409, detail="Original experiment has no RAG config")
+
+    # Validate original RAG config still exists
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (row["exp_rag_config_id"], project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(status_code=409, detail="Original RAG config no longer exists")
+
+    config_field = row["config_field"]
+    suggested_value = row["suggested_value"]
+
+    # If no config_field, require override_value with a field specification
+    if config_field is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This suggestion has no direct config mapping. It requires manual review — no automatic config change can be applied.",
+        )
+
+    # Apply config change
+    try:
+        updated_fields, changes = _apply_config_change(
+            dict(rag_config), config_field, suggested_value, req.override_value,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Count existing iterations for naming
+    iteration_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM experiments WHERE baseline_experiment_id = ?",
+        (row["exp_id"],),
+    ).fetchone()["cnt"]
+
+    new_config_name = f"{rag_config['name']} — iteration {iteration_count + 1}"
+    new_experiment_name = req.experiment_name or f"{row['exp_name']} — iteration {iteration_count + 1}"
+
+    # Atomic transaction: INSERT config + INSERT experiment + UPDATE suggestion
+    try:
+        # Clone RAG config with the change applied
+        new_config_values = {
+            "project_id": project_id,
+            "name": new_config_name,
+            "embedding_config_id": rag_config["embedding_config_id"],
+            "chunk_config_id": rag_config["chunk_config_id"],
+            "search_type": rag_config["search_type"],
+            "sparse_config_id": rag_config["sparse_config_id"],
+            "alpha": rag_config["alpha"],
+            "llm_model": rag_config["llm_model"],
+            "llm_params_json": rag_config["llm_params_json"],
+            "top_k": rag_config["top_k"],
+            "system_prompt": rag_config["system_prompt"],
+            "response_mode": rag_config["response_mode"],
+            "max_steps": rag_config["max_steps"],
+        }
+        # Apply the changed field(s)
+        for field, value in updated_fields.items():
+            if field == "llm_params":
+                new_config_values["llm_params_json"] = json.dumps(value) if value else None
+            else:
+                new_config_values[field] = value
+
+        cursor = conn.execute(
+            """INSERT INTO rag_configs
+               (project_id, name, embedding_config_id, chunk_config_id, search_type,
+                sparse_config_id, alpha, llm_model, llm_params_json, top_k, system_prompt,
+                response_mode, max_steps)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_config_values["project_id"], new_config_values["name"],
+             new_config_values["embedding_config_id"], new_config_values["chunk_config_id"],
+             new_config_values["search_type"], new_config_values["sparse_config_id"],
+             new_config_values["alpha"], new_config_values["llm_model"],
+             new_config_values["llm_params_json"], new_config_values["top_k"],
+             new_config_values["system_prompt"], new_config_values["response_mode"],
+             new_config_values["max_steps"]),
+        )
+        new_config_id = cursor.lastrowid
+
+        # Snapshot retrieval config from new RAG config
+        retrieval_config = json.dumps({
+            "search_type": new_config_values["search_type"],
+            "sparse_config_id": new_config_values["sparse_config_id"],
+            "alpha": new_config_values["alpha"],
+            "top_k": new_config_values["top_k"],
+            "system_prompt": new_config_values["system_prompt"],
+            "response_mode": new_config_values["response_mode"],
+            "max_steps": new_config_values["max_steps"],
+        })
+
+        cursor2 = conn.execute(
+            """INSERT INTO experiments
+               (project_id, test_set_id, name, model, model_params_json, retrieval_config_json,
+                chunk_config_id, embedding_config_id, rag_config_id, baseline_experiment_id, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (project_id, row["test_set_id"], new_experiment_name, row["model"],
+             row["model_params_json"], retrieval_config,
+             new_config_values["chunk_config_id"], new_config_values["embedding_config_id"],
+             new_config_id, row["exp_id"]),
+        )
+        new_experiment_id = cursor2.lastrowid
+
+        # Mark suggestion as implemented
+        conn.execute("UPDATE suggestions SET implemented = TRUE WHERE id = ?", (suggestion_id,))
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return {
+        "experiment_id": new_experiment_id,
+        "rag_config_id": new_config_id,
+        "experiment_name": new_experiment_name,
+        "config_changes": changes,
+    }
+
+
+# --- Delta Comparison Route ---
+
+
+# RAG config fields to compare for delta (excludes internal fields like id, project_id, created_at)
+_RAG_CONFIG_DIFF_FIELDS = [
+    "name", "embedding_config_id", "chunk_config_id", "search_type",
+    "sparse_config_id", "alpha", "llm_model", "top_k", "system_prompt",
+    "response_mode", "max_steps",
+]
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}/delta")
+async def get_experiment_delta(project_id: int, experiment_id: int):
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["baseline_experiment_id"] is None:
+        raise HTTPException(status_code=404, detail="No baseline experiment — this experiment is not an iteration")
+
+    baseline = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment["baseline_experiment_id"], project_id),
+    ).fetchone()
+    if baseline is None:
+        raise HTTPException(status_code=404, detail="Baseline experiment not found")
+
+    # Validate same test set
+    if experiment["test_set_id"] != baseline["test_set_id"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Baseline and iteration experiments use different test sets — delta comparison requires the same test set",
+        )
+
+    # Validate both completed
+    if experiment["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"Iteration experiment status is '{experiment['status']}', must be 'completed'")
+    if baseline["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"Baseline experiment status is '{baseline['status']}', must be 'completed'")
+
+    # Compare RAG configs
+    config_changes = []
+    iter_config = None
+    base_config = None
+    if experiment["rag_config_id"]:
+        iter_config = conn.execute("SELECT * FROM rag_configs WHERE id = ?", (experiment["rag_config_id"],)).fetchone()
+    if baseline["rag_config_id"]:
+        base_config = conn.execute("SELECT * FROM rag_configs WHERE id = ?", (baseline["rag_config_id"],)).fetchone()
+
+    if iter_config and base_config:
+        for field in _RAG_CONFIG_DIFF_FIELDS:
+            old_val = base_config[field]
+            new_val = iter_config[field]
+            # Handle llm_params_json specially
+            if field == "llm_params_json":
+                old_val = json.loads(old_val) if old_val else None
+                new_val = json.loads(new_val) if new_val else None
+            if old_val != new_val:
+                config_changes.append({"field": field, "old_value": old_val, "new_value": new_val})
+
+    # Compute aggregate metrics for both
+    def _compute_aggregates(exp_id):
+        result_rows = conn.execute(
+            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?", (exp_id,),
+        ).fetchall()
+        totals = {}
+        counts = {}
+        for rr in result_rows:
+            metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+            for mn, val in metrics.items():
+                if val is not None:
+                    totals[mn] = totals.get(mn, 0.0) + val
+                    counts[mn] = counts.get(mn, 0) + 1
+        agg = {}
+        for mn in totals:
+            cnt = counts[mn]
+            agg[mn] = round(totals[mn] / cnt, 4) if cnt > 0 else None
+        return agg
+
+    baseline_agg = _compute_aggregates(baseline["id"])
+    iteration_agg = _compute_aggregates(experiment["id"])
+
+    # Build metric_deltas
+    all_metrics = set(baseline_agg.keys()) | set(iteration_agg.keys())
+    metric_deltas = {}
+    for mn in sorted(all_metrics):
+        b_val = baseline_agg.get(mn)
+        i_val = iteration_agg.get(mn)
+        delta = None
+        improved = None
+        if b_val is not None and i_val is not None:
+            delta = round(i_val - b_val, 4)
+            improved = delta > 0
+        metric_deltas[mn] = {
+            "baseline": b_val,
+            "iteration": i_val,
+            "delta": delta,
+            "improved": improved,
+        }
+
+    # Per-question deltas (aligned by test_question_id)
+    baseline_results = conn.execute(
+        """SELECT er.test_question_id, er.metrics_json, tq.question
+           FROM experiment_results er
+           JOIN test_questions tq ON er.test_question_id = tq.id
+           WHERE er.experiment_id = ?""",
+        (baseline["id"],),
+    ).fetchall()
+    iteration_results = conn.execute(
+        """SELECT er.test_question_id, er.metrics_json
+           FROM experiment_results er
+           WHERE er.experiment_id = ?""",
+        (experiment["id"],),
+    ).fetchall()
+
+    baseline_by_q = {r["test_question_id"]: r for r in baseline_results}
+    iteration_by_q = {r["test_question_id"]: r for r in iteration_results}
+
+    all_q_ids = sorted(set(baseline_by_q.keys()) | set(iteration_by_q.keys()))
+    per_question_deltas = []
+    for qid in all_q_ids:
+        b_row = baseline_by_q.get(qid)
+        i_row = iteration_by_q.get(qid)
+        b_metrics = json.loads(b_row["metrics_json"]) if b_row and b_row["metrics_json"] else {}
+        i_metrics = json.loads(i_row["metrics_json"]) if i_row and i_row["metrics_json"] else {}
+        question_text = b_row["question"] if b_row else None
+
+        q_metrics = {}
+        for mn in sorted(set(b_metrics.keys()) | set(i_metrics.keys())):
+            bv = b_metrics.get(mn)
+            iv = i_metrics.get(mn)
+            d = round(iv - bv, 4) if bv is not None and iv is not None else None
+            q_metrics[mn] = {"baseline": bv, "iteration": iv, "delta": d}
+
+        per_question_deltas.append({
+            "test_question_id": qid,
+            "question": question_text,
+            "metrics": q_metrics,
+        })
+
+    return {
+        "experiment_id": experiment["id"],
+        "experiment_name": experiment["name"],
+        "baseline_experiment_id": baseline["id"],
+        "baseline_experiment_name": baseline["name"],
+        "config_changes": config_changes,
+        "metric_deltas": metric_deltas,
+        "per_question_deltas": per_question_deltas,
+    }
+
+
+# --- Export Route ---
+
+
+def _sanitize_csv_value(val: str) -> str:
+    """Prevent CSV formula injection (CWE-1236) by prefixing dangerous characters."""
+    if val and isinstance(val, str) and len(val) > 0 and val[0] in ("=", "+", "-", "@"):
+        return "'" + val
+    return val
+
+
+@app.get("/api/projects/{project_id}/experiments/{experiment_id}/export")
+async def export_experiment(project_id: int, experiment_id: int, format: str = Query("json", description="Export format: csv or json")):
+    if format not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="format must be 'csv' or 'json'")
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["status"] != "completed":
+        raise HTTPException(status_code=409, detail=f"Experiment status is '{experiment['status']}', must be 'completed' to export")
+
+    # Fetch results
+    rows = conn.execute(
+        """SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer
+           FROM experiment_results er
+           JOIN test_questions tq ON er.test_question_id = tq.id
+           WHERE er.experiment_id = ?
+           ORDER BY er.id""",
+        (experiment_id,),
+    ).fetchall()
+
+    # Payload guard
+    if len(rows) > 2500:
+        raise HTTPException(status_code=413, detail="Too many results to export (max 2500)")
+
+    # Fetch RAG config name for metadata
+    rag_config_name = None
+    if experiment["rag_config_id"]:
+        rc = conn.execute("SELECT name FROM rag_configs WHERE id = ?", (experiment["rag_config_id"],)).fetchone()
+        rag_config_name = rc["name"] if rc else None
+
+    # Build export data
+    # Collect all metric names across all results
+    all_metric_names: set[str] = set()
+    parsed_rows = []
+    for r in rows:
+        ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
+        metrics = json.loads(r["metrics_json"]) if r["metrics_json"] else {}
+        all_metric_names.update(metrics.keys())
+        parsed_rows.append({
+            "question": r["question"],
+            "reference_answer": ref_answer,
+            "response": r["response"],
+            "metrics": metrics,
+        })
+
+    sorted_metrics = sorted(all_metric_names)
+
+    # Build filename
+    safe_name = experiment["name"].replace(" ", "_").replace("/", "_")[:50]
+    date_str = (experiment["completed_at"] or experiment["created_at"] or "")[:10]
+
+    if format == "json":
+        export_data = []
+        for pr in parsed_rows:
+            row_data = {
+                "question": pr["question"],
+                "reference_answer": pr["reference_answer"],
+                "response": pr["response"],
+            }
+            for mn in sorted_metrics:
+                row_data[mn] = pr["metrics"].get(mn)
+            row_data["experiment_name"] = experiment["name"]
+            row_data["model"] = experiment["model"]
+            row_data["rag_config"] = rag_config_name
+            export_data.append(row_data)
+
+        content = json.dumps(export_data, indent=2)
+        filename = f"{safe_name}_{date_str}.json"
+        return StreamingResponse(
+            iter([content]),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    else:  # csv
+        output = io.StringIO()
+        fieldnames = ["question", "reference_answer", "response"] + sorted_metrics + ["experiment_name", "model", "rag_config"]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for pr in parsed_rows:
+            row_data = {
+                "question": _sanitize_csv_value(pr["question"]),
+                "reference_answer": _sanitize_csv_value(pr["reference_answer"]),
+                "response": _sanitize_csv_value(pr["response"]),
+            }
+            for mn in sorted_metrics:
+                row_data[mn] = pr["metrics"].get(mn)
+            row_data["experiment_name"] = _sanitize_csv_value(experiment["name"])
+            row_data["model"] = experiment["model"]
+            row_data["rag_config"] = _sanitize_csv_value(rag_config_name or "")
+            writer.writerow(row_data)
+
+        csv_content = output.getvalue()
+        filename = f"{safe_name}_{date_str}.csv"
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+
+# SPA catch-all: serve index.html for any /app/* route that isn't a static asset
+_frontend_dist = Path("frontend/dist")
+if _frontend_dist.is_dir():
+    # Serve static assets (JS, CSS, images) from the build
+    app.mount("/app/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="frontend-assets")
+
+    @app.get("/app/{path:path}")
+    async def spa_fallback(path: str):
+        """Serve index.html for all SPA routes (React Router handles client-side routing)."""
+        return FileResponse(str(_frontend_dist / "index.html"))
+
+    @app.get("/")
+    async def root_redirect():
+        """Redirect root to the React SPA."""
+        return RedirectResponse(url="/app/setup")
+else:
+    @app.get("/")
+    async def root_redirect_no_build():
+        """Redirect root even without frontend build."""
+        return RedirectResponse(url="/app/setup")
 
 
 # --- CLI Entry Point ---
