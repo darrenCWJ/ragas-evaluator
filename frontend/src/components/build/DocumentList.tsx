@@ -19,15 +19,18 @@ export default function DocumentList({
 }: Props) {
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function handleDelete(docId: number) {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteDocument(projectId, docId);
       setConfirmId(null);
       onRefresh();
-    } catch {
-      // Error shown inline is sufficient
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+      setConfirmId(null);
     } finally {
       setDeleting(false);
     }
@@ -83,7 +86,19 @@ export default function DocumentList({
   }
 
   return (
-    <ul className="space-y-2">
+    <div className="space-y-2">
+      {deleteError && (
+        <div className="flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
+          <span>{deleteError}</span>
+          <button
+            onClick={() => setDeleteError(null)}
+            className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      <ul className="space-y-2">
       {documents.map((doc) => (
         <li
           key={doc.id}
@@ -148,5 +163,6 @@ export default function DocumentList({
         </li>
       ))}
     </ul>
+    </div>
   );
 }

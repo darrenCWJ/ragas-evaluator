@@ -52,6 +52,7 @@ export default function EmbeddingConfigPanel({
   // Delete state
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Embed inline
   const [embedConfigId, setEmbedConfigId] = useState<number | null>(null);
@@ -120,13 +121,15 @@ export default function EmbeddingConfigPanel({
 
   async function handleDelete(configId: number) {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteEmbeddingConfig(projectId, configId);
       setConfirmDeleteId(null);
       loadConfigs();
       onConfigsChanged?.();
-    } catch {
-      // keep inline
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+      setConfirmDeleteId(null);
     } finally {
       setDeleting(false);
     }
@@ -142,6 +145,7 @@ export default function EmbeddingConfigPanel({
 
         <label className="block">
           <span className="mb-1 block text-xs text-text-secondary">Name</span>
+          <p className="mt-0.5 text-xs text-text-muted">A descriptive name for this embedding configuration</p>
           <input
             type="text"
             value={name}
@@ -153,6 +157,7 @@ export default function EmbeddingConfigPanel({
 
         <label className="mt-3 block">
           <span className="mb-1 block text-xs text-text-secondary">Type</span>
+          <p className="mt-0.5 text-xs text-text-muted">dense_openai: OpenAI API embeddings (best quality) | dense_sentence_transformers: local model embeddings (free, slower) | bm25_sparse: keyword-based sparse embeddings (no ML)</p>
           <select
             value={embType}
             onChange={(e) => setEmbType(e.target.value as EmbeddingType)}
@@ -170,6 +175,7 @@ export default function EmbeddingConfigPanel({
           <span className="mb-1 block text-xs text-text-secondary">
             Model Name
           </span>
+          <p className="mt-0.5 text-xs text-text-muted">Model identifier (e.g., text-embedding-3-small for OpenAI, all-MiniLM-L6-v2 for sentence-transformers)</p>
           <input
             type="text"
             value={modelName}
@@ -183,6 +189,7 @@ export default function EmbeddingConfigPanel({
           <span className="mb-1 block text-xs text-text-secondary">
             Params (JSON, optional)
           </span>
+          <p className="mt-0.5 text-xs text-text-muted">Optional JSON parameters for the embedding model</p>
           <textarea
             value={paramsJson}
             onChange={(e) => setParamsJson(e.target.value)}
@@ -249,6 +256,18 @@ export default function EmbeddingConfigPanel({
             No embedding configs yet. Create one above.
           </p>
         ) : (
+          <>
+          {deleteError && (
+            <div className="mb-2 flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
+              <span>{deleteError}</span>
+              <button
+                onClick={() => setDeleteError(null)}
+                className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <ul className="space-y-2">
             {configs.map((cfg) => (
               <li key={cfg.id} className="rounded-lg bg-card px-4 py-3">
@@ -335,6 +354,7 @@ export default function EmbeddingConfigPanel({
               </li>
             ))}
           </ul>
+          </>
         )}
       </div>
     </div>

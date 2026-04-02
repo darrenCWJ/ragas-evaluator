@@ -5,26 +5,26 @@
 See: .paul/PROJECT.md (updated 2026-04-02)
 
 **Core value:** AI engineers can systematically build, test, compare, and improve RAG pipelines against multiple LLM providers in one integrated platform.
-**Current focus:** Milestone v0.2 Frontend Rewrite — COMPLETE
+**Current focus:** Milestone v0.3 Process Flow & Fixes
 
 ## Current Position
 
-Milestone: v0.2 Frontend Rewrite (v0.2.0) — COMPLETE
-Phase: 13 of 13 (Feedback Loop & Polish) — Complete
-Plan: All plans complete
-Status: Milestone complete — all 5 phases, 13 phases total across v0.1 + v0.2
-Last activity: 2026-04-02 — Phase 13 complete, v0.2 milestone complete
+Milestone: v0.3 Process Flow & Fixes (v0.3.0)
+Phase: 16 of 19 (Build — Save & Use RAG Config)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-04-03 — Phase 15 complete, transitioned to Phase 16
 
 Progress:
-- Milestone: [██████████] 100% (5/5 phases)
-- Phase 13: [██████████] 100% (2/2 plans complete)
+- Milestone: [███░░░░░░░] 33% (2/6 phases)
+- Phase 16: [░░░░░░░░░░] 0%
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Milestone complete]
+  ○        ○        ○     [Idle — ready for next PLAN]
 ```
 
 ## Accumulated Context
@@ -45,6 +45,8 @@ PLAN ──▶ APPLY ──▶ UNIFY
 | Raw fetch for export (blob, not JSON) | Phase 13 | exportExperiment uses fetch directly for file download |
 | Always render ExperimentDelta | Phase 13 | Component handles no-baseline gracefully |
 | useStageCompletion with location-based refetch | Phase 13 | Immediate feedback after user actions on stages |
+| Inline dismissable banner for delete errors | Phase 15 | Reusable pattern for delete failure feedback |
+| Help text as static p elements below labels | Phase 15 | Simple, accessible, no tooltip dependencies |
 
 ### Deferred Issues
 
@@ -55,9 +57,9 @@ PLAN ──▶ APPLY ──▶ UNIFY
 
 ### Git State
 
-Last commit: 064acd5
-Branch: feature/11-test-generation-annotation
-Feature branches merged: pending (feature branch ready to merge to main)
+Last commit: pending (phase 15 commit)
+Branch: main
+Feature branches merged: all v0.2 branches merged
 
 ### Blockers/Concerns
 
@@ -65,14 +67,10 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-02
-Stopped at: v0.2 Milestone complete — all phases done
-Next action: Commit phase 13, merge feature branch to main, then /paul:complete-milestone
+Last session: 2026-04-03
+Stopped at: Phase 15 complete, ready to plan Phase 16
+Next action: /paul:plan for Phase 16
 Resume file: .paul/ROADMAP.md
-Resume context:
-- v0.2 Frontend Rewrite milestone is 100% complete
-- Phase 13 complete: Analyze stage + stepper completion + legacy cleanup
-- Ready for git commit and milestone closure
 
 ---
 *STATE.md -- Updated after every significant action*

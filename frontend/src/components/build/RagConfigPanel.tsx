@@ -70,6 +70,7 @@ export default function RagConfigPanel({
   // Delete state
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Test inline
   const [testConfigId, setTestConfigId] = useState<number | null>(null);
@@ -149,13 +150,15 @@ export default function RagConfigPanel({
 
   async function handleDelete(configId: number) {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteRagConfig(projectId, configId);
       setConfirmDeleteId(null);
       loadConfigs();
       onConfigsChanged?.();
-    } catch {
-      // keep inline
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+      setConfirmDeleteId(null);
     } finally {
       setDeleting(false);
     }
@@ -221,6 +224,18 @@ export default function RagConfigPanel({
             No RAG configs yet. Create one above.
           </p>
         ) : (
+          <>
+          {deleteError && (
+            <div className="mb-2 flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
+              <span>{deleteError}</span>
+              <button
+                onClick={() => setDeleteError(null)}
+                className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <ul className="space-y-2">
             {configs.map((cfg) => (
               <li key={cfg.id} className="rounded-lg bg-card px-4 py-3">
@@ -306,6 +321,7 @@ export default function RagConfigPanel({
               </li>
             ))}
           </ul>
+          </>
         )}
       </div>
     );
@@ -321,6 +337,7 @@ export default function RagConfigPanel({
 
         <label className="block">
           <span className="mb-1 block text-xs text-text-secondary">Name</span>
+          <p className="mt-0.5 text-xs text-text-muted">A descriptive name for this RAG configuration</p>
           <input
             type="text"
             value={name}
@@ -335,6 +352,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               Embedding Config
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">Which embedding model to use for retrieval</p>
             <select
               value={embConfigId}
               onChange={(e) => setEmbConfigId(Number(e.target.value))}
@@ -352,6 +370,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               Chunk Config
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">Which chunking strategy was used for the documents</p>
             <select
               value={chunkConfigId}
               onChange={(e) => setChunkConfigId(Number(e.target.value))}
@@ -371,6 +390,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               Search Type
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">dense: vector similarity search | sparse: BM25 keyword search | hybrid: combines both with alpha weighting</p>
             <select
               value={searchType}
               onChange={(e) => setSearchType(e.target.value)}
@@ -388,6 +408,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               LLM Model
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">OpenAI model for generating answers (e.g., gpt-4o-mini, gpt-4o, gpt-4-turbo)</p>
             <input
               type="text"
               value={llmModel}
@@ -405,6 +426,7 @@ export default function RagConfigPanel({
               <span className="mb-1 block text-xs text-text-secondary">
                 Sparse Config
               </span>
+              <p className="mt-0.5 text-xs text-text-muted">BM25 embedding config for the sparse component of hybrid search</p>
               <select
                 value={sparseConfigId}
                 onChange={(e) =>
@@ -427,6 +449,7 @@ export default function RagConfigPanel({
               <span className="mb-1 block text-xs text-text-secondary">
                 Alpha ({alpha.toFixed(2)})
               </span>
+              <p className="mt-0.5 text-xs text-text-muted">Weight between dense (1.0) and sparse (0.0) search in hybrid mode</p>
               <input
                 type="range"
                 min="0"
@@ -445,6 +468,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               Response Mode
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">single_shot: one retrieval + answer | multi_step: iteratively refines search queries for better context</p>
             <select
               value={responseMode}
               onChange={(e) => setResponseMode(e.target.value)}
@@ -462,6 +486,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               Top K
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">Number of chunks to retrieve (1-50, typical: 3-10)</p>
             <input
               type="number"
               value={topK}
@@ -479,6 +504,7 @@ export default function RagConfigPanel({
             <span className="mb-1 block text-xs text-text-secondary">
               Max Steps
             </span>
+            <p className="mt-0.5 text-xs text-text-muted">Maximum query refinement iterations in multi-step mode (1-10)</p>
             <input
               type="number"
               value={maxSteps}
@@ -518,6 +544,7 @@ export default function RagConfigPanel({
               <span className="mb-1 block text-xs text-text-secondary">
                 System Prompt (optional)
               </span>
+              <p className="mt-0.5 text-xs text-text-muted">Custom instructions for the LLM (e.g., tone, format, domain constraints)</p>
               <textarea
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
