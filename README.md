@@ -1,6 +1,61 @@
-# Ragas Evaluator
+# RAG Evaluator
 
-A comprehensive RAG evaluation tool using [Ragas](https://docs.ragas.io/) metrics. Supports CLI (CSV batch processing), REST API, and a web UI deployable to Vercel.
+## Problem Statement
+
+As AI chatbots become increasingly accessible, more individuals and teams are building conversational bots for customer support, internal knowledge bases, education, and other domains. However, a critical gap remains: **how do you know if your bot is actually giving accurate, grounded answers?**
+
+Most RAG (Retrieval-Augmented Generation) systems are deployed with minimal evaluation. Builders rely on manual spot-checking or anecdotal feedback, leaving systemic issues — hallucinations, poor retrieval, irrelevant responses — undetected until users complain.
+
+This project addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
+
+## Design
+
+### Core Idea
+
+Rather than treating evaluation as a one-off check, the system enables an **iterative improvement loop**:
+
+1. **Configure** a RAG pipeline (chunking strategy, embedding model, retrieval mode, LLM)
+2. **Generate** synthetic test questions from your documents using diverse personas
+3. **Run experiments** that evaluate every question against 20+ metrics
+4. **Analyze results** with an AI-powered suggestion engine that pinpoints weak spots
+5. **Apply suggestions** to create a new configuration and re-run — comparing before and after
+
+### Architecture
+
+```
+                    +------------------+
+                    |   React Web UI   |
+                    +--------+---------+
+                             |
+                    +--------+---------+
+                    |   FastAPI REST   |
+                    +--------+---------+
+                             |
+          +------------------+------------------+
+          |                  |                  |
+  +-------+-------+  +------+------+  +--------+--------+
+  |   Pipeline    |  |  Evaluation |  |    Database     |
+  | chunking      |  | 20+ metrics |  | SQLite (WAL)   |
+  | embedding     |  | scoring     |  | projects       |
+  | retrieval     |  | suggestions |  | configs        |
+  | generation    |  | test gen    |  | experiments    |
+  +---------------+  +-------------+  +----------------+
+```
+
+### Suggestion Engine
+
+The suggestion engine analyzes aggregate metric scores and per-question variance to produce targeted recommendations:
+
+| Signal | Diagnosis | Suggestion |
+|--------|-----------|------------|
+| Low context recall | Retrieval misses relevant chunks | Increase `top_k` or switch to hybrid search |
+| Low context precision | Too much irrelevant context retrieved | Decrease `top_k` or add reranking |
+| Low faithfulness | LLM hallucinating beyond retrieved context | Strengthen system prompt grounding instructions |
+| Low answer relevancy | Responses drift from the question | Enable multi-step retrieval mode |
+| Both recall and precision low | Embedding model mismatch for the domain | Switch embedding model |
+| High metric variance across questions | Inconsistent chunk quality | Try a different chunking strategy |
+
+Each suggestion maps to a specific config field and can be applied directly from the UI to spawn a new experiment.
 
 ## Metrics
 
@@ -17,7 +72,6 @@ A comprehensive RAG evaluation tool using [Ragas](https://docs.ragas.io/) metric
 ### Natural Language Comparison
 | Metric | What it measures |
 |---|---|
-| `factual_correctness` | Factual accuracy (LLM-based) |
 | `semantic_similarity` | Embedding cosine similarity |
 | `non_llm_string_similarity` | Levenshtein / Hamming / Jaro distance |
 | `bleu_score` | N-gram precision |
@@ -31,7 +85,6 @@ A comprehensive RAG evaluation tool using [Ragas](https://docs.ragas.io/) metric
 |---|---|
 | `aspect_critic` | Custom aspect evaluation (e.g. harmfulness) |
 | `rubrics_score` | Rubric-based multi-dimensional scoring |
-| `instance_rubrics` | Per-instance custom rubrics |
 | `summarization_score` | Summary quality evaluation |
 
 ### NVIDIA Metrics
@@ -46,8 +99,6 @@ A comprehensive RAG evaluation tool using [Ragas](https://docs.ragas.io/) metric
 |---|---|
 | `topic_adherence` | Topic focus monitoring |
 | `tool_call_accuracy` | Correct tool invocation |
-| `tool_call_f1` | Tool call precision/recall |
-| `agent_goal_accuracy` | Objective completion |
 
 ### SQL Metrics
 | Metric | What it measures |
@@ -57,73 +108,92 @@ A comprehensive RAG evaluation tool using [Ragas](https://docs.ragas.io/) metric
 
 ## Setup
 
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+ (for frontend)
+- OpenAI API key
+
+### Backend
+
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# Add your OpenAI API key to .env
+# Add your OPENAI_API_KEY to .env
 ```
 
-## Usage
-
-### CLI — CSV Batch Processing
-
-Place your CSV file in `input/` with columns: `Question`, `Answer`, `Retrieve Context` (contexts separated by `||`).
+### Frontend
 
 ```bash
-# Run all metrics
-python3 main.py csv sample.csv
-
-# Run specific metrics
-python3 main.py csv sample.csv --metrics faithfulness context_recall bleu_score
+cd frontend
+npm install
+npm run build
 ```
 
-Results are saved to `output/`.
-
-### CLI — REST API
+### Run
 
 ```bash
-python3 main.py api --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+The app serves the built frontend as a SPA at `http://localhost:8000`.
+
+### Docker
 
 ```bash
-curl -X POST http://localhost:8000/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "question": "Where is the Eiffel Tower?",
-    "answer": "The Eiffel Tower is in Paris.",
-    "retrieve_context": ["The Eiffel Tower is located in Paris, France."],
-    "metrics": ["faithfulness", "answer_relevancy"]
-  }'
+docker compose up --build
 ```
-
-### Web UI (Vercel)
-
-Deploy to Vercel for a browser-based evaluation interface:
-
-```bash
-npm i -g vercel
-vercel
-```
-
-Set `OPENAI_API_KEY` in Vercel project settings under **Settings > Environment Variables**.
 
 ## Project Structure
 
 ```
-├── api/
-│   └── evaluate.py          # Vercel serverless function
-├── public/
-│   └── index.html           # Web UI
-├── ragas_test/              # Metric modules (one per metric)
-│   ├── faithfulness.py
-│   ├── answer_relevancy.py
-│   ├── context_precision.py
-│   ├── ...
-│   └── __init__.py
-├── input/                   # CSV input files (gitignored)
-├── output/                  # Evaluation results (gitignored)
-├── main.py                  # CLI entrypoint
-├── requirements.txt
-├── vercel.json
-└── .env.example
+├── app/                     # FastAPI application
+│   ├── __init__.py          # App factory, middleware, lifespan
+│   ├── models.py            # Pydantic request/response models
+│   └── routes/              # Route modules
+│       ├── projects.py      # Project CRUD
+│       ├── documents.py     # Document upload (PDF/TXT)
+│       ├── chunks.py        # Chunking configuration
+│       ├── embeddings.py    # Embedding configuration
+│       ├── rag.py           # RAG config and single-query testing
+│       ├── testsets.py      # Test set generation and curation
+│       ├── experiments.py   # Experiment runner (SSE streaming)
+│       └── analyze.py       # Suggestions and config changes
+├── pipeline/                # RAG engine
+│   ├── chunking.py          # 4 chunking strategies
+│   ├── embedding.py         # OpenAI + SentenceTransformers
+│   ├── vectorstore.py       # ChromaDB integration
+│   ├── bm25.py              # BM25 sparse search
+│   ├── rag.py               # Retrieval + generation (dense/sparse/hybrid)
+│   └── llm.py               # LLM provider routing
+├── evaluation/              # Metrics and analysis
+│   ├── metrics/             # 20+ metric modules
+│   ├── scoring.py           # Metric orchestration
+│   ├── suggestions.py       # Rule-based suggestion engine
+│   └── testgen.py           # Synthetic test generation (Ragas)
+├── db/                      # SQLite database layer
+│   └── init.py              # Schema, migrations, queries
+├── frontend/                # React + TypeScript + Tailwind SPA
+│   └── src/
+│       ├── pages/           # Setup, Build, Test, Experiment, Analyze
+│       └── components/      # UI components per feature
+├── tests/                   # pytest test suite
+├── main.py                  # Uvicorn entrypoint
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
 ```
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | FastAPI, Uvicorn |
+| Database | SQLite (WAL mode) |
+| LLM | OpenAI API (GPT-4o / GPT-4o Mini) |
+| Evaluation | Ragas 0.4+ |
+| Embeddings | OpenAI text-embedding-3-small, SentenceTransformers |
+| Vector store | ChromaDB |
+| Sparse search | BM25 (rank-bm25) |
+| Frontend | React 18, TypeScript, Tailwind CSS, Vite |
+| PDF parsing | pypdf |
