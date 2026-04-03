@@ -178,9 +178,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "Unknown error");
-    throw new ApiError(res.status, `${res.status}: ${body}`);
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // use raw body
+    }
+    throw new ApiError(res.status, detail);
   }
 
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -211,7 +219,14 @@ export async function uploadBaselineCsv(
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "Unknown error");
-    throw new ApiError(res.status, `${res.status}: ${body}`);
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // use raw body
+    }
+    throw new ApiError(res.status, detail);
   }
   return res.json() as Promise<CsvUploadResult>;
 }
@@ -287,7 +302,14 @@ export async function uploadDocument(
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "Unknown error");
-    throw new ApiError(res.status, `${res.status}: ${body}`);
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.detail) detail = parsed.detail;
+    } catch {
+      // use raw body
+    }
+    throw new ApiError(res.status, detail);
   }
   return res.json() as Promise<Document>;
 }
@@ -471,6 +493,8 @@ export interface TestSetCreate {
   num_personas?: number;
   custom_personas?: { name: string; role_description: string }[];
   use_personas?: boolean;
+  query_distribution?: Record<string, number>;
+  chunk_sample_size?: number;
 }
 
 export interface TestQuestion {
@@ -846,6 +870,13 @@ export interface ApplySuggestionResult {
   changes: Record<string, { old: unknown; new: unknown }>;
 }
 
+export interface BatchApplyResult {
+  suggestions: Suggestion[];
+  new_experiment: Experiment;
+  new_rag_config: { id: number; name: string };
+  changes: Record<string, { old: unknown; new: unknown }>;
+}
+
 // --- Delta Types ---
 
 export interface ConfigChange {
@@ -912,6 +943,24 @@ export async function applySuggestion(
     {
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
+    },
+  );
+}
+
+export async function applySuggestionsBatch(
+  projectId: number,
+  experimentId: number,
+  items: { suggestion_id: number; override_value?: string }[],
+  experimentName?: string,
+): Promise<BatchApplyResult> {
+  return request<BatchApplyResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/suggestions/apply-batch`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        items,
+        experiment_name: experimentName || undefined,
+      }),
     },
   );
 }

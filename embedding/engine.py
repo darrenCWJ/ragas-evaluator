@@ -65,7 +65,9 @@ async def _embed_sentence_transformers(texts: list[str], model_name: str, params
 
 _DISPATCH = {
     "dense_openai": _embed_openai,
+    "openai": _embed_openai,
     "dense_sentence_transformers": _embed_sentence_transformers,
+    "sentence_transformers": _embed_sentence_transformers,
 }
 
 

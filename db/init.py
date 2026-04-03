@@ -137,6 +137,27 @@ CREATE TABLE IF NOT EXISTS suggestions (
     suggested_value TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS external_baselines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    sources TEXT,
+    source_type TEXT NOT NULL DEFAULT 'csv',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS api_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    endpoint_url TEXT NOT NULL,
+    api_key TEXT,
+    headers_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id)
+);
 """
 
 

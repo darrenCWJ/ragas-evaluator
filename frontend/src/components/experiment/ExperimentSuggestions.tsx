@@ -2,10 +2,17 @@ import { useState, useEffect, useCallback } from "react";
 import {
   fetchSuggestions,
   generateSuggestions,
-  applySuggestion,
+  applySuggestionsBatch,
+  fetchChunkConfigs,
+  fetchEmbeddingConfigs,
   ApiError,
 } from "../../lib/api";
-import type { Suggestion, ApplySuggestionResult } from "../../lib/api";
+import type {
+  Suggestion,
+  BatchApplyResult,
+  ChunkConfig,
+  EmbeddingConfig,
+} from "../../lib/api";
 
 interface Props {
   projectId: number;
@@ -41,6 +48,39 @@ const PRIORITY_STYLES: Record<
 
 const CATEGORY_ORDER = ["retrieval", "generation", "embedding", "chunking"];
 
+/** Fields that need a dropdown instead of text input */
+const CONFIG_ID_FIELDS = new Set(["chunk_config_id", "embedding_config_id"]);
+
+/** Fields with fixed enum options */
+const ENUM_FIELD_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  response_mode: [
+    { value: "single_shot", label: "Single Shot" },
+    { value: "multi_step", label: "Multi Step" },
+  ],
+  search_type: [
+    { value: "dense", label: "Dense" },
+    { value: "sparse", label: "Sparse" },
+    { value: "hybrid", label: "Hybrid" },
+  ],
+};
+
+const DROPDOWN_FIELDS = new Set([
+  ...CONFIG_ID_FIELDS,
+  ...Object.keys(ENUM_FIELD_OPTIONS),
+]);
+
+/** Friendly display names for raw config field names */
+const FIELD_LABELS: Record<string, string> = {
+  chunk_config_id: "Chunking Config",
+  embedding_config_id: "Embedding Config",
+  top_k: "Top K",
+  alpha: "Alpha",
+  max_steps: "Max Steps",
+  search_type: "Search Type",
+  response_mode: "Response Mode",
+  system_prompt: "System Prompt",
+};
+
 function categoryLabel(cat: string): string {
   return cat.charAt(0).toUpperCase() + cat.slice(1);
 }
@@ -52,6 +92,19 @@ export default function ExperimentSuggestions({
 }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [generating, setGenerating] = useState(false);
+
+  // Config options for dropdowns
+  const [chunkConfigs, setChunkConfigs] = useState<ChunkConfig[]>([]);
+  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>(
+    [],
+  );
+
+  // Batch apply state
+  const [overrides, setOverrides] = useState<Record<number, string>>({});
+  const [staged, setStaged] = useState<Set<number>>(new Set());
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
@@ -66,15 +119,30 @@ export default function ExperimentSuggestions({
     }
   }, [projectId, experimentId]);
 
+  // Load suggestions and config options
   useEffect(() => {
     load();
-  }, [load]);
+    fetchChunkConfigs(projectId).then(setChunkConfigs).catch(() => {});
+    fetchEmbeddingConfigs(projectId).then(setEmbeddingConfigs).catch(() => {});
+  }, [load, projectId]);
+
+  // Reset batch state on experiment change
+  useEffect(() => {
+    setOverrides({});
+    setStaged(new Set());
+    setApplyError(null);
+    setSuccessMsg(null);
+  }, [experimentId]);
 
   const handleGenerate = async () => {
     setGenerating(true);
+    setSuccessMsg(null);
+    setApplyError(null);
     try {
       const result = await generateSuggestions(projectId, experimentId);
       setState({ status: "loaded", suggestions: result.suggestions });
+      setOverrides({});
+      setStaged(new Set());
     } catch (err) {
       setState({
         status: "error",
@@ -85,20 +153,67 @@ export default function ExperimentSuggestions({
     }
   };
 
-  const handleApplied = (
-    suggestionId: number,
-    result: ApplySuggestionResult,
-  ) => {
-    if (state.status !== "loaded") return;
-    setState({
-      status: "loaded",
-      suggestions: state.suggestions.map((s) =>
-        s.id === suggestionId ? { ...s, implemented: true } : s,
-      ),
+  const toggleStaged = (id: number) => {
+    setStaged((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
-    onExperimentCreated?.();
-    // The success message is shown inline by the SuggestionCard
-    void result; // used by card component
+  };
+
+  const setOverride = (id: number, value: string) => {
+    setOverrides((prev) => ({ ...prev, [id]: value }));
+  };
+
+  const handleBatchApply = async () => {
+    if (state.status !== "loaded" || staged.size === 0) return;
+
+    // Validate that dropdown fields have a selection
+    for (const s of state.suggestions) {
+      if (
+        staged.has(s.id) &&
+        s.config_field &&
+        DROPDOWN_FIELDS.has(s.config_field) &&
+        !overrides[s.id]?.trim()
+      ) {
+        const label = FIELD_LABELS[s.config_field] ?? s.config_field;
+        setApplyError(`Please select a value for "${label}" before applying`);
+        return;
+      }
+    }
+
+    setApplying(true);
+    setApplyError(null);
+    setSuccessMsg(null);
+    try {
+      const items = [...staged].map((id) => ({
+        suggestion_id: id,
+        override_value: overrides[id]?.trim() || undefined,
+      }));
+      const result: BatchApplyResult = await applySuggestionsBatch(
+        projectId,
+        experimentId,
+        items,
+      );
+      const appliedIds = new Set(result.suggestions.map((s) => s.id));
+      setState({
+        status: "loaded",
+        suggestions: state.suggestions.map((s) =>
+          appliedIds.has(s.id) ? { ...s, implemented: true } : s,
+        ),
+      });
+      setStaged(new Set());
+      setSuccessMsg(
+        `Created iteration experiment: ${result.new_experiment.name}`,
+      );
+      onExperimentCreated?.();
+    } catch (err) {
+      const apiErr = err as ApiError;
+      setApplyError(apiErr.message || "Failed to apply suggestions");
+    } finally {
+      setApplying(false);
+    }
   };
 
   /* ── Loading ── */
@@ -133,6 +248,10 @@ export default function ExperimentSuggestions({
 
   const { suggestions } = state;
 
+  const actionable = suggestions.filter(
+    (s) => s.config_field && !s.implemented,
+  );
+
   /* Group by category */
   const grouped = new Map<string, Suggestion[]>();
   for (const s of suggestions) {
@@ -141,7 +260,6 @@ export default function ExperimentSuggestions({
     grouped.set(s.category, list);
   }
   const sortedCategories = CATEGORY_ORDER.filter((c) => grouped.has(c));
-  // Include any categories not in the predefined order
   for (const c of grouped.keys()) {
     if (!sortedCategories.includes(c)) sortedCategories.push(c);
   }
@@ -190,9 +308,21 @@ export default function ExperimentSuggestions({
         </div>
       )}
 
-      {/* Empty after generate */}
-      {suggestions.length === 0 && !generating && state.status === "loaded" && (
-        <></>
+      {/* Success message */}
+      {successMsg && (
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+          {successMsg}
+          <span className="ml-1 text-emerald-300/60">
+            (switch to Experiment page to run it)
+          </span>
+        </div>
+      )}
+
+      {/* Apply error */}
+      {applyError && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {applyError}
+        </div>
       )}
 
       {/* Grouped suggestions */}
@@ -212,13 +342,61 @@ export default function ExperimentSuggestions({
               <SuggestionCard
                 key={s.id}
                 suggestion={s}
-                projectId={projectId}
-                onApplied={handleApplied}
+                isStaged={staged.has(s.id)}
+                overrideValue={overrides[s.id] ?? ""}
+                onToggleStaged={() => toggleStaged(s.id)}
+                onOverrideChange={(v) => setOverride(s.id, v)}
+                chunkConfigs={chunkConfigs}
+                embeddingConfigs={embeddingConfigs}
               />
             ))}
           </div>
         );
       })}
+
+      {/* Batch apply bar */}
+      {actionable.length > 0 && (
+        <div className="sticky bottom-0 flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3">
+          <span className="text-xs text-text-secondary">
+            {staged.size} of {actionable.length} suggestion
+            {actionable.length !== 1 ? "s" : ""} selected
+          </span>
+          <div className="flex items-center gap-2">
+            {staged.size > 0 && staged.size < actionable.length && (
+              <button
+                onClick={() =>
+                  setStaged(new Set(actionable.map((s) => s.id)))
+                }
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition hover:bg-elevated"
+              >
+                Select All
+              </button>
+            )}
+            {staged.size === actionable.length && actionable.length > 1 && (
+              <button
+                onClick={() => setStaged(new Set())}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition hover:bg-elevated"
+              >
+                Deselect All
+              </button>
+            )}
+            <button
+              onClick={handleBatchApply}
+              disabled={applying || staged.size === 0}
+              className="rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-base transition hover:bg-accent/90 disabled:opacity-40"
+            >
+              {applying ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="h-3 w-3 animate-spin rounded-full border border-base border-t-transparent" />
+                  Applying...
+                </span>
+              ) : (
+                `Apply ${staged.size} Change${staged.size !== 1 ? "s" : ""}`
+              )}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -227,56 +405,72 @@ export default function ExperimentSuggestions({
 
 interface CardProps {
   suggestion: Suggestion;
-  projectId: number;
-  onApplied: (id: number, result: ApplySuggestionResult) => void;
+  isStaged: boolean;
+  overrideValue: string;
+  onToggleStaged: () => void;
+  onOverrideChange: (value: string) => void;
+  chunkConfigs: ChunkConfig[];
+  embeddingConfigs: EmbeddingConfig[];
 }
 
-function SuggestionCard({ suggestion: s, projectId, onApplied }: CardProps) {
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [overrideValue, setOverrideValue] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
+function SuggestionCard({
+  suggestion: s,
+  isStaged,
+  overrideValue,
+  onToggleStaged,
+  onOverrideChange,
+  chunkConfigs,
+  embeddingConfigs,
+}: CardProps) {
   const priority = PRIORITY_STYLES[s.priority] ?? PRIORITY_STYLES["low"]!;
+  const isActionable = s.config_field && !s.implemented;
+  const hasDropdown = s.config_field && DROPDOWN_FIELDS.has(s.config_field);
 
-  const handleConfirm = async () => {
-    setApplying(true);
-    setError(null);
-    try {
-      const body = overrideValue.trim()
-        ? { override_value: overrideValue.trim() }
-        : undefined;
-      const result = await applySuggestion(projectId, s.id, body);
-      setShowConfirm(false);
-      setSuccessMsg(
-        `Created iteration experiment: ${result.new_experiment.name}`,
-      );
-      onApplied(s.id, result);
-    } catch (err) {
-      const apiErr = err as ApiError;
-      if (apiErr.status === 409 && /already applied/i.test(apiErr.message)) {
-        // Already implemented — update state
-        setShowConfirm(false);
-        onApplied(s.id, {} as ApplySuggestionResult);
-      } else if (apiErr.status === 400) {
-        // Validation error — keep panel open for override adjustment
-        setError(apiErr.message);
-      } else if (apiErr.status === 409) {
-        // Other 409 (no RAG config, etc.)
-        setError(apiErr.message);
-        setShowConfirm(false);
-      } else {
-        setError(apiErr.message || "Failed to apply suggestion");
-      }
-    } finally {
-      setApplying(false);
-    }
-  };
+  // Build dropdown options
+  const dropdownOptions: { value: string; label: string }[] =
+    s.config_field === "chunk_config_id"
+      ? chunkConfigs.map((c) => ({ value: String(c.id), label: `${c.name} (${c.method})` }))
+      : s.config_field === "embedding_config_id"
+        ? embeddingConfigs.map((c) => ({ value: String(c.id), label: `${c.name} (${c.model_name})` }))
+        : (s.config_field ? ENUM_FIELD_OPTIONS[s.config_field] : undefined) ?? [];
 
   return (
-    <div className="rounded-xl border border-border bg-card px-4 py-3">
+    <div
+      className={`rounded-xl border px-4 py-3 ${
+        isStaged ? "border-accent/40 bg-accent/5" : "border-border bg-card"
+      }`}
+    >
       <div className="flex items-start gap-3">
+        {/* Checkbox for actionable suggestions */}
+        {isActionable ? (
+          <button
+            onClick={onToggleStaged}
+            className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
+              isStaged
+                ? "border-accent bg-accent text-base"
+                : "border-border bg-base hover:border-text-muted"
+            }`}
+          >
+            {isStaged && (
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={3}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4.5 12.75l6 6 9-13.5"
+                />
+              </svg>
+            )}
+          </button>
+        ) : (
+          <div className="mt-0.5 w-4 shrink-0" />
+        )}
+
         {/* Priority badge */}
         <span
           className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${priority.bg} ${priority.text}`}
@@ -290,8 +484,8 @@ function SuggestionCard({ suggestion: s, projectId, onApplied }: CardProps) {
           {/* Suggestion text */}
           <p className="mt-1 text-sm text-text-primary">{s.suggestion}</p>
 
-          {/* Action row */}
-          <div className="mt-2 flex items-center gap-2">
+          {/* Status / config info */}
+          <div className="mt-2">
             {s.implemented ? (
               <span className="flex items-center gap-1 text-xs font-medium text-emerald-400">
                 <svg
@@ -310,109 +504,59 @@ function SuggestionCard({ suggestion: s, projectId, onApplied }: CardProps) {
                 Applied
               </span>
             ) : s.config_field ? (
-              <button
-                onClick={() => {
-                  setShowConfirm(true);
-                  setError(null);
-                }}
-                disabled={applying || showConfirm}
-                className="rounded-lg bg-accent/15 px-3 py-1 text-xs font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
-              >
-                {applying ? (
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-3 w-3 animate-spin rounded-full border border-accent border-t-transparent" />
-                    Applying...
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-text-muted">Adjust:</span>
+                  <span className="font-medium text-text-primary">
+                    {FIELD_LABELS[s.config_field!] ?? s.config_field}
                   </span>
-                ) : (
-                  "Apply"
+                  {s.suggested_value && (
+                    <>
+                      <span className="text-text-muted">to</span>
+                      <span className="font-mono text-text-primary">
+                        {s.suggested_value}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {/* Input — shown when staged */}
+                {isStaged && (
+                  hasDropdown ? (
+                    <select
+                      value={overrideValue}
+                      onChange={(e) => onOverrideChange(e.target.value)}
+                      className="block w-full max-w-xs rounded-lg border border-border bg-base px-3 py-1.5 text-xs text-text-primary focus:border-accent focus:outline-none"
+                    >
+                      <option value="">
+                        {CONFIG_ID_FIELDS.has(s.config_field!) ? "Select a config..." : "Select an option..."}
+                      </option>
+                      {dropdownOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={overrideValue}
+                      onChange={(e) => onOverrideChange(e.target.value)}
+                      placeholder={
+                        s.suggested_value
+                          ? `Override (default: ${s.suggested_value})`
+                          : "Enter value"
+                      }
+                      className="block w-full max-w-xs rounded-lg border border-border bg-base px-3 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none"
+                    />
+                  )
                 )}
-              </button>
+              </div>
             ) : (
               <span className="text-xs italic text-text-muted">
                 Manual review needed
               </span>
             )}
           </div>
-
-          {/* Success message */}
-          {successMsg && (
-            <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-              {successMsg}
-              <span className="ml-1 text-emerald-300/60">
-                (switch to Experiment page to run it)
-              </span>
-            </div>
-          )}
-
-          {/* Inline confirmation panel */}
-          {showConfirm && !s.implemented && (
-            <div className="mt-3 rounded-lg border border-accent/20 bg-accent/5 px-4 py-3">
-              <p className="text-xs font-medium text-text-secondary">
-                Apply suggestion
-              </p>
-              <div className="mt-2 space-y-1 text-xs">
-                <div className="flex gap-2">
-                  <span className="text-text-muted">Config field:</span>
-                  <span className="font-mono text-text-primary">
-                    {s.config_field}
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="text-text-muted">Suggested change:</span>
-                  <span className="font-mono text-text-primary">
-                    {s.suggested_value ?? "requires manual input"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Override input */}
-              <div className="mt-3">
-                <label className="text-[11px] text-text-muted">
-                  Override value (optional)
-                </label>
-                <input
-                  type="text"
-                  value={overrideValue}
-                  onChange={(e) => setOverrideValue(e.target.value)}
-                  placeholder={s.suggested_value ?? "Enter value"}
-                  className="mt-1 block w-full rounded-lg border border-border bg-base px-3 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none"
-                />
-              </div>
-
-              {/* Error */}
-              {error && (
-                <p className="mt-2 text-xs text-red-400">{error}</p>
-              )}
-
-              {/* Buttons */}
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  onClick={handleConfirm}
-                  disabled={applying}
-                  className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-base transition hover:bg-accent/90 disabled:opacity-40"
-                >
-                  {applying ? (
-                    <span className="flex items-center gap-1.5">
-                      <span className="h-3 w-3 animate-spin rounded-full border border-base border-t-transparent" />
-                      Applying...
-                    </span>
-                  ) : (
-                    "Confirm"
-                  )}
-                </button>
-                <button
-                  onClick={() => {
-                    setShowConfirm(false);
-                    setError(null);
-                  }}
-                  disabled={applying}
-                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

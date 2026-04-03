@@ -3,6 +3,8 @@ import csv
 import io
 import json
 import logging
+import os
+import random
 import sqlite3
 import statistics
 import sys
@@ -179,7 +181,10 @@ VALID_ANNOTATION_STATUSES = {"approved", "rejected", "edited"}
 VALID_BULK_ACTIONS = {"approve", "reject", "approve_all", "reject_all"}
 BULK_ACTION_TO_STATUS = {"approve": "approved", "reject": "rejected", "approve_all": "approved", "reject_all": "rejected"}
 
-MAX_CHUNKS_FOR_GENERATION = 500
+MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", 0))
+
+
+VALID_QUERY_TYPES = {"single_hop_specific", "multi_hop_abstract", "multi_hop_specific"}
 
 
 class TestSetCreate(BaseModel):
@@ -189,6 +194,8 @@ class TestSetCreate(BaseModel):
     num_personas: int = 3
     custom_personas: list[dict] | None = None
     use_personas: bool = True
+    query_distribution: dict[str, float] | None = None
+    chunk_sample_size: int = 0  # 0 = use all chunks
 
     @field_validator("testset_size")
     @classmethod
@@ -507,6 +514,27 @@ class ApplySuggestionRequest(BaseModel):
         return v
 
 
+class BatchApplyItem(BaseModel):
+    suggestion_id: int
+    override_value: str | None = None
+
+
+class BatchApplyRequest(BaseModel):
+    items: list[BatchApplyItem]
+    experiment_name: str | None = None
+
+    @field_validator("experiment_name")
+    @classmethod
+    def validate_experiment_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("experiment_name must not be empty")
+            if len(v) > 200:
+                raise ValueError("experiment_name must not exceed 200 characters")
+        return v
+
+
 def _build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
     """Build a dict satisfying the rag_config_row interface for RAG query functions."""
     retrieval_config = json.loads(experiment_row["retrieval_config_json"]) if experiment_row["retrieval_config_json"] else {}
@@ -612,18 +640,24 @@ async def generate_testset(req: TestGenRequest):
     )
 
     if req.use_personas:
-        result = await generate_testset_with_personas(
-            chunks=req.chunks,
-            testset_size=req.testset_size,
-            num_personas=req.num_personas,
-            custom_personas=req.custom_personas,
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: generate_testset_with_personas(
+                chunks=req.chunks,
+                testset_size=req.testset_size,
+                num_personas=req.num_personas,
+                custom_personas=req.custom_personas,
+            ),
         )
         return result
     else:
-        questions = await generate_testset_from_chunks(
-            chunks=req.chunks,
-            testset_size=req.testset_size,
-            custom_personas=req.custom_personas,
+        questions = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: generate_testset_from_chunks(
+                chunks=req.chunks,
+                testset_size=req.testset_size,
+                custom_personas=req.custom_personas,
+            ),
         )
         return {"personas": [], "questions": questions}
 
@@ -1604,6 +1638,10 @@ async def delete_rag_config(project_id: int, config_id: int):
     ).fetchone()
     if existing is None:
         raise HTTPException(status_code=404, detail="RAG config not found")
+    conn.execute(
+        "UPDATE experiments SET rag_config_id = NULL WHERE rag_config_id = ?",
+        (config_id,),
+    )
     conn.execute("DELETE FROM rag_configs WHERE id = ?", (config_id,))
     conn.commit()
     return {"detail": "RAG config deleted"}
@@ -1773,14 +1811,19 @@ async def create_test_set(project_id: int, req: TestSetCreate):
             detail="No chunks found for this config. Generate chunks first.",
         )
 
-    # Guard: chunk count limit
-    if len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
+    # Guard: chunk count limit (0 = no limit)
+    if MAX_CHUNKS_FOR_GENERATION > 0 and len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
         raise HTTPException(
             status_code=422,
             detail=f"Too many chunks ({len(chunk_rows)}). Maximum {MAX_CHUNKS_FOR_GENERATION} supported for test generation.",
         )
 
     chunks = [r["content"] for r in chunk_rows]
+
+    # Sample chunks if requested
+    total_chunks = len(chunks)
+    if req.chunk_sample_size > 0 and req.chunk_sample_size < total_chunks:
+        chunks = random.sample(chunks, req.chunk_sample_size)
 
     # Auto-generate name if not provided
     name = req.name or f"Test Set ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
@@ -1792,6 +1835,10 @@ async def create_test_set(project_id: int, req: TestSetCreate):
         "num_personas": req.num_personas,
         "custom_personas": req.custom_personas,
         "use_personas": req.use_personas,
+        "query_distribution": req.query_distribution,
+        "chunk_sample_size": req.chunk_sample_size,
+        "total_chunks": total_chunks,
+        "sampled_chunks": len(chunks),
     }
     cursor = conn.execute(
         "INSERT INTO test_sets (project_id, name, generation_config_json) VALUES (?, ?, ?)",
@@ -1801,13 +1848,18 @@ async def create_test_set(project_id: int, req: TestSetCreate):
     test_set_id = cursor.lastrowid
 
     # Generate questions — rollback test_set on failure
+    # Run in thread pool to avoid nested event loop issues (Ragas manages its own async loop)
     try:
-        result = await generate_project_testset(
-            chunks=chunks,
-            testset_size=req.testset_size,
-            use_personas=req.use_personas,
-            num_personas=req.num_personas,
-            custom_personas=req.custom_personas,
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: generate_project_testset(
+                chunks=chunks,
+                testset_size=req.testset_size,
+                use_personas=req.use_personas,
+                num_personas=req.num_personas,
+                custom_personas=req.custom_personas,
+                query_distribution=req.query_distribution,
+            ),
         )
     except Exception as e:
         # Rollback: remove the test_set row so no orphan persists
@@ -2577,12 +2629,10 @@ async def delete_experiment(project_id: int, experiment_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
-    if row["status"] != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot delete experiment with status '{row['status']}'. Only pending experiments can be deleted.",
-        )
-
+    conn.execute(
+        "UPDATE experiments SET baseline_experiment_id = NULL WHERE baseline_experiment_id = ?",
+        (experiment_id,),
+    )
     conn.execute("DELETE FROM experiments WHERE id = ?", (experiment_id,))
     conn.commit()
     return None
@@ -2924,18 +2974,23 @@ def _generate_suggestions(aggregate_metrics: dict, per_question_results: list[di
                 if val is not None:
                     metric_scores.setdefault(mn, []).append(val)
 
+        high_variance_metrics: list[str] = []
         for mn, scores in metric_scores.items():
-            if len(scores) >= 3:  # Need at least 3 data points for meaningful stdev
+            if len(scores) >= 3:
                 stdev = statistics.stdev(scores)
                 if stdev > 0.3:
-                    suggestions.append({
-                        "category": "chunking",
-                        "signal": f"{mn} stdev {stdev:.2f} across {len(scores)} questions",
-                        "suggestion": f"High variance in {mn} — inconsistent chunk quality. Review chunking strategy for uniformity",
-                        "priority": "medium",
-                        "config_field": "chunk_config_id",
-                        "suggested_value": None,
-                    })
+                    high_variance_metrics.append(f"{mn} (stdev {stdev:.2f})")
+
+        if high_variance_metrics:
+            signal_parts = ", ".join(high_variance_metrics)
+            suggestions.append({
+                "category": "chunking",
+                "signal": f"High variance in {signal_parts}",
+                "suggestion": f"Inconsistent scores across questions in {len(high_variance_metrics)} metric{'s' if len(high_variance_metrics) > 1 else ''} — try a different chunking config for more uniform results",
+                "priority": "medium" if len(high_variance_metrics) < 3 else "high",
+                "config_field": "chunk_config_id",
+                "suggested_value": None,
+            })
 
     return suggestions
 
@@ -3126,7 +3181,8 @@ def _apply_config_change(config_row: dict, config_field: str, suggested_value: s
 
     elif config_field in ("embedding_config_id", "chunk_config_id"):
         if value_to_use is None:
-            raise ValueError(f"{config_field} requires an override_value with the new config ID")
+            label = "chunking config" if config_field == "chunk_config_id" else "embedding config"
+            raise ValueError(f"Please select a {label} from the dropdown")
         try:
             new_value = int(value_to_use)
         except (ValueError, TypeError):
@@ -3290,6 +3346,165 @@ async def apply_suggestion(project_id: int, suggestion_id: int, req: ApplySugges
         "new_experiment": _parse_experiment_row(new_experiment_row),
         "new_rag_config": {"id": new_config_id, "name": new_config_name},
         "changes": changes,
+    }
+
+
+@app.post("/api/projects/{project_id}/experiments/{experiment_id}/suggestions/apply-batch")
+async def apply_suggestions_batch(project_id: int, experiment_id: int, req: BatchApplyRequest):
+    """Apply multiple suggestions at once, creating a single new RAG config and experiment."""
+    if not req.items:
+        raise HTTPException(status_code=400, detail="No suggestions provided")
+
+    conn = get_db_conn()
+    conn.row_factory = sqlite3.Row
+
+    # Validate experiment exists and belongs to project
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["rag_config_id"] is None:
+        raise HTTPException(status_code=409, detail="Experiment has no RAG config")
+
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (experiment["rag_config_id"], project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(status_code=409, detail="Original RAG config no longer exists")
+
+    # Load and validate all suggestions
+    suggestion_ids = [item.suggestion_id for item in req.items]
+    override_map = {item.suggestion_id: item.override_value for item in req.items}
+
+    placeholders = ",".join("?" * len(suggestion_ids))
+    suggestions = conn.execute(
+        f"""SELECT s.* FROM suggestions s
+            WHERE s.id IN ({placeholders}) AND s.experiment_id = ?""",
+        (*suggestion_ids, experiment_id),
+    ).fetchall()
+
+    if len(suggestions) != len(suggestion_ids):
+        found_ids = {s["id"] for s in suggestions}
+        missing = [sid for sid in suggestion_ids if sid not in found_ids]
+        raise HTTPException(status_code=404, detail=f"Suggestions not found: {missing}")
+
+    # Validate none are already implemented and all have config_field
+    errors = []
+    for s in suggestions:
+        if s["implemented"]:
+            errors.append(f"Suggestion {s['id']} already applied")
+        if s["config_field"] is None:
+            errors.append(f"Suggestion {s['id']} has no config mapping (manual review only)")
+    if errors:
+        raise HTTPException(status_code=409, detail="; ".join(errors))
+
+    # Apply all changes to a single config dict
+    config_dict = dict(rag_config)
+    all_changes: dict = {}
+    for s in suggestions:
+        try:
+            updated_fields, changes = _apply_config_change(
+                config_dict, s["config_field"], s["suggested_value"], override_map.get(s["id"]),
+            )
+            # Apply to running config so subsequent changes see prior ones
+            config_dict.update(updated_fields)
+            all_changes.update(changes)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Suggestion {s['id']} ({s['config_field']}): {e}")
+
+    # Count existing iterations for naming
+    iteration_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM experiments WHERE baseline_experiment_id = ?",
+        (experiment_id,),
+    ).fetchone()["cnt"]
+
+    new_config_name = f"{rag_config['name']} — iteration {iteration_count + 1}"
+    new_experiment_name = req.experiment_name or f"{experiment['name']} — iteration {iteration_count + 1}"
+
+    try:
+        new_config_values = {
+            "project_id": project_id,
+            "name": new_config_name,
+            "embedding_config_id": config_dict["embedding_config_id"],
+            "chunk_config_id": config_dict["chunk_config_id"],
+            "search_type": config_dict["search_type"],
+            "sparse_config_id": config_dict["sparse_config_id"],
+            "alpha": config_dict["alpha"],
+            "llm_model": config_dict["llm_model"],
+            "llm_params_json": config_dict["llm_params_json"],
+            "top_k": config_dict["top_k"],
+            "system_prompt": config_dict["system_prompt"],
+            "response_mode": config_dict["response_mode"],
+            "max_steps": config_dict["max_steps"],
+        }
+
+        cursor = conn.execute(
+            """INSERT INTO rag_configs
+               (project_id, name, embedding_config_id, chunk_config_id, search_type,
+                sparse_config_id, alpha, llm_model, llm_params_json, top_k, system_prompt,
+                response_mode, max_steps)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_config_values["project_id"], new_config_values["name"],
+             new_config_values["embedding_config_id"], new_config_values["chunk_config_id"],
+             new_config_values["search_type"], new_config_values["sparse_config_id"],
+             new_config_values["alpha"], new_config_values["llm_model"],
+             new_config_values["llm_params_json"], new_config_values["top_k"],
+             new_config_values["system_prompt"], new_config_values["response_mode"],
+             new_config_values["max_steps"]),
+        )
+        new_config_id = cursor.lastrowid
+
+        retrieval_config = json.dumps({
+            "search_type": new_config_values["search_type"],
+            "sparse_config_id": new_config_values["sparse_config_id"],
+            "alpha": new_config_values["alpha"],
+            "top_k": new_config_values["top_k"],
+            "system_prompt": new_config_values["system_prompt"],
+            "response_mode": new_config_values["response_mode"],
+            "max_steps": new_config_values["max_steps"],
+        })
+
+        cursor2 = conn.execute(
+            """INSERT INTO experiments
+               (project_id, test_set_id, name, model, model_params_json, retrieval_config_json,
+                chunk_config_id, embedding_config_id, rag_config_id, baseline_experiment_id, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (project_id, experiment["test_set_id"], new_experiment_name, experiment["model"],
+             experiment["model_params_json"], retrieval_config,
+             new_config_values["chunk_config_id"], new_config_values["embedding_config_id"],
+             new_config_id, experiment_id),
+        )
+        new_experiment_id = cursor2.lastrowid
+
+        # Mark all suggestions as implemented
+        conn.execute(
+            f"UPDATE suggestions SET implemented = TRUE WHERE id IN ({placeholders})",
+            suggestion_ids,
+        )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    # Build response
+    updated_suggestions = conn.execute(
+        f"SELECT * FROM suggestions WHERE id IN ({placeholders})",
+        suggestion_ids,
+    ).fetchall()
+    new_experiment_row = conn.execute(
+        "SELECT * FROM experiments WHERE id = ?", (new_experiment_id,)
+    ).fetchone()
+
+    return {
+        "suggestions": [dict(s) for s in updated_suggestions],
+        "new_experiment": _parse_experiment_row(new_experiment_row),
+        "new_rag_config": {"id": new_config_id, "name": new_config_name},
+        "changes": all_changes,
     }
 
 
