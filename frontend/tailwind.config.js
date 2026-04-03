@@ -22,6 +22,10 @@ export default {
         "delta-pos": "#22c55e",
         "delta-neg": "#ef4444",
       },
+      fontSize: {
+        "2xs": ["0.625rem", { lineHeight: "0.875rem" }],   // 10px
+        "micro": ["0.6875rem", { lineHeight: "1rem" }],     // 11px
+      },
       fontFamily: {
         sans: ['"DM Sans"', "system-ui", "sans-serif"],
         mono: ['"JetBrains Mono"', "monospace"],

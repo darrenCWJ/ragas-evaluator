@@ -329,7 +329,7 @@ function CompareQuestionRow({
         </span>
 
         {/* Type badge */}
-        <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+        <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-2xs font-medium text-accent">
           {question.question_type}
         </span>
 
@@ -345,7 +345,7 @@ function CompareQuestionRow({
                 className={`inline-block h-2 w-2 rounded-full ${expColor(es.idx).dot}`}
               />
               <span
-                className={`font-mono text-[10px] font-semibold ${
+                className={`font-mono text-2xs font-semibold ${
                   es.avg !== null ? scoreTextColor(es.avg) : "text-text-muted"
                 }`}
               >
@@ -364,7 +364,7 @@ function CompareQuestionRow({
           <div className="border-t border-border px-4 py-4 space-y-5">
             {/* Reference answer */}
             <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wider text-text-muted">
                 Reference Answer
               </p>
               <p className="text-sm text-text-primary whitespace-pre-wrap">
@@ -404,7 +404,7 @@ function CompareQuestionRow({
                       <>
                         {/* Response */}
                         <div>
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                          <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-text-muted">
                             Response
                           </p>
                           {expData.response ? (
@@ -421,7 +421,7 @@ function CompareQuestionRow({
                         {/* Contexts */}
                         {expData.retrieved_contexts.length > 0 && (
                           <div>
-                            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                            <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-text-muted">
                               Contexts ({expData.retrieved_contexts.length})
                             </p>
                             <div className="space-y-1">
@@ -430,14 +430,14 @@ function CompareQuestionRow({
                                 .map((ctx, ci) => (
                                   <p
                                     key={ci}
-                                    className="truncate text-[10px] text-text-muted"
+                                    className="truncate text-2xs text-text-muted"
                                     title={ctx.content}
                                   >
                                     {ci + 1}. {ctx.content}
                                   </p>
                                 ))}
                               {expData.retrieved_contexts.length > 3 && (
-                                <p className="text-[10px] text-text-muted">
+                                <p className="text-2xs text-text-muted">
                                   +{expData.retrieved_contexts.length - 3} more
                                 </p>
                               )}
@@ -447,7 +447,7 @@ function CompareQuestionRow({
 
                         {/* Metrics */}
                         <div>
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                          <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-text-muted">
                             Metrics
                           </p>
                           <div className="space-y-1">
@@ -462,7 +462,7 @@ function CompareQuestionRow({
                                   key={name}
                                   className="flex items-center gap-2"
                                 >
-                                  <span className="w-20 shrink-0 truncate text-[10px] text-text-muted">
+                                  <span className="w-20 shrink-0 truncate text-2xs text-text-muted">
                                     {humanizeMetric(name)}
                                   </span>
                                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-elevated">
@@ -474,7 +474,7 @@ function CompareQuestionRow({
                                     />
                                   </div>
                                   <span
-                                    className={`w-8 text-right font-mono text-[10px] font-semibold ${scoreTextColor(value)}`}
+                                    className={`w-8 text-right font-mono text-2xs font-semibold ${scoreTextColor(value)}`}
                                   >
                                     {(value * 100).toFixed(0)}
                                   </span>

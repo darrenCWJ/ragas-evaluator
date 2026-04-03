@@ -15,8 +15,8 @@ export default function WorkspaceLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-base">
+      {/* Sidebar — hidden on small screens */}
+      <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-base">
         {/* Logo area */}
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
@@ -24,7 +24,7 @@ export default function WorkspaceLayout() {
           </div>
           <div>
             <div className="text-sm font-semibold text-text-primary leading-tight">Ragas</div>
-            <div className="text-[10px] font-medium uppercase tracking-widest text-text-muted">Platform</div>
+            <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">Platform</div>
           </div>
         </div>
 
@@ -35,7 +35,7 @@ export default function WorkspaceLayout() {
 
         {/* Sidebar footer */}
         <div className="border-t border-border px-4 py-3">
-          <div className="text-[10px] text-text-muted">v0.2.0</div>
+          <div className="text-2xs text-text-muted">v0.2.0</div>
         </div>
       </aside>
 

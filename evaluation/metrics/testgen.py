@@ -9,9 +9,6 @@ Supports:
 - Custom query distribution (single-hop / multi-hop mix)
 """
 
-import asyncio
-from dataclasses import dataclass
-
 from openai import OpenAI
 from ragas.llms import llm_factory
 from ragas.embeddings import embedding_factory

@@ -33,7 +33,7 @@ export default function AnalyzePage() {
   const selected = experiments.find((e) => e.id === selectedId) ?? null;
 
   return (
-    <div className="mx-auto max-w-3xl pt-8">
+    <div className="mx-auto max-w-3xl pt-8 xl:max-w-5xl">
       {/* Header */}
       <div className="mb-8 flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/15">

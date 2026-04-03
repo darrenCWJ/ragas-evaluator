@@ -73,7 +73,7 @@ export default function QuestionResultRow({ result }: Props) {
         </span>
 
         {/* Question type badge */}
-        <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+        <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-2xs font-medium text-accent">
           {result.question_type}
         </span>
 
@@ -92,7 +92,7 @@ export default function QuestionResultRow({ result }: Props) {
                 />
               </div>
               <span
-                className={`w-7 text-right font-mono text-[10px] ${textColor(value)}`}
+                className={`w-7 text-right font-mono text-2xs ${textColor(value)}`}
               >
                 {(value * 100).toFixed(0)}
               </span>
@@ -188,7 +188,7 @@ function DetailBlock({
 }) {
   return (
     <div>
-      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+      <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wider text-text-muted">
         {label}
       </p>
       {children}
@@ -209,7 +209,7 @@ function ContextBlock({ index, content }: { index: number; content: string }) {
         }}
         className="flex w-full items-center gap-2 text-left"
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/10 font-mono text-[10px] font-bold text-accent">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/10 font-mono text-2xs font-bold text-accent">
           {index}
         </span>
         <span className="min-w-0 flex-1 text-xs text-text-secondary">

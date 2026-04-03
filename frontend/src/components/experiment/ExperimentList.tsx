@@ -157,7 +157,7 @@ export default function ExperimentList({
                         onChange={() => onToggleCompare(exp.id)}
                         className="h-3.5 w-3.5 rounded border-border bg-elevated accent-accent cursor-pointer"
                       />
-                      <span className="text-[10px] text-text-muted">Compare</span>
+                      <span className="text-2xs text-text-muted">Compare</span>
                     </label>
                   )}
                   {confirmDeleteId === exp.id ? (

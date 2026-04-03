@@ -80,7 +80,7 @@ export default function PipelineStatus({
 
             <span className="text-xs font-medium">{step.label}</span>
             <span
-              className={`font-mono text-[10px] ${
+              className={`font-mono text-2xs ${
                 step.configured ? "text-accent/70" : "text-text-muted"
               }`}
             >

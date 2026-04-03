@@ -178,7 +178,7 @@ export default function Stepper() {
               <span className="text-sm font-medium leading-tight truncate">
                 {stage.label}
               </span>
-              <span className="text-[11px] text-text-muted leading-tight truncate">
+              <span className="text-micro text-text-muted leading-tight truncate">
                 {stage.desc}
               </span>
             </div>

@@ -387,11 +387,11 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
                     <span className="truncate text-sm font-medium text-text-primary">
                       {cfg.name}
                     </span>
-                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
+                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider text-accent">
                       {cfg.method.replace("_", " ")}
                     </span>
                     {cfg.step2_method && (
-                      <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-muted">
+                      <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-2xs uppercase tracking-wider text-text-muted">
                         + {cfg.step2_method.replace("_", " ")}
                       </span>
                     )}

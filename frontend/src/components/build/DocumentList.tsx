@@ -106,7 +106,7 @@ export default function DocumentList({
         >
           <div className="flex items-center gap-3 overflow-hidden">
             <span
-              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+              className={`shrink-0 rounded px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider ${
                 doc.file_type === ".pdf"
                   ? "bg-score-low/15 text-score-low"
                   : "bg-accent/15 text-accent"

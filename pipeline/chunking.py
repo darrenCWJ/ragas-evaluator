@@ -4,6 +4,11 @@ import re
 
 VALID_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap"}
 
+_PARAM_ALIASES = {
+    "parent_chunk_size": "parent_size",
+    "child_chunk_size": "child_size",
+}
+
 
 def _coerce_numeric(params: dict) -> dict:
     """Coerce string values that look numeric to int or float."""
@@ -33,11 +38,7 @@ def chunk_text(text: str, method: str, params: dict) -> list[str]:
     """
     params = _coerce_numeric(params)
     # Normalize frontend param names to engine param names
-    _ALIASES = {
-        "parent_chunk_size": "parent_size",
-        "child_chunk_size": "child_size",
-    }
-    params = {_ALIASES.get(k, k): v for k, v in params.items()}
+    params = {_PARAM_ALIASES.get(k, k): v for k, v in params.items()}
     # "overlap" means "chunk_overlap" for recursive (fixed_overlap already uses "overlap")
     if method == "recursive" and "overlap" in params and "chunk_overlap" not in params:
         params["chunk_overlap"] = params.pop("overlap")

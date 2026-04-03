@@ -276,11 +276,11 @@ export default function EmbeddingConfigPanel({
                     <span className="truncate text-sm font-medium text-text-primary">
                       {cfg.name}
                     </span>
-                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
+                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider text-accent">
                       {TYPE_LABELS[cfg.type as EmbeddingType] ?? cfg.type}
                     </span>
                     {cfg.model_name && (
-                      <span className="shrink-0 font-mono text-[10px] text-text-muted">
+                      <span className="shrink-0 font-mono text-2xs text-text-muted">
                         {cfg.model_name}
                       </span>
                     )}

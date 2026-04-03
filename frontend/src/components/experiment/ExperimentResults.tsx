@@ -140,7 +140,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
           <button
             onClick={() => handleExport("csv")}
             disabled={exporting !== null}
-            className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-[11px] font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
+            className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-micro font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
           >
             {exporting === "csv" ? (
               <span className="h-3 w-3 animate-spin rounded-full border border-text-secondary border-t-transparent" />
@@ -154,7 +154,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
           <button
             onClick={() => handleExport("json")}
             disabled={exporting !== null}
-            className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-[11px] font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
+            className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-micro font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
           >
             {exporting === "json" ? (
               <span className="h-3 w-3 animate-spin rounded-full border border-text-secondary border-t-transparent" />

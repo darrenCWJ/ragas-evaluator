@@ -52,7 +52,7 @@ def search(
     client = _get_client()
     try:
         collection = client.get_collection(name=collection_name)
-    except (ValueError, Exception) as e:
+    except Exception as e:
         if "not found" in str(e).lower() or "does not exist" in str(e).lower():
             return []
         raise
@@ -81,7 +81,7 @@ def delete_collection(collection_name: str) -> None:
     client = _get_client()
     try:
         client.delete_collection(name=collection_name)
-    except (ValueError, Exception) as e:
+    except Exception as e:
         # chromadb may raise NotFoundError or ValueError depending on version
         if "not found" in str(e).lower() or "does not exist" in str(e).lower():
             pass

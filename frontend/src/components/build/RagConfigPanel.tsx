@@ -273,13 +273,13 @@ export default function RagConfigPanel({
                     <span className="truncate text-sm font-medium text-text-primary">
                       {cfg.name}
                     </span>
-                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
+                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider text-accent">
                       {SEARCH_LABELS[cfg.search_type] ?? cfg.search_type}
                     </span>
-                    <span className="shrink-0 font-mono text-[10px] text-text-muted">
+                    <span className="shrink-0 font-mono text-2xs text-text-muted">
                       {cfg.llm_model}
                     </span>
-                    <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-text-muted">
+                    <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-2xs text-text-muted">
                       {MODE_LABELS[cfg.response_mode] ?? cfg.response_mode}
                     </span>
                     <span className="shrink-0 text-xs text-text-muted">
