@@ -1,8 +1,20 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { ChunkConfig, TestSetCreate } from "../../lib/api";
 import { createTestSet, ApiError } from "../../lib/api";
 
 const GENERATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+const QUERY_TYPES = [
+  { key: "single_hop_specific", label: "Single-hop", description: "Fact lookup from one chunk" },
+  { key: "multi_hop_abstract", label: "Multi-hop Abstract", description: "Abstract reasoning across chunks" },
+  { key: "multi_hop_specific", label: "Multi-hop Specific", description: "Specific reasoning across chunks" },
+] as const;
+
+const DEFAULT_DISTRIBUTION: Record<string, number> = {
+  single_hop_specific: 0.5,
+  multi_hop_abstract: 0.25,
+  multi_hop_specific: 0.25,
+};
 
 interface Props {
   projectId: number;
@@ -23,11 +35,25 @@ export default function TestSetGenerate({
   const [customPersonas, setCustomPersonas] = useState<
     { name: string; role_description: string }[]
   >([]);
+  const [chunkSampleSize, setChunkSampleSize] = useState(100);
+  const [queryDistribution, setQueryDistribution] = useState<Record<string, number>>({ ...DEFAULT_DISTRIBUTION });
+  const [useCustomDistribution, setUseCustomDistribution] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState<string | null>(null);
   const [personasError, setPersonasError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!generating) {
+      setElapsed(0);
+      return;
+    }
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [generating]);
 
   const validateSize = (v: number) => {
     if (v < 1 || v > 100) {
@@ -64,6 +90,8 @@ export default function TestSetGenerate({
         testset_size: testsetSize,
         num_personas: usePersonas ? numPersonas : undefined,
         use_personas: usePersonas,
+        query_distribution: useCustomDistribution ? queryDistribution : undefined,
+        chunk_sample_size: chunkSampleSize,
       };
       if (name.trim()) config.name = name.trim();
 
@@ -87,6 +115,9 @@ export default function TestSetGenerate({
       setNumPersonas(3);
       setUsePersonas(true);
       setCustomPersonas([]);
+      setChunkSampleSize(100);
+      setUseCustomDistribution(false);
+      setQueryDistribution({ ...DEFAULT_DISTRIBUTION });
       onTestSetCreated();
     } catch (err) {
       if ((err as Error).name === "AbortError") {
@@ -95,7 +126,7 @@ export default function TestSetGenerate({
         );
       } else if (err instanceof ApiError) {
         if (err.status === 422) {
-          setError("No chunks found for this config. Generate chunks in the Build stage first.");
+          setError(err.message || "No chunks found for this config. Generate chunks in the Build stage first.");
         } else if (err.status === 429) {
           setError("Rate limit exceeded — wait a moment and try again.");
         } else {
@@ -119,6 +150,70 @@ export default function TestSetGenerate({
           <span className="font-medium text-text-secondary">Build</span> stage
           first.
         </p>
+      </div>
+    );
+  }
+
+  if (generating) {
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
+    const steps = [
+      { label: "Extracting summaries from chunks", threshold: 0 },
+      { label: "Building embeddings", threshold: 30 },
+      { label: "Extracting themes & entities", threshold: 60 },
+      { label: "Building knowledge graph relationships", threshold: 90 },
+      { label: "Generating personas", threshold: 120 },
+      { label: "Synthesizing questions", threshold: 150 },
+    ];
+    let activeIdx = 0;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (elapsed >= (steps[i]?.threshold ?? 0)) { activeIdx = i; break; }
+    }
+
+    return (
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-text-secondary">
+          Generate Test Set
+        </h3>
+        <div className="flex flex-col items-center gap-5 rounded-lg border border-border bg-elevated/50 py-10 px-6">
+          {/* Spinner */}
+          <svg className="h-10 w-10 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+
+          <div className="text-center">
+            <p className="text-sm font-medium text-text-primary">Generating test set…</p>
+            <p className="mt-1 text-xs tabular-nums text-text-muted">Elapsed: {timeStr}</p>
+          </div>
+
+          {/* Steps */}
+          <div className="w-full max-w-xs space-y-2">
+            {steps.map((step, i) => (
+              <div key={i} className="flex items-center gap-2">
+                {i < activeIdx ? (
+                  <svg className="h-4 w-4 shrink-0 text-score-high" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : i === activeIdx ? (
+                  <svg className="h-4 w-4 shrink-0 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <div className="h-4 w-4 shrink-0 rounded-full border border-border" />
+                )}
+                <span className={`text-xs ${i <= activeIdx ? "text-text-secondary" : "text-text-muted"}`}>
+                  {step.label}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-xs text-text-muted">This may take a few minutes depending on chunk count.</p>
+        </div>
       </div>
     );
   }
@@ -193,6 +288,24 @@ export default function TestSetGenerate({
           {sizeError && (
             <p className="mt-1 text-xs text-red-400">{sizeError}</p>
           )}
+        </div>
+
+        {/* Chunk sample size */}
+        <div>
+          <label className="mb-1 block text-xs font-medium text-text-secondary">
+            Chunk Sample Size
+          </label>
+          <input
+            type="number"
+            min={0}
+            value={chunkSampleSize}
+            onChange={(e) => setChunkSampleSize(Number(e.target.value))}
+            className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
+            disabled={generating}
+          />
+          <p className="mt-1 text-xs text-text-muted">
+            Random subset of chunks to use. 0 = all chunks.
+          </p>
         </div>
 
         {/* Use personas toggle */}
@@ -326,6 +439,58 @@ export default function TestSetGenerate({
                 </span>
               )}
             </button>
+          </div>
+        )}
+        {/* Query distribution toggle */}
+        <div className="sm:col-span-2 flex items-end gap-3 pb-1">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={useCustomDistribution}
+              onChange={(e) => setUseCustomDistribution(e.target.checked)}
+              className="h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+              disabled={generating}
+            />
+            Custom Query Distribution
+          </label>
+        </div>
+
+        {/* Query distribution sliders */}
+        {useCustomDistribution && (
+          <div className="sm:col-span-2 space-y-3 rounded-lg border border-border bg-elevated/50 p-3">
+            <p className="text-xs text-text-muted">
+              Adjust the proportion of each question type. Weights are normalized automatically.
+            </p>
+            {QUERY_TYPES.map((qt) => {
+              const total = Object.values(queryDistribution).reduce((a, b) => a + b, 0);
+              const weight = queryDistribution[qt.key] ?? 0;
+              const pct = total > 0 ? Math.round((weight / total) * 100) : 0;
+              return (
+                <div key={qt.key} className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-text-secondary">
+                      {qt.label}
+                      <span className="ml-1 font-normal text-text-muted">— {qt.description}</span>
+                    </label>
+                    <span className="text-xs tabular-nums text-text-muted">{pct}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={(queryDistribution[qt.key] ?? 0) * 100}
+                    onChange={(e) => {
+                      setQueryDistribution((prev) => ({
+                        ...prev,
+                        [qt.key]: Number(e.target.value) / 100,
+                      }));
+                    }}
+                    className="w-full accent-accent"
+                    disabled={generating}
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

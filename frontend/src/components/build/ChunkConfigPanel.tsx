@@ -39,6 +39,7 @@ const PARAM_HELP: Record<string, string> = {
 interface Props {
   projectId: number;
   documents: Doc[];
+  onConfigsChanged?: () => void;
 }
 
 function validateParams(
@@ -67,7 +68,7 @@ function validateParams(
   return null;
 }
 
-export default function ChunkConfigPanel({ projectId, documents }: Props) {
+export default function ChunkConfigPanel({ projectId, documents, onConfigsChanged }: Props) {
   const [configs, setConfigs] = useState<ChunkConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +154,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
       setParams({ ...METHOD_DEFAULTS.recursive });
       setStep2Enabled(false);
       loadConfigs();
+      onConfigsChanged?.();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -167,6 +169,7 @@ export default function ChunkConfigPanel({ projectId, documents }: Props) {
       await deleteChunkConfig(projectId, configId);
       setConfirmDeleteId(null);
       loadConfigs();
+      onConfigsChanged?.();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
       setConfirmDeleteId(null);

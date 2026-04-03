@@ -7,11 +7,10 @@ builds a prompt, calls the LLM, and returns the answer with retrieved contexts.
 import json
 import logging
 
-import openai
 from fastapi import HTTPException
-from openai import AsyncOpenAI
 
 from embedding.engine import embed_query_dispatch
+from llm.connector import chat_completion
 from embedding.vectorstore import search as vector_search
 from embedding.bm25 import load_index, search_bm25, get_index_path
 
@@ -199,37 +198,21 @@ async def single_shot_query(query: str, rag_config_row, conn) -> dict:
     if rag_config_row["llm_params_json"]:
         llm_params = json.loads(rag_config_row["llm_params_json"])
 
-    # Call OpenAI
-    client = AsyncOpenAI()
-    try:
-        response = await client.chat.completions.create(
-            model=rag_config_row["llm_model"],
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            **llm_params,
-        )
-    except openai.RateLimitError:
-        raise HTTPException(status_code=429, detail="LLM rate limit exceeded")
-    except openai.AuthenticationError:
-        raise HTTPException(status_code=502, detail="LLM authentication failed")
-    except openai.APITimeoutError:
-        raise HTTPException(status_code=504, detail="LLM request timed out")
-    except openai.APIError as e:
-        raise HTTPException(status_code=502, detail=f"LLM API error: {e.message}")
-
-    answer = response.choices[0].message.content
-    usage = {
-        "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-        "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-    }
+    # Call LLM via connector
+    result = await chat_completion(
+        model=rag_config_row["llm_model"],
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        params=llm_params,
+    )
 
     return {
-        "answer": answer,
+        "answer": result["content"],
         "contexts": contexts,
         "model": rag_config_row["llm_model"],
-        "usage": usage,
+        "usage": result["usage"],
     }
 
 
@@ -261,7 +244,7 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
     total_prompt_tokens = 0
     total_completion_tokens = 0
 
-    client = AsyncOpenAI()
+    llm_model = rag_config_row["llm_model"]
     llm_params = {}
     if rag_config_row["llm_params_json"]:
         llm_params = json.loads(rag_config_row["llm_params_json"])
@@ -313,39 +296,27 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
         reasoning = ""
         refined_query = None
 
+        gap_result = await chat_completion(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": GAP_ANALYSIS_SYSTEM_PROMPT},
+                {"role": "user", "content": gap_user_msg},
+            ],
+            params=llm_params,
+        )
+        total_prompt_tokens += gap_result["usage"]["prompt_tokens"]
+        total_completion_tokens += gap_result["usage"]["completion_tokens"]
+
+        gap_text = gap_result["content"].strip()
         try:
-            gap_response = await client.chat.completions.create(
-                model=rag_config_row["llm_model"],
-                messages=[
-                    {"role": "system", "content": GAP_ANALYSIS_SYSTEM_PROMPT},
-                    {"role": "user", "content": gap_user_msg},
-                ],
-                **llm_params,
-            )
-            gap_usage = gap_response.usage
-            if gap_usage:
-                total_prompt_tokens += gap_usage.prompt_tokens
-                total_completion_tokens += gap_usage.completion_tokens
-
-            gap_text = gap_response.choices[0].message.content.strip()
-            try:
-                gap_parsed = json.loads(gap_text)
-                sufficient = gap_parsed.get("sufficient", True)
-                reasoning = gap_parsed.get("reasoning", "")
-                refined_query = gap_parsed.get("refined_query")
-            except (json.JSONDecodeError, AttributeError):
-                logger.warning("Gap analysis JSON parse failed for step %d, treating as sufficient", step_num)
-                sufficient = True
-                reasoning = "Gap analysis response could not be parsed"
-
-        except openai.RateLimitError:
-            raise HTTPException(status_code=429, detail="LLM rate limit exceeded")
-        except openai.AuthenticationError:
-            raise HTTPException(status_code=502, detail="LLM authentication failed")
-        except openai.APITimeoutError:
-            raise HTTPException(status_code=504, detail="LLM request timed out")
-        except openai.APIError as e:
-            raise HTTPException(status_code=502, detail=f"LLM API error: {e.message}")
+            gap_parsed = json.loads(gap_text)
+            sufficient = gap_parsed.get("sufficient", True)
+            reasoning = gap_parsed.get("reasoning", "")
+            refined_query = gap_parsed.get("refined_query")
+        except (json.JSONDecodeError, AttributeError):
+            logger.warning("Gap analysis JSON parse failed for step %d, treating as sufficient", step_num)
+            sufficient = True
+            reasoning = "Gap analysis response could not be parsed"
 
         steps.append({
             "step": step_num,
@@ -366,7 +337,7 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
         return {
             "answer": "No relevant contexts found for your query.",
             "contexts": [],
-            "model": rag_config_row["llm_model"],
+            "model": llm_model,
             "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
             "steps": steps,
             "response_mode": "multi_step",
@@ -378,35 +349,21 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
     context_text = _build_context_text(all_contexts)
     user_message = f"Context:\n{context_text}\n\nQuestion: {query}"
 
-    try:
-        response = await client.chat.completions.create(
-            model=rag_config_row["llm_model"],
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            **llm_params,
-        )
-    except openai.RateLimitError:
-        raise HTTPException(status_code=429, detail="LLM rate limit exceeded")
-    except openai.AuthenticationError:
-        raise HTTPException(status_code=502, detail="LLM authentication failed")
-    except openai.APITimeoutError:
-        raise HTTPException(status_code=504, detail="LLM request timed out")
-    except openai.APIError as e:
-        raise HTTPException(status_code=502, detail=f"LLM API error: {e.message}")
-
-    synth_usage = response.usage
-    if synth_usage:
-        total_prompt_tokens += synth_usage.prompt_tokens
-        total_completion_tokens += synth_usage.completion_tokens
-
-    answer = response.choices[0].message.content
+    synth_result = await chat_completion(
+        model=llm_model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        params=llm_params,
+    )
+    total_prompt_tokens += synth_result["usage"]["prompt_tokens"]
+    total_completion_tokens += synth_result["usage"]["completion_tokens"]
 
     return {
-        "answer": answer,
+        "answer": synth_result["content"],
         "contexts": all_contexts,
-        "model": rag_config_row["llm_model"],
+        "model": llm_model,
         "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
         "steps": steps,
         "response_mode": "multi_step",

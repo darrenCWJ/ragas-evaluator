@@ -158,6 +158,7 @@ export default function BuildPage() {
           <ChunkConfigPanel
             projectId={project.id}
             documents={documents}
+            onConfigsChanged={loadChunkConfigs}
           />
         </div>
       </div>
