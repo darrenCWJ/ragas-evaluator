@@ -9,10 +9,10 @@ import logging
 
 from fastapi import HTTPException
 
-from embedding.engine import embed_query_dispatch
-from llm.connector import chat_completion
-from embedding.vectorstore import search as vector_search
-from embedding.bm25 import load_index, search_bm25, get_index_path
+from pipeline.embedding import embed_query_dispatch
+from pipeline.llm import chat_completion
+from pipeline.vectorstore import search as vector_search
+from pipeline.bm25 import load_index, search_bm25, get_index_path
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ async def _retrieve_hybrid(query: str, config_row, conn) -> list[dict]:
                     "score": 1.0 / (1.0 + r["distance"]) if r["distance"] is not None else 0.0,
                 })
         except Exception:
-            pass
+            logger.warning("Dense search failed in hybrid retrieval, proceeding with sparse only", exc_info=True)
 
     # Sparse search
     sparse_results = []

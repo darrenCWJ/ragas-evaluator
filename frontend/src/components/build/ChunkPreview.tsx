@@ -85,7 +85,7 @@ export default function ChunkPreview({
                 key={i}
                 className="rounded-lg border border-border bg-deep/50 px-3 py-2"
               >
-                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                <span className="mb-1 block text-2xs font-bold uppercase tracking-wider text-text-muted">
                   Chunk {i + 1}
                 </span>
                 <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">

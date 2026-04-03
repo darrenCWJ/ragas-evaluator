@@ -90,7 +90,7 @@ export default function RagTestQuery({ projectId, ragConfigId }: Props) {
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-text-primary">
               {result.answer}
             </p>
-            <div className="mt-2 flex items-center gap-3 text-[10px] text-text-muted">
+            <div className="mt-2 flex items-center gap-3 text-2xs text-text-muted">
               <span className="font-mono">{result.model}</span>
               <span>
                 {result.usage.prompt_tokens}p / {result.usage.completion_tokens}c
@@ -134,7 +134,7 @@ export default function RagTestQuery({ projectId, ragConfigId }: Props) {
                         {ctx.content}
                       </p>
                       {ctx.chunk_id != null && (
-                        <span className="mt-1 inline-block font-mono text-[10px] text-text-muted">
+                        <span className="mt-1 inline-block font-mono text-2xs text-text-muted">
                           chunk #{ctx.chunk_id}
                         </span>
                       )}

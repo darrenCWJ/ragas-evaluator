@@ -55,7 +55,7 @@ async def _embed_sentence_transformers(texts: list[str], model_name: str, params
         return []
 
     model = _get_st_model(model_name)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     embeddings = await loop.run_in_executor(
         None,
         functools.partial(model.encode, texts, **params),

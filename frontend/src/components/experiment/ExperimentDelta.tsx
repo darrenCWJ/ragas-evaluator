@@ -163,7 +163,7 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
                     )}
                     {md.delta !== null && (
                       <span
-                        className={`font-mono text-[11px] font-bold ${md.improved === true ? "text-emerald-400" : md.improved === false ? "text-red-400" : "text-text-muted"}`}
+                        className={`font-mono text-micro font-bold ${md.improved === true ? "text-emerald-400" : md.improved === false ? "text-red-400" : "text-text-muted"}`}
                       >
                         {md.improved === true
                           ? `↑+${(md.delta * 100).toFixed(1)}`
@@ -269,7 +269,7 @@ function QuestionDeltaRow({ q }: { q: QD }) {
         </span>
         {avgDelta !== null && (
           <span
-            className={`shrink-0 font-mono text-[11px] font-bold ${avgDelta > 0 ? "text-emerald-400" : avgDelta < 0 ? "text-red-400" : "text-text-muted"}`}
+            className={`shrink-0 font-mono text-micro font-bold ${avgDelta > 0 ? "text-emerald-400" : avgDelta < 0 ? "text-red-400" : "text-text-muted"}`}
           >
             {avgDelta > 0
               ? `↑+${(avgDelta * 100).toFixed(1)}`
@@ -286,7 +286,7 @@ function QuestionDeltaRow({ q }: { q: QD }) {
             {metricEntries.map(([name, m]) => (
               <div
                 key={name}
-                className="flex items-center justify-between text-[11px]"
+                className="flex items-center justify-between text-micro"
               >
                 <span className="text-text-muted">
                   {humanizeMetric(name)}

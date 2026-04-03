@@ -334,7 +334,7 @@ export default function ExperimentSuggestions({
               <h4 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
                 {categoryLabel(cat)}
               </h4>
-              <span className="rounded-full bg-elevated px-2 py-0.5 text-[10px] font-medium text-text-muted">
+              <span className="rounded-full bg-elevated px-2 py-0.5 text-2xs font-medium text-text-muted">
                 {items.length}
               </span>
             </div>
@@ -473,7 +473,7 @@ function SuggestionCard({
 
         {/* Priority badge */}
         <span
-          className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${priority.bg} ${priority.text}`}
+          className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wider ${priority.bg} ${priority.text}`}
         >
           {priority.label}
         </span>

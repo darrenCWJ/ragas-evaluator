@@ -199,7 +199,7 @@ function ScoreTrend({
 
   return (
     <div className="rounded-lg border border-border/60 bg-elevated/30 px-4 py-3">
-      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+      <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-text-muted">
         Score Trend
       </p>
       <div className="flex items-end gap-1">

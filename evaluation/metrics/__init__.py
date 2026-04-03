@@ -1,4 +1,4 @@
-from ragas_test import (
+from evaluation.metrics import (
     # RAG metrics
     faithfulness,
     answer_relevancy,

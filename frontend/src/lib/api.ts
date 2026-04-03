@@ -863,13 +863,6 @@ export interface Suggestion {
   created_at: string;
 }
 
-export interface ApplySuggestionResult {
-  suggestion: Suggestion;
-  new_experiment: Experiment;
-  new_rag_config: { id: number; name: string };
-  changes: Record<string, { old: unknown; new: unknown }>;
-}
-
 export interface BatchApplyResult {
   suggestions: Suggestion[];
   new_experiment: Experiment;
@@ -931,20 +924,6 @@ export async function fetchSuggestions(
     `/api/projects/${projectId}/experiments/${experimentId}/suggestions`,
   );
   return data.suggestions;
-}
-
-export async function applySuggestion(
-  projectId: number,
-  suggestionId: number,
-  body?: { override_value?: string; experiment_name?: string },
-): Promise<ApplySuggestionResult> {
-  return request<ApplySuggestionResult>(
-    `/api/projects/${projectId}/suggestions/${suggestionId}/apply`,
-    {
-      method: "POST",
-      body: body ? JSON.stringify(body) : undefined,
-    },
-  );
 }
 
 export async function applySuggestionsBatch(
