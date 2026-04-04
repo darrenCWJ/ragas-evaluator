@@ -476,6 +476,35 @@ class BotConfigCreate(BaseModel):
         return v
 
 
+VALID_HUMAN_RATINGS = {"accurate", "partially_accurate", "inaccurate"}
+
+
+class HumanAnnotationCreate(BaseModel):
+    experiment_result_id: int
+    rating: str
+    notes: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, v: str) -> str:
+        if v not in VALID_HUMAN_RATINGS:
+            raise ValueError(
+                f"rating must be one of: {', '.join(sorted(VALID_HUMAN_RATINGS))}"
+            )
+        return v
+
+
+class HumanAnnotationBatch(BaseModel):
+    annotations: list[HumanAnnotationCreate]
+
+    @field_validator("annotations")
+    @classmethod
+    def validate_non_empty(cls, v: list) -> list:
+        if not v:
+            raise ValueError("annotations list must not be empty")
+        return v
+
+
 class BotConfigUpdate(BaseModel):
     name: str | None = None
     connector_type: str | None = None
