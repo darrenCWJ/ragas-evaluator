@@ -18,6 +18,7 @@ export default function EmbedAction({
   const [selectedChunkConfigId, setSelectedChunkConfigId] = useState<
     number | null
   >(chunkConfigs.length > 0 ? chunkConfigs[0]!.id : null);
+  const [useContextualPrefix, setUseContextualPrefix] = useState(false);
   const [embedding, setEmbedding] = useState(false);
   const [result, setResult] = useState<EmbedResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +41,7 @@ export default function EmbedAction({
         projectId,
         embeddingConfigId,
         selectedChunkConfigId,
+        useContextualPrefix,
       );
       setResult(res);
       onEmbedComplete?.();
@@ -68,6 +70,26 @@ export default function EmbedAction({
             </option>
           ))}
         </select>
+      </label>
+
+      <label className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          checked={useContextualPrefix}
+          onChange={(e) => setUseContextualPrefix(e.target.checked)}
+          disabled={embedding}
+          className="mt-0.5 h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+        />
+        <div>
+          <span className="text-xs text-text-secondary">
+            Contextual embeddings
+          </span>
+          <p className="text-xs text-text-muted">
+            Prepends document name to each chunk before embedding, giving the
+            model broader context about where each chunk comes from. Edit
+            document labels in the Documents panel.
+          </p>
+        </div>
       </label>
 
       <button

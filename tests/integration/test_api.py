@@ -3,8 +3,6 @@
 Uses httpx AsyncClient with a real in-memory database.
 """
 
-import sqlite3
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

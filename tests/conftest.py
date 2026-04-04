@@ -1,10 +1,7 @@
 """Shared fixtures for all tests."""
 
 import os
-import sqlite3
-import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 

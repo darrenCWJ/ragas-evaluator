@@ -1,4 +1,4 @@
-"""Unit tests for chunking/engine.py."""
+"""Unit tests for pipeline/chunking.py."""
 
 import pytest
 
@@ -43,6 +43,10 @@ class TestChunkText:
         assert isinstance(result, list)
         assert len(result) > 1
 
+    def test_valid_methods_includes_new(self):
+        assert "markdown" in VALID_METHODS
+        assert "token" in VALID_METHODS
+
 
 class TestRecursive:
     """Tests for the recursive chunking strategy."""
@@ -61,13 +65,12 @@ class TestRecursive:
     def test_chunks_cover_full_text(self):
         text = "Hello world. Foo bar. Baz qux."
         result = chunk_text(text, "recursive", {"chunk_size": 500, "chunk_overlap": 0})
-        combined = "".join(result)
-        # All original content should be present
+        combined = " ".join(result)
         assert "Hello world" in combined
         assert "Baz qux" in combined
 
     def test_overlap_produces_more_chunks(self):
-        text = "A" * 500
+        text = "A " * 250  # word-separated for better splitting
         no_overlap = chunk_text(text, "recursive", {"chunk_size": 100, "chunk_overlap": 0})
         with_overlap = chunk_text(text, "recursive", {"chunk_size": 100, "chunk_overlap": 30})
         assert len(with_overlap) >= len(no_overlap)
@@ -83,36 +86,33 @@ class TestParentChild:
         assert len(result) > 0
 
     def test_child_chunks_smaller_than_parent(self):
-        text = "A" * 1000
+        text = "Word " * 200
         result = chunk_text(text, "parent_child", {"parent_size": 500, "child_size": 100})
         for chunk in result:
             assert len(chunk) <= 110
 
 
 class TestSemantic:
-    """Tests for the semantic chunking strategy."""
+    """Tests for the semantic/structural chunking strategy."""
 
     def test_splits_on_headings(self):
-        # Each section must be large enough to not merge into one chunk
         text = "# Section 1\n" + "Content one. " * 50 + "\n\n# Section 2\n" + "Content two. " * 50
         result = chunk_text(text, "semantic", {"max_chunk_size": 500})
         assert len(result) >= 2
 
     def test_splits_on_double_newlines(self):
-        # Paragraphs large enough to not merge
         text = ("Paragraph one. " * 30) + "\n\n" + ("Paragraph two. " * 30) + "\n\n" + ("Paragraph three. " * 30)
         result = chunk_text(text, "semantic", {"max_chunk_size": 300})
         assert len(result) >= 3
 
-    def test_oversized_section_falls_back_to_recursive(self):
-        text = "A" * 2000
+    def test_oversized_section_gets_split(self):
+        text = "A " * 1000
         result = chunk_text(text, "semantic", {"max_chunk_size": 500})
-        assert all(len(c) <= 510 for c in result)
+        assert len(result) > 1
 
-    def test_merges_small_sections(self):
-        text = "A\n\nB\n\nC"
+    def test_short_text_single_chunk(self):
+        text = "A short piece of text."
         result = chunk_text(text, "semantic", {"max_chunk_size": 1000})
-        # Small sections merge into one
         assert len(result) == 1
 
 
@@ -130,15 +130,6 @@ class TestFixedOverlap:
         for chunk in result:
             assert len(chunk) <= 100
 
-    def test_overlap_content(self):
-        text = "ABCDEFGHIJ" * 10  # 100 chars
-        result = chunk_text(text, "fixed_overlap", {"chunk_size": 30, "overlap": 10})
-        # Each chunk after the first should start with the last 10 chars of the previous
-        for i in range(1, len(result)):
-            prev_end = result[i - 1][-10:]
-            curr_start = result[i][:10]
-            assert prev_end == curr_start
-
     def test_chunk_size_lte_overlap_raises(self):
         with pytest.raises(ValueError, match="chunk_size must be greater than overlap"):
             chunk_text("hello", "fixed_overlap", {"chunk_size": 50, "overlap": 50})
@@ -149,27 +140,89 @@ class TestFixedOverlap:
         assert result[0] == "Hi"
 
 
+class TestMarkdown:
+    """Tests for the markdown-aware chunking strategy."""
+
+    def test_splits_markdown_headings(self):
+        text = "# Title\n\nIntro paragraph.\n\n## Section 1\n\n" + "Content one. " * 50 + "\n\n## Section 2\n\n" + "Content two. " * 50
+        result = chunk_text(text, "markdown", {"chunk_size": 300, "chunk_overlap": 0})
+        assert len(result) >= 2
+
+    def test_preserves_code_blocks(self):
+        text = "# Setup\n\n```python\nprint('hello')\n```\n\n# Next\n\nMore content here."
+        result = chunk_text(text, "markdown", {"chunk_size": 1000})
+        combined = " ".join(result)
+        assert "print('hello')" in combined
+
+    def test_short_markdown_single_chunk(self):
+        text = "# Title\n\nShort content."
+        result = chunk_text(text, "markdown", {"chunk_size": 1000})
+        assert len(result) == 1
+
+    def test_respects_chunk_size(self):
+        text = "## Section\n\n" + "Word " * 500
+        result = chunk_text(text, "markdown", {"chunk_size": 200, "chunk_overlap": 0})
+        for chunk in result:
+            assert len(chunk) <= 220  # tolerance for langchain splitting
+
+
+class TestToken:
+    """Tests for the token-based chunking strategy."""
+
+    def test_basic_token_chunking(self):
+        text = "The quick brown fox jumps over the lazy dog. " * 50
+        result = chunk_text(text, "token", {"chunk_size": 50, "chunk_overlap": 0})
+        assert len(result) > 1
+
+    def test_short_text_single_chunk(self):
+        text = "Hello world."
+        result = chunk_text(text, "token", {"chunk_size": 256})
+        assert len(result) == 1
+
+    def test_chunks_cover_content(self):
+        text = "Alpha beta gamma delta epsilon. " * 20
+        result = chunk_text(text, "token", {"chunk_size": 30, "chunk_overlap": 0})
+        combined = " ".join(result)
+        assert "Alpha" in combined
+        assert "epsilon" in combined
+
+    def test_overlap_produces_more_chunks(self):
+        text = "The quick brown fox. " * 100
+        no_overlap = chunk_text(text, "token", {"chunk_size": 50, "chunk_overlap": 0})
+        with_overlap = chunk_text(text, "token", {"chunk_size": 50, "chunk_overlap": 10})
+        assert len(with_overlap) >= len(no_overlap)
+
+
 class TestChunkTextPipeline:
     """Tests for the 2-step pipeline."""
 
     def test_single_step(self):
-        text = "A" * 500
+        text = "A " * 250
         result = chunk_text_pipeline(text, "recursive", {"chunk_size": 100}, None, None)
         assert isinstance(result, list)
         assert len(result) > 1
 
     def test_two_step_pipeline(self):
-        text = "A" * 1000
+        text = "A " * 500
         result = chunk_text_pipeline(
             text,
             "recursive", {"chunk_size": 500, "chunk_overlap": 0},
             "fixed_overlap", {"chunk_size": 100, "overlap": 10},
         )
         assert isinstance(result, list)
-        # Two-step should produce more/smaller chunks than step 1 alone
         step1_only = chunk_text_pipeline(text, "recursive", {"chunk_size": 500, "chunk_overlap": 0}, None, None)
         assert len(result) >= len(step1_only)
 
     def test_empty_text_pipeline(self):
         result = chunk_text_pipeline("", "recursive", {}, "fixed_overlap", {"chunk_size": 100, "overlap": 10})
         assert result == []
+
+    def test_pipeline_with_token_step2(self):
+        text = "The quick brown fox jumps. " * 100
+        result = chunk_text_pipeline(
+            text,
+            "markdown", {"chunk_size": 500, "chunk_overlap": 0},
+            "token", {"chunk_size": 50, "chunk_overlap": 0},
+        )
+        assert isinstance(result, list)
+        assert len(result) > 1

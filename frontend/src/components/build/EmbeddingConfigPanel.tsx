@@ -46,6 +46,8 @@ export default function EmbeddingConfigPanel({
   const [embType, setEmbType] = useState<EmbeddingType>("dense_openai");
   const [modelName, setModelName] = useState(TYPE_DEFAULTS.dense_openai);
   const [paramsJson, setParamsJson] = useState("");
+  const [useDimReduction, setUseDimReduction] = useState(false);
+  const [dimensions, setDimensions] = useState(256);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -54,8 +56,9 @@ export default function EmbeddingConfigPanel({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Embed inline
+  // Embed inline / Expand
   const [embedConfigId, setEmbedConfigId] = useState<number | null>(null);
+  const [expandedConfigId, setExpandedConfigId] = useState<number | null>(null);
 
   const loadConfigs = useCallback(async () => {
     setLoading(true);
@@ -81,6 +84,8 @@ export default function EmbeddingConfigPanel({
     setModelName(TYPE_DEFAULTS[embType]);
   }, [embType]);
 
+  const isOpenAIEmb3 =
+    embType === "dense_openai" && modelName.startsWith("text-embedding-3");
   const canSave = name.trim().length > 0;
 
   async function handleSave() {
@@ -99,6 +104,11 @@ export default function EmbeddingConfigPanel({
       }
     }
 
+    // Merge dimension reduction into params for OpenAI models
+    if (useDimReduction && isOpenAIEmb3) {
+      params.dimensions = dimensions;
+    }
+
     try {
       await createEmbeddingConfig(projectId, {
         name: name.trim(),
@@ -110,6 +120,8 @@ export default function EmbeddingConfigPanel({
       setEmbType("dense_openai");
       setModelName(TYPE_DEFAULTS.dense_openai);
       setParamsJson("");
+      setUseDimReduction(false);
+      setDimensions(256);
       loadConfigs();
       onConfigsChanged?.();
     } catch (err) {
@@ -175,7 +187,15 @@ export default function EmbeddingConfigPanel({
           <span className="mb-1 block text-xs text-text-secondary">
             Model Name
           </span>
-          <p className="mt-0.5 text-xs text-text-muted">Model identifier (e.g., text-embedding-3-small for OpenAI, all-MiniLM-L6-v2 for sentence-transformers)</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            {embType === "dense_openai" ? (
+              <>OpenAI models: <code className="rounded bg-elevated px-1">text-embedding-3-small</code> (fast, cheap) | <code className="rounded bg-elevated px-1">text-embedding-3-large</code> (best quality, supports dimension reduction)</>
+            ) : embType === "dense_sentence_transformers" ? (
+              <>Local models from <a href="https://huggingface.co/models?pipeline_tag=sentence-similarity&sort=downloads" target="_blank" rel="noopener noreferrer" className="underline hover:text-accent">Hugging Face</a>: <code className="rounded bg-elevated px-1">all-MiniLM-L6-v2</code> (fast) | <code className="rounded bg-elevated px-1">all-mpnet-base-v2</code> (better quality) | <code className="rounded bg-elevated px-1">BAAI/bge-small-en-v1.5</code> | <code className="rounded bg-elevated px-1">nomic-ai/nomic-embed-text-v1.5</code></>
+            ) : (
+              <>BM25 sparse search does not use a model</>
+            )}
+          </p>
           <input
             type="text"
             value={modelName}
@@ -198,6 +218,49 @@ export default function EmbeddingConfigPanel({
             className="w-full rounded-lg border border-border bg-input px-3 py-1.5 font-mono text-xs text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
           />
         </label>
+
+        {/* Dimension reduction — only for OpenAI text-embedding-3 models */}
+        {isOpenAIEmb3 && (
+          <div className="mt-3 rounded-lg border border-border/50 bg-card/30 p-3">
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                checked={useDimReduction}
+                onChange={(e) => setUseDimReduction(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+              />
+              <div>
+                <span className="text-xs font-medium text-text-secondary">
+                  Dimension reduction (Matryoshka)
+                </span>
+                <p className="text-xs text-text-muted">
+                  OpenAI text-embedding-3 models support shortening the embedding
+                  dimensions. Lower dimensions = faster search and less storage,
+                  with minimal quality loss. Default is 3072 for -large and 1536
+                  for -small.
+                </p>
+              </div>
+            </label>
+            {useDimReduction && (
+              <label className="mt-2 block">
+                <span className="mb-1 block text-xs text-text-secondary">
+                  Dimensions
+                </span>
+                <select
+                  value={dimensions}
+                  onChange={(e) => setDimensions(Number(e.target.value))}
+                  className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                >
+                  {[256, 512, 768, 1024, 1536, 3072].map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        )}
 
         {formError && (
           <p className="mt-3 text-xs text-score-low">{formError}</p>
@@ -292,6 +355,25 @@ export default function EmbeddingConfigPanel({
                   <div className="flex shrink-0 items-center gap-1">
                     <button
                       onClick={() =>
+                        setExpandedConfigId(
+                          expandedConfigId === cfg.id ? null : cfg.id,
+                        )
+                      }
+                      className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+                      title="Toggle config details"
+                    >
+                      <svg
+                        className={`h-3.5 w-3.5 transition-transform ${expandedConfigId === cfg.id ? "rotate-90" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() =>
                         setEmbedConfigId(
                           embedConfigId === cfg.id ? null : cfg.id,
                         )
@@ -339,6 +421,28 @@ export default function EmbeddingConfigPanel({
                     )}
                   </div>
                 </div>
+
+                {/* Expanded config details */}
+                {expandedConfigId === cfg.id && (
+                  <div className="mt-3 border-t border-border pt-3 space-y-1 text-xs text-text-muted">
+                    <p>
+                      <span className="text-text-secondary">Type:</span>{" "}
+                      {TYPE_LABELS[cfg.type as EmbeddingType] ?? cfg.type}
+                    </p>
+                    {cfg.model_name && (
+                      <p>
+                        <span className="text-text-secondary">Model:</span>{" "}
+                        {cfg.model_name}
+                      </p>
+                    )}
+                    {cfg.params && Object.keys(cfg.params).length > 0 && (
+                      <p>
+                        <span className="text-text-secondary">Params:</span>{" "}
+                        {Object.entries(cfg.params).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Inline embed */}
                 {embedConfigId === cfg.id && (

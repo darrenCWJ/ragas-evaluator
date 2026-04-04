@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from app.models import (
+    DocumentContextUpdate,
     EmbeddingConfigCreate,
     EmbedRequest,
     HybridSearchRequest,
@@ -91,6 +92,15 @@ async def delete_embedding_config(project_id: int, config_id: int):
             status_code=409,
             detail=f"Embedding config is referenced by {rag_refs['cnt']} RAG config(s)",
         )
+    exp_refs = conn.execute(
+        "SELECT COUNT(*) as cnt FROM experiments WHERE embedding_config_id = ?",
+        (config_id,),
+    ).fetchone()
+    if exp_refs["cnt"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Embedding config is referenced by {exp_refs['cnt']} experiment(s)",
+        )
     # Cascade: clean up stored data based on type
     if config_row["type"] == "bm25_sparse":
         from pipeline.bm25 import delete_index, get_index_path
@@ -142,7 +152,26 @@ async def embed_chunks(project_id: int, config_id: int, req: EmbedRequest):
     model_name = config_row["model_name"]
     params = json.loads(config_row["params_json"]) if config_row["params_json"] else {}
 
-    texts = [chunk["content"] for chunk in chunks]
+    # Build texts — optionally prepend document context for contextual embeddings
+    texts = []
+    if req.use_contextual_prefix:
+        # Build a lookup of document_id -> context_label (falls back to filename)
+        doc_ids = list({chunk["document_id"] for chunk in chunks})
+        placeholders = ",".join("?" * len(doc_ids))
+        docs = conn.execute(
+            f"SELECT id, filename, context_label FROM documents WHERE id IN ({placeholders})",
+            doc_ids,
+        ).fetchall()
+        doc_labels = {
+            doc["id"]: doc["context_label"] or doc["filename"]
+            for doc in docs
+        }
+        for chunk in chunks:
+            label = doc_labels.get(chunk["document_id"], "Unknown")
+            texts.append(f"Document: {label}\n\n{chunk['content']}")
+    else:
+        texts = [chunk["content"] for chunk in chunks]
+
     metadatas = [{"document_id": chunk["document_id"], "chunk_id": chunk["id"]} for chunk in chunks]
 
     if embedding_type == "bm25_sparse":

@@ -8,14 +8,16 @@ import {
 import ChunkPreview from "./ChunkPreview";
 import ChunkGenerate from "./ChunkGenerate";
 
-const METHODS = ["recursive", "parent_child", "semantic", "fixed_overlap"] as const;
+const METHODS = ["recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"] as const;
 type Method = (typeof METHODS)[number];
 
 const METHOD_DEFAULTS: Record<Method, Record<string, number>> = {
   recursive: { chunk_size: 512, chunk_overlap: 50 },
   parent_child: { parent_chunk_size: 1024, child_chunk_size: 256 },
-  semantic: { threshold: 0.5 },
+  semantic: { max_chunk_size: 1000, breakpoint_threshold: 0.5 },
   fixed_overlap: { chunk_size: 500, overlap: 50 },
+  markdown: { chunk_size: 1000, chunk_overlap: 100 },
+  token: { chunk_size: 256, chunk_overlap: 30 },
 };
 
 const METHOD_LABELS: Record<string, string> = {
@@ -23,17 +25,36 @@ const METHOD_LABELS: Record<string, string> = {
   chunk_overlap: "Chunk Overlap",
   parent_chunk_size: "Parent Chunk Size",
   child_chunk_size: "Child Chunk Size",
-  threshold: "Threshold",
+  max_chunk_size: "Max Chunk Size",
+  breakpoint_threshold: "Breakpoint Threshold",
   overlap: "Overlap",
 };
 
-const PARAM_HELP: Record<string, string> = {
-  chunk_size: "Target size in characters for each chunk (typical: 500-2000)",
-  chunk_overlap: "Number of overlapping characters between chunks (typical: 50-200)",
-  parent_chunk_size: "Target size in characters for each chunk (typical: 500-2000)",
-  child_chunk_size: "Target size in characters for each chunk (typical: 500-2000)",
-  threshold: "Similarity threshold for semantic splitting (0.0-1.0, typical: 0.5)",
-  overlap: "Number of overlapping characters between chunks (typical: 50-200)",
+const PARAM_HELP: Record<Method, Record<string, string>> = {
+  recursive: {
+    chunk_size: "Size in characters (default: 512). Smaller chunks = more precise retrieval, larger = more context per result.",
+    chunk_overlap: "Overlapping characters between chunks (default: 50). Helps preserve context at chunk boundaries.",
+  },
+  parent_child: {
+    parent_chunk_size: "Size in characters for parent chunks (default: 1024). These are split further into child chunks.",
+    child_chunk_size: "Size in characters for child chunks (default: 256). Smaller children = more granular retrieval.",
+  },
+  semantic: {
+    max_chunk_size: "Maximum chunk size in characters (default: 1000). Chunks split at structural boundaries (headings, paragraphs) within this limit.",
+    breakpoint_threshold: "Sensitivity for structural boundary detection (0.0\u20131.0, default: 0.5).",
+  },
+  fixed_overlap: {
+    chunk_size: "Fixed window size in characters (default: 500). Every chunk is exactly this size (except possibly the last).",
+    overlap: "Overlapping characters between chunks (default: 50). Helps preserve context at chunk boundaries.",
+  },
+  markdown: {
+    chunk_size: "Size in characters (default: 1000). Splits at headings and code blocks before falling back to paragraphs.",
+    chunk_overlap: "Overlapping characters between chunks (default: 100). Helps preserve context at chunk boundaries.",
+  },
+  token: {
+    chunk_size: "Size in tokens (default: 256). Aligned to embedding model token limits. 1 token \u2248 4 characters in English.",
+    chunk_overlap: "Overlapping tokens between chunks (default: 30). Helps preserve context at chunk boundaries.",
+  },
 };
 
 interface Props {
@@ -46,7 +67,7 @@ function validateParams(
   method: Method,
   params: Record<string, number>,
 ): string | null {
-  if (method === "recursive") {
+  if (method === "recursive" || method === "markdown" || method === "token") {
     if (params.chunk_size! <= 0) return "Chunk size must be > 0";
     if (params.chunk_overlap! < 0) return "Overlap must be >= 0";
     if (params.chunk_overlap! >= params.chunk_size!)
@@ -57,7 +78,8 @@ function validateParams(
     if (params.child_chunk_size! >= params.parent_chunk_size!)
       return "Child size must be less than parent size";
   } else if (method === "semantic") {
-    if (params.threshold! < 0 || params.threshold! > 1)
+    if (params.max_chunk_size! <= 0) return "Max chunk size must be > 0";
+    if (params.breakpoint_threshold! < 0 || params.breakpoint_threshold! > 1)
       return "Threshold must be between 0 and 1";
   } else if (method === "fixed_overlap") {
     if (params.chunk_size! <= 0) return "Chunk size must be > 0";
@@ -84,6 +106,12 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
   const [step2Params, setStep2Params] = useState<Record<string, number>>(
     () => ({ ...METHOD_DEFAULTS.semantic }),
   );
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterParams, setFilterParams] = useState({
+    min_char_length: 20,
+    min_word_count: 3,
+    max_whitespace_ratio: 0.8,
+  });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -92,9 +120,10 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Preview / Generate state
+  // Preview / Generate / Expand state
   const [previewConfigId, setPreviewConfigId] = useState<number | null>(null);
   const [generateConfigId, setGenerateConfigId] = useState<number | null>(null);
+  const [expandedConfigId, setExpandedConfigId] = useState<number | null>(null);
 
   const loadConfigs = useCallback(async () => {
     setLoading(true);
@@ -134,8 +163,33 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
   const step2ValidationError = step2Enabled
     ? validateParams(step2Method, step2Params)
     : null;
+
+  // Warn when step 2 chunk size >= step 1 output size (step 2 would be a no-op)
+  const step2SizeWarning = (() => {
+    if (!step2Enabled) return null;
+
+    const getEffectiveSize = (m: Method, p: Record<string, number>): { size: number; unit: "chars" | "tokens" } => {
+      if (m === "token") return { size: p.chunk_size ?? 256, unit: "tokens" };
+      if (m === "parent_child") return { size: p.child_chunk_size ?? 256, unit: "chars" };
+      if (m === "semantic") return { size: p.max_chunk_size ?? 1000, unit: "chars" };
+      return { size: p.chunk_size ?? 500, unit: "chars" };
+    };
+
+    const step1 = getEffectiveSize(method, params);
+    const step2 = getEffectiveSize(step2Method, step2Params);
+
+    if (step2.size >= step1.size) {
+      const msg = `2nd pass chunk size (${step2.size}) is >= 1st pass output size (${step1.size}). The 2nd pass will have no effect.`;
+      return { msg, sameUnit: step1.unit === step2.unit };
+    }
+    return null;
+  })();
+
   const canSave =
-    name.trim().length > 0 && !validationError && !step2ValidationError;
+    name.trim().length > 0 &&
+    !validationError &&
+    !step2ValidationError &&
+    !(step2SizeWarning?.sameUnit);
 
   async function handleSave() {
     if (!canSave) return;
@@ -148,11 +202,14 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
         params,
         step2_method: step2Enabled ? step2Method : null,
         step2_params: step2Enabled ? step2Params : null,
+        filter_params: filterEnabled ? filterParams : null,
       });
       setName("");
       setMethod("recursive");
       setParams({ ...METHOD_DEFAULTS.recursive });
       setStep2Enabled(false);
+      setFilterEnabled(false);
+      setFilterParams({ min_char_length: 20, min_word_count: 3, max_whitespace_ratio: 0.8 });
       loadConfigs();
       onConfigsChanged?.();
     } catch (err) {
@@ -190,10 +247,10 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
             <span className="mb-1 block text-xs text-text-secondary">
               {METHOD_LABELS[key] ?? key}
             </span>
-            {PARAM_HELP[key] && (
-              <p className="mt-0.5 text-xs text-text-muted">{PARAM_HELP[key]}</p>
+            {PARAM_HELP[m]?.[key] && (
+              <p className="mt-0.5 text-xs text-text-muted">{PARAM_HELP[m][key]}</p>
             )}
-            {key === "threshold" ? (
+            {(key === "threshold" || key === "breakpoint_threshold") ? (
               <div className="flex items-center gap-2">
                 <input
                   type="range"
@@ -244,7 +301,7 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
 
         <label className="mt-3 block">
           <span className="mb-1 block text-xs text-text-secondary">Method</span>
-          <p className="mt-0.5 text-xs text-text-muted">recursive: splits by separators recursively | parent_child: creates parent-child chunk pairs | semantic: splits by semantic similarity | fixed_overlap: fixed-size chunks with overlap</p>
+          <p className="mt-0.5 text-xs text-text-muted">recursive: splits by separators recursively | parent_child: creates parent-child chunk pairs | semantic: structural boundary splitting | fixed_overlap: fixed-size character windows | markdown: heading/code-block aware | token: splits by token count (aligned to embedding models)</p>
           <select
             value={method}
             onChange={(e) => setMethod(e.target.value as Method)}
@@ -303,6 +360,101 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
                   {step2ValidationError}
                 </p>
               )}
+              {!step2ValidationError && step2SizeWarning && (
+                <p className={`mt-2 text-xs ${step2SizeWarning.sameUnit ? "text-score-low" : "text-yellow-500"}`}>
+                  {step2SizeWarning.msg}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Chunk quality filters */}
+        <div className="mt-4 border-t border-border pt-4">
+          <label className="flex cursor-pointer items-center gap-2">
+            <input
+              type="checkbox"
+              checked={filterEnabled}
+              onChange={(e) => setFilterEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+            />
+            <span className="text-xs text-text-secondary">
+              Enable chunk quality filters
+            </span>
+          </label>
+          <p className="mt-1 text-xs text-text-muted">
+            Remove low-quality chunks (too short, mostly whitespace, etc.)
+          </p>
+
+          {filterEnabled && (
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              <label className="block">
+                <span className="mb-1 block text-xs text-text-secondary">
+                  Min Characters
+                </span>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  Drop chunks shorter than this (0 = disabled)
+                </p>
+                <input
+                  type="number"
+                  min="0"
+                  value={filterParams.min_char_length}
+                  onChange={(e) =>
+                    setFilterParams((prev) => ({
+                      ...prev,
+                      min_char_length: parseInt(e.target.value) || 0,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-text-secondary">
+                  Min Words
+                </span>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  Drop chunks with fewer words (0 = disabled)
+                </p>
+                <input
+                  type="number"
+                  min="0"
+                  value={filterParams.min_word_count}
+                  onChange={(e) =>
+                    setFilterParams((prev) => ({
+                      ...prev,
+                      min_word_count: parseInt(e.target.value) || 0,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-text-secondary">
+                  Max Whitespace Ratio
+                </span>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  Drop chunks exceeding this non-alphanumeric ratio (1.0 = disabled)
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.05"
+                    value={filterParams.max_whitespace_ratio}
+                    onChange={(e) =>
+                      setFilterParams((prev) => ({
+                        ...prev,
+                        max_whitespace_ratio: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-border accent-accent"
+                  />
+                  <span className="w-8 text-right font-mono text-xs text-text-primary">
+                    {filterParams.max_whitespace_ratio.toFixed(2)}
+                  </span>
+                </div>
+              </label>
             </div>
           )}
         </div>
@@ -395,12 +547,36 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
                         + {cfg.step2_method.replace("_", " ")}
                       </span>
                     )}
+                    {cfg.filter_params && (
+                      <span className="shrink-0 rounded bg-yellow-500/15 px-1.5 py-0.5 text-2xs uppercase tracking-wider text-yellow-600">
+                        filtered
+                      </span>
+                    )}
                     <span className="shrink-0 text-xs text-text-muted">
                       {new Date(cfg.created_at).toLocaleDateString()}
                     </span>
                   </div>
 
                   <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={() =>
+                        setExpandedConfigId(
+                          expandedConfigId === cfg.id ? null : cfg.id,
+                        )
+                      }
+                      className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+                      title="Toggle config details"
+                    >
+                      <svg
+                        className={`h-3.5 w-3.5 transition-transform ${expandedConfigId === cfg.id ? "rotate-90" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
                     <button
                       onClick={() =>
                         setPreviewConfigId(
@@ -460,6 +636,45 @@ export default function ChunkConfigPanel({ projectId, documents, onConfigsChange
                     )}
                   </div>
                 </div>
+
+                {/* Expanded config details */}
+                {expandedConfigId === cfg.id && (
+                  <div className="mt-3 border-t border-border pt-3 space-y-1 text-xs text-text-muted">
+                    <p>
+                      <span className="text-text-secondary">Method:</span>{" "}
+                      {cfg.method.replace("_", " ")}
+                    </p>
+                    <p>
+                      <span className="text-text-secondary">Params:</span>{" "}
+                      {Object.entries(cfg.params).map(([k, v]) => `${METHOD_LABELS[k] ?? k}: ${v}`).join(", ")}
+                    </p>
+                    {cfg.step2_method && cfg.step2_params && (
+                      <>
+                        <p>
+                          <span className="text-text-secondary">2nd Pass:</span>{" "}
+                          {cfg.step2_method.replace("_", " ")}
+                        </p>
+                        <p>
+                          <span className="text-text-secondary">2nd Pass Params:</span>{" "}
+                          {Object.entries(cfg.step2_params).map(([k, v]) => `${METHOD_LABELS[k] ?? k}: ${v}`).join(", ")}
+                        </p>
+                      </>
+                    )}
+                    {cfg.filter_params && (
+                      <p>
+                        <span className="text-text-secondary">Filters:</span>{" "}
+                        {Object.entries(cfg.filter_params).map(([k, v]) => {
+                          const labels: Record<string, string> = {
+                            min_char_length: "Min Chars",
+                            min_word_count: "Min Words",
+                            max_whitespace_ratio: "Max Whitespace Ratio",
+                          };
+                          return `${labels[k] ?? k}: ${v}`;
+                        }).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Inline preview */}
                 {previewConfigId === cfg.id && (
