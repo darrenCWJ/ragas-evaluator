@@ -1,4 +1,4 @@
-"""Experiment CRUD, runner (SSE), comparison, history, delta, and export routes."""
+"""Experiment CRUD, runner (SSE), source verification, comparison, history, delta, and export routes."""
 
 import csv
 import io
@@ -18,6 +18,7 @@ from app.models import (
 from dataclasses import asdict
 
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
+from evaluation.source_verification import verify_all_citations, VerificationResult
 import db.init
 from pipeline.bot_connectors.factory import create_connector
 from pipeline.rag import single_shot_query, multi_step_query
@@ -1175,3 +1176,155 @@ async def export_experiment(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --- Source Verification ---
+
+
+@router.post("/projects/{project_id}/experiments/{experiment_id}/verify-sources")
+async def verify_experiment_sources(
+    project_id: int,
+    experiment_id: int,
+    llm_model: str = Query("gpt-4o-mini", description="LLM model for content verification"),
+):
+    """Run source verification on all citations in a bot-connector experiment.
+
+    Checks each citation URL for reachability and uses an LLM to verify
+    whether the page content supports the bot's answer.  Results are stored
+    in the source_verifications table (existing rows for this experiment are
+    replaced).
+    """
+    conn = db.init.get_db()
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["bot_config_id"] is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Source verification is only available for bot-connector experiments",
+        )
+
+    if experiment["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Experiment must be completed (current: {experiment['status']})",
+        )
+
+    # Fetch all results with citations in metadata_json
+    result_rows = conn.execute(
+        "SELECT id, response, metadata_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+
+    # Clear previous verification results for this experiment
+    result_ids = [r["id"] for r in result_rows]
+    if result_ids:
+        placeholders = ",".join("?" for _ in result_ids)
+        conn.execute(
+            f"DELETE FROM source_verifications WHERE experiment_result_id IN ({placeholders})",
+            result_ids,
+        )
+        conn.commit()
+
+    total_verified = 0
+    summary: dict[str, int] = {"verified": 0, "hallucinated": 0, "inaccessible": 0, "unverifiable": 0}
+
+    for result_row in result_rows:
+        metadata = json.loads(result_row["metadata_json"]) if result_row["metadata_json"] else {}
+        citations = metadata.get("citations", [])
+        answer = result_row["response"] or ""
+
+        if not citations:
+            continue
+
+        verifications = await verify_all_citations(citations, answer, llm_model)
+
+        for v in verifications:
+            conn.execute(
+                """INSERT INTO source_verifications
+                   (experiment_result_id, citation_index, title, url, status, details)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    result_row["id"],
+                    v.citation_index,
+                    v.title,
+                    v.url,
+                    v.status,
+                    v.details,
+                ),
+            )
+            summary[v.status] = summary.get(v.status, 0) + 1
+            total_verified += 1
+
+        conn.commit()
+
+    return {
+        "experiment_id": experiment_id,
+        "total_citations_checked": total_verified,
+        "summary": summary,
+    }
+
+
+@router.get("/projects/{project_id}/experiments/{experiment_id}/source-verifications")
+async def get_source_verifications(project_id: int, experiment_id: int):
+    """Return all source verification results for an experiment, grouped by result."""
+    conn = db.init.get_db()
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rows = conn.execute(
+        """SELECT sv.*, er.test_question_id, tq.question
+           FROM source_verifications sv
+           JOIN experiment_results er ON sv.experiment_result_id = er.id
+           JOIN test_questions tq ON er.test_question_id = tq.id
+           WHERE er.experiment_id = ?
+           ORDER BY er.id, sv.citation_index""",
+        (experiment_id,),
+    ).fetchall()
+
+    # Group by experiment_result_id
+    grouped: dict[int, dict] = {}
+    for r in rows:
+        rid = r["experiment_result_id"]
+        if rid not in grouped:
+            grouped[rid] = {
+                "experiment_result_id": rid,
+                "test_question_id": r["test_question_id"],
+                "question": r["question"],
+                "verifications": [],
+            }
+        grouped[rid]["verifications"].append({
+            "id": r["id"],
+            "citation_index": r["citation_index"],
+            "title": r["title"],
+            "url": r["url"],
+            "status": r["status"],
+            "details": r["details"],
+            "created_at": r["created_at"],
+        })
+
+    # Summary counts
+    all_statuses = [r["status"] for r in rows]
+    summary = {
+        "verified": all_statuses.count("verified"),
+        "hallucinated": all_statuses.count("hallucinated"),
+        "inaccessible": all_statuses.count("inaccessible"),
+        "unverifiable": all_statuses.count("unverifiable"),
+        "total": len(all_statuses),
+    }
+
+    return {
+        "experiment_id": experiment_id,
+        "summary": summary,
+        "results": list(grouped.values()),
+    }
