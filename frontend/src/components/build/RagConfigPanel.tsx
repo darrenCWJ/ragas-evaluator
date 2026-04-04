@@ -65,6 +65,9 @@ export default function RagConfigPanel({
     embeddingConfigs.find((c) => c.type === "bm25_sparse")?.id ?? "",
   );
   const [alpha, setAlpha] = useState(0.5);
+  // Reranker fields
+  const [rerankerModel, setRerankerModel] = useState("");
+  const [rerankerTopK, setRerankerTopK] = useState(5);
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -139,6 +142,10 @@ export default function RagConfigPanel({
         if (sparseConfigId !== "") payload.sparse_config_id = sparseConfigId as number;
         payload.alpha = alpha;
       }
+      if (rerankerModel.trim()) {
+        payload.reranker_model = rerankerModel.trim();
+        payload.reranker_top_k = rerankerTopK;
+      }
       await createRagConfig(projectId, payload);
       setName("");
       setSearchType("dense");
@@ -148,6 +155,8 @@ export default function RagConfigPanel({
       setMaxSteps(3);
       setSystemPrompt("");
       setShowAdvanced(false);
+      setRerankerModel("");
+      setRerankerTopK(5);
       loadConfigs();
       onConfigsChanged?.();
     } catch (err) {
@@ -382,6 +391,12 @@ export default function RagConfigPanel({
                           <span className="text-text-secondary">RAG:</span>{" "}
                           search={cfg.search_type}, LLM={cfg.llm_model}, top_k={cfg.top_k}, mode={cfg.response_mode}
                         </p>
+                        {cfg.reranker_model && (
+                          <p>
+                            <span className="text-text-secondary">Reranker:</span>{" "}
+                            {cfg.reranker_model}{cfg.reranker_top_k ? `, top_k=${cfg.reranker_top_k}` : ""}
+                          </p>
+                        )}
                         {cfg.system_prompt && (
                           <p>
                             <span className="text-text-secondary">System prompt:</span>{" "}
@@ -624,19 +639,79 @@ export default function RagConfigPanel({
           </button>
 
           {showAdvanced && (
-            <label className="mt-2 block">
-              <span className="mb-1 block text-xs text-text-secondary">
-                System Prompt (optional)
-              </span>
-              <p className="mt-0.5 text-xs text-text-muted">Custom instructions for the LLM (e.g., tone, format, domain constraints)</p>
-              <textarea
-                value={systemPrompt}
-                onChange={(e) => setSystemPrompt(e.target.value)}
-                placeholder="You are a helpful assistant..."
-                rows={3}
-                className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
-              />
-            </label>
+            <div className="mt-2 space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs text-text-secondary">
+                  System Prompt (optional)
+                </span>
+                <p className="mt-0.5 text-xs text-text-muted">Custom instructions for the LLM (e.g., tone, format, domain constraints)</p>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="You are a helpful assistant..."
+                  rows={3}
+                  className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                />
+              </label>
+
+              {/* Reranker */}
+              <div className="rounded-lg border border-border/50 bg-card/30 p-3">
+                <p className="mb-2 text-xs font-medium text-text-secondary">
+                  Reranker (optional)
+                </p>
+                <p className="mb-2 text-xs text-text-muted">
+                  After initial retrieval, a cross-encoder reranker scores each
+                  (query, passage) pair directly for more accurate relevance
+                  ranking. This improves precision but adds latency. Models are
+                  loaded from{" "}
+                  <a
+                    href="https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads&search=cross-encoder"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-accent"
+                  >
+                    Hugging Face
+                  </a>
+                  .
+                </p>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">
+                    Reranker Model
+                  </span>
+                  <p className="mt-0.5 text-xs text-text-muted">
+                    Common models: <code className="rounded bg-elevated px-1">cross-encoder/ms-marco-MiniLM-L-6-v2</code> (fast, good quality) | <code className="rounded bg-elevated px-1">cross-encoder/ms-marco-MiniLM-L-12-v2</code> (slower, better quality) | <code className="rounded bg-elevated px-1">BAAI/bge-reranker-base</code> | <code className="rounded bg-elevated px-1">BAAI/bge-reranker-large</code>
+                  </p>
+                  <input
+                    type="text"
+                    value={rerankerModel}
+                    onChange={(e) => setRerankerModel(e.target.value)}
+                    placeholder="e.g. cross-encoder/ms-marco-MiniLM-L-6-v2"
+                    className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                  />
+                </label>
+                {rerankerModel.trim() && (
+                  <label className="mt-2 block">
+                    <span className="mb-1 block text-xs text-text-secondary">
+                      Reranker Top K
+                    </span>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Number of results to keep after reranking (should be &le;
+                      retrieval Top K above)
+                    </p>
+                    <input
+                      type="number"
+                      value={rerankerTopK}
+                      min={1}
+                      max={50}
+                      onChange={(e) =>
+                        setRerankerTopK(parseInt(e.target.value) || 5)
+                      }
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
           )}
         </div>
 

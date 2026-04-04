@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from pipeline.embedding import embed_query_dispatch
 from pipeline.llm import chat_completion
+from pipeline.reranker import rerank
 from pipeline.vectorstore import search as vector_search
 from pipeline.bm25 import load_index, search_bm25, get_index_path
 
@@ -184,6 +185,12 @@ async def single_shot_query(query: str, rag_config_row, conn) -> dict:
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
 
+    # Rerank if configured
+    reranker_model = rag_config_row["reranker_model"]
+    if reranker_model:
+        reranker_top_k = rag_config_row["reranker_top_k"] or rag_config_row["top_k"]
+        contexts = await rerank(query, contexts, reranker_model, reranker_top_k)
+
     # Build prompt
     system_prompt = rag_config_row["system_prompt"] or DEFAULT_SYSTEM_PROMPT
 
@@ -342,6 +349,12 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
             "steps": steps,
             "response_mode": "multi_step",
         }
+
+    # Rerank all accumulated contexts if configured
+    reranker_model = rag_config_row["reranker_model"]
+    if reranker_model:
+        reranker_top_k = rag_config_row["reranker_top_k"] or rag_config_row["top_k"]
+        all_contexts = await rerank(query, all_contexts, reranker_model, reranker_top_k)
 
     # Synthesize final answer using all accumulated contexts
     system_prompt = rag_config_row["system_prompt"] or DEFAULT_SYSTEM_PROMPT

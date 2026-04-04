@@ -2,18 +2,18 @@ import { useState, useRef, useEffect } from "react";
 import type { ChunkConfig, TestSetCreate } from "../../lib/api";
 import { createTestSet, ApiError } from "../../lib/api";
 
-const GENERATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const GENERATION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (large test sets)
 
 const QUERY_TYPES = [
-  { key: "single_hop_specific", label: "Single-hop", description: "Fact lookup from one chunk" },
-  { key: "multi_hop_abstract", label: "Multi-hop Abstract", description: "Abstract reasoning across chunks" },
-  { key: "multi_hop_specific", label: "Multi-hop Specific", description: "Specific reasoning across chunks" },
+  { key: "single_hop_specific", label: "Single-hop Specific", description: "Direct factual questions answerable from a single chunk (e.g. \"What is the default timeout?\")" },
+  { key: "multi_hop_abstract", label: "Multi-hop Abstract", description: "High-level questions requiring synthesis across multiple chunks (e.g. \"How does the system handle errors?\")" },
+  { key: "multi_hop_specific", label: "Multi-hop Specific", description: "Precise questions needing details from multiple chunks (e.g. \"Which config options affect both caching and logging?\")" },
 ] as const;
 
 const DEFAULT_DISTRIBUTION: Record<string, number> = {
-  single_hop_specific: 0.5,
-  multi_hop_abstract: 0.25,
-  multi_hop_specific: 0.25,
+  single_hop_specific: 50,
+  multi_hop_abstract: 25,
+  multi_hop_specific: 25,
 };
 
 interface Props {
@@ -29,13 +29,14 @@ export default function TestSetGenerate({
 }: Props) {
   const [chunkConfigId, setChunkConfigId] = useState<number | "">("");
   const [name, setName] = useState("");
-  const [testsetSize, setTestsetSize] = useState(10);
-  const [numPersonas, setNumPersonas] = useState(3);
+  const [testsetSize, setTestsetSize] = useState<string>("10");
+  const [numPersonas, setNumPersonas] = useState<string>("3");
   const [usePersonas, setUsePersonas] = useState(true);
   const [customPersonas, setCustomPersonas] = useState<
     { name: string; role_description: string }[]
   >([]);
-  const [chunkSampleSize, setChunkSampleSize] = useState(100);
+  const [chunkSampleSize, setChunkSampleSize] = useState<string>("100");
+  const [numWorkers, setNumWorkers] = useState(4);
   const [queryDistribution, setQueryDistribution] = useState<Record<string, number>>({ ...DEFAULT_DISTRIBUTION });
   const [useCustomDistribution, setUseCustomDistribution] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -55,17 +56,19 @@ export default function TestSetGenerate({
     return () => clearInterval(id);
   }, [generating]);
 
-  const validateSize = (v: number) => {
-    if (v < 1 || v > 100) {
-      setSizeError("Must be between 1 and 100");
+  const validateSize = (s: string) => {
+    const v = Number(s);
+    if (!s || v < 1 || v > 400) {
+      setSizeError("Must be between 1 and 400");
       return false;
     }
     setSizeError(null);
     return true;
   };
 
-  const validatePersonas = (v: number) => {
-    if (v < 1 || v > 10) {
+  const validatePersonas = (s: string) => {
+    const v = Number(s);
+    if (!s || v < 1 || v > 10) {
       setPersonasError("Must be between 1 and 10");
       return false;
     }
@@ -79,6 +82,10 @@ export default function TestSetGenerate({
     const personasOk = !usePersonas || validatePersonas(numPersonas);
     if (!sizeOk || !personasOk || chunkConfigId === "") return;
 
+    const parsedSize = Number(testsetSize);
+    const parsedPersonas = Number(numPersonas);
+    const parsedChunkSample = Number(chunkSampleSize) || 0;
+
     const controller = new AbortController();
     abortRef.current = controller;
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
@@ -87,11 +94,16 @@ export default function TestSetGenerate({
     try {
       const config: TestSetCreate = {
         chunk_config_id: chunkConfigId as number,
-        testset_size: testsetSize,
-        num_personas: usePersonas ? numPersonas : undefined,
+        testset_size: parsedSize,
+        num_personas: usePersonas ? parsedPersonas : undefined,
         use_personas: usePersonas,
-        query_distribution: useCustomDistribution ? queryDistribution : undefined,
-        chunk_sample_size: chunkSampleSize,
+        query_distribution: useCustomDistribution
+          ? Object.fromEntries(
+              Object.entries(queryDistribution).map(([k, v]) => [k, v / 100]),
+            )
+          : undefined,
+        chunk_sample_size: parsedChunkSample,
+        num_workers: numWorkers,
       };
       if (name.trim()) config.name = name.trim();
 
@@ -111,11 +123,12 @@ export default function TestSetGenerate({
       await createTestSet(projectId, config, controller.signal);
       setName("");
       setChunkConfigId("");
-      setTestsetSize(10);
-      setNumPersonas(3);
+      setTestsetSize("10");
+      setNumPersonas("3");
       setUsePersonas(true);
       setCustomPersonas([]);
-      setChunkSampleSize(100);
+      setChunkSampleSize("100");
+      setNumWorkers(4);
       setUseCustomDistribution(false);
       setQueryDistribution({ ...DEFAULT_DISTRIBUTION });
       onTestSetCreated();
@@ -271,12 +284,11 @@ export default function TestSetGenerate({
           <input
             type="number"
             min={1}
-            max={100}
+            max={400}
             value={testsetSize}
             onChange={(e) => {
-              const v = Number(e.target.value);
-              setTestsetSize(v);
-              validateSize(v);
+              setTestsetSize(e.target.value);
+              validateSize(e.target.value);
             }}
             className={`w-full rounded-lg border px-3 py-2 text-sm text-text-primary focus:outline-none ${
               sizeError
@@ -299,12 +311,34 @@ export default function TestSetGenerate({
             type="number"
             min={0}
             value={chunkSampleSize}
-            onChange={(e) => setChunkSampleSize(Number(e.target.value))}
+            onChange={(e) => setChunkSampleSize(e.target.value)}
             className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
             disabled={generating}
           />
           <p className="mt-1 text-xs text-text-muted">
             Random subset of chunks to use. 0 = all chunks.
+          </p>
+        </div>
+
+        {/* Parallel workers */}
+        <div>
+          <label className="mb-1 block text-xs font-medium text-text-secondary">
+            Parallel Workers
+          </label>
+          <select
+            value={numWorkers}
+            onChange={(e) => setNumWorkers(Number(e.target.value))}
+            className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
+            disabled={generating}
+          >
+            {[1, 2, 4, 6, 8].map((n) => (
+              <option key={n} value={n}>
+                {n} {n === 1 ? "worker" : "workers"}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-text-muted">
+            More workers = faster generation. Increase for large test sets.
           </p>
         </div>
 
@@ -334,9 +368,8 @@ export default function TestSetGenerate({
               max={10}
               value={numPersonas}
               onChange={(e) => {
-                const v = Number(e.target.value);
-                setNumPersonas(v);
-                validatePersonas(v);
+                setNumPersonas(e.target.value);
+                validatePersonas(e.target.value);
               }}
               className={`w-full rounded-lg border px-3 py-2 text-sm text-text-primary focus:outline-none ${
                 personasError
@@ -429,11 +462,11 @@ export default function TestSetGenerate({
                   { name: "", role_description: "" },
                 ])
               }
-              disabled={generating || customPersonas.length >= numPersonas}
+              disabled={generating || customPersonas.length >= (Number(numPersonas) || 1)}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
             >
               + Add Persona
-              {customPersonas.length >= numPersonas && (
+              {customPersonas.length >= (Number(numPersonas) || 1) && (
                 <span className="ml-1 text-text-muted">
                   (max {numPersonas})
                 </span>
@@ -459,31 +492,110 @@ export default function TestSetGenerate({
         {useCustomDistribution && (
           <div className="sm:col-span-2 space-y-3 rounded-lg border border-border bg-elevated/50 p-3">
             <p className="text-xs text-text-muted">
-              Adjust the proportion of each question type. Weights are normalized automatically.
+              Adjust the proportion of each question type. Values always sum to 100%.
             </p>
             {QUERY_TYPES.map((qt) => {
-              const total = Object.values(queryDistribution).reduce((a, b) => a + b, 0);
-              const weight = queryDistribution[qt.key] ?? 0;
-              const pct = total > 0 ? Math.round((weight / total) * 100) : 0;
+              const pct = queryDistribution[qt.key] ?? 0;
               return (
-                <div key={qt.key} className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-text-secondary">
-                      {qt.label}
-                      <span className="ml-1 font-normal text-text-muted">— {qt.description}</span>
-                    </label>
-                    <span className="text-xs tabular-nums text-text-muted">{pct}%</span>
+                <div key={qt.key} className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div>
+                      <label className="text-xs font-medium text-text-secondary">
+                        {qt.label}
+                      </label>
+                      <p className="text-[11px] leading-tight text-text-muted">{qt.description}</p>
+                    </div>
+                    <div className="flex shrink-0 items-baseline gap-0.5">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={pct}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => {
+                          const raw = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                          setQueryDistribution((prev) => {
+                            const otherKeys = QUERY_TYPES
+                              .map((q) => q.key)
+                              .filter((k) => k !== qt.key);
+                            const otherTotal = otherKeys.reduce(
+                              (sum, k) => sum + (prev[k] ?? 0),
+                              0,
+                            );
+                            const remaining = 100 - raw;
+                            const next: Record<string, number> = { [qt.key]: raw };
+                            if (otherTotal === 0) {
+                              const share = Math.round(remaining / otherKeys.length);
+                              otherKeys.forEach((k, i) => {
+                                next[k] =
+                                  i === otherKeys.length - 1
+                                    ? remaining - share * (otherKeys.length - 1)
+                                    : share;
+                              });
+                            } else {
+                              let allocated = 0;
+                              otherKeys.forEach((k, i) => {
+                                if (i === otherKeys.length - 1) {
+                                  next[k] = remaining - allocated;
+                                } else {
+                                  const share = Math.round(
+                                    ((prev[k] ?? 0) / otherTotal) * remaining,
+                                  );
+                                  next[k] = share;
+                                  allocated += share;
+                                }
+                              });
+                            }
+                            return next;
+                          });
+                        }}
+                        disabled={generating}
+                        className="w-10 rounded border border-border bg-input px-1 py-0.5 text-right text-xs tabular-nums text-text-primary focus:border-accent focus:outline-none"
+                      />
+                      <span className="text-xs text-text-muted">%</span>
+                    </div>
                   </div>
                   <input
                     type="range"
                     min={0}
                     max={100}
-                    value={(queryDistribution[qt.key] ?? 0) * 100}
+                    value={pct}
                     onChange={(e) => {
-                      setQueryDistribution((prev) => ({
-                        ...prev,
-                        [qt.key]: Number(e.target.value) / 100,
-                      }));
+                      const raw = Number(e.target.value);
+                      setQueryDistribution((prev) => {
+                        const otherKeys = QUERY_TYPES
+                          .map((q) => q.key)
+                          .filter((k) => k !== qt.key);
+                        const otherTotal = otherKeys.reduce(
+                          (sum, k) => sum + (prev[k] ?? 0),
+                          0,
+                        );
+                        const remaining = 100 - raw;
+                        const next: Record<string, number> = { [qt.key]: raw };
+                        if (otherTotal === 0) {
+                          const share = Math.round(remaining / otherKeys.length);
+                          otherKeys.forEach((k, i) => {
+                            next[k] =
+                              i === otherKeys.length - 1
+                                ? remaining - share * (otherKeys.length - 1)
+                                : share;
+                          });
+                        } else {
+                          let allocated = 0;
+                          otherKeys.forEach((k, i) => {
+                            if (i === otherKeys.length - 1) {
+                              next[k] = remaining - allocated;
+                            } else {
+                              const share = Math.round(
+                                ((prev[k] ?? 0) / otherTotal) * remaining,
+                              );
+                              next[k] = share;
+                              allocated += share;
+                            }
+                          });
+                        }
+                        return next;
+                      });
                     }}
                     className="w-full accent-accent"
                     disabled={generating}

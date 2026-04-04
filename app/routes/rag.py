@@ -154,8 +154,9 @@ async def create_rag_config(project_id: int, body: RagConfigCreate):
         """INSERT INTO rag_configs
            (project_id, name, embedding_config_id, chunk_config_id,
             search_type, sparse_config_id, alpha, llm_model,
-            llm_params_json, top_k, system_prompt, response_mode, max_steps)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            llm_params_json, top_k, system_prompt, response_mode, max_steps,
+            reranker_model, reranker_top_k)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             project_id,
             body.name,
@@ -170,6 +171,8 @@ async def create_rag_config(project_id: int, body: RagConfigCreate):
             body.system_prompt,
             body.response_mode,
             body.max_steps,
+            body.reranker_model,
+            body.reranker_top_k,
         ),
     )
     conn.commit()
@@ -264,6 +267,10 @@ async def update_rag_config(
         updates["response_mode"] = body.response_mode
     if body.max_steps is not None:
         updates["max_steps"] = body.max_steps
+    if body.reranker_model is not None:
+        updates["reranker_model"] = body.reranker_model
+    if body.reranker_top_k is not None:
+        updates["reranker_top_k"] = body.reranker_top_k
 
     if updates:
         set_clause = ", ".join(f"{k} = ?" for k in updates)

@@ -206,6 +206,31 @@ def init_db() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Migration: add reranker fields to rag_configs
+    for col_sql in [
+        "ALTER TABLE rag_configs ADD COLUMN reranker_model TEXT",
+        "ALTER TABLE rag_configs ADD COLUMN reranker_top_k INTEGER",
+    ]:
+        try:
+            conn.execute(col_sql)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # Migration: add context_label to documents (for contextual embeddings)
+    try:
+        conn.execute("ALTER TABLE documents ADD COLUMN context_label TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add filter_params_json to chunk_configs (post-chunking quality filters)
+    try:
+        conn.execute("ALTER TABLE chunk_configs ADD COLUMN filter_params_json TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     _connection = conn
     return conn
 

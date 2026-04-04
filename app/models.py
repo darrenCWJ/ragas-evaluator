@@ -17,7 +17,7 @@ BULK_ACTION_TO_STATUS = {
     "reject_all": "rejected",
 }
 
-VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap"}
+VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"}
 VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sparse"}
 VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
 VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
@@ -74,12 +74,13 @@ class TestSetCreate(BaseModel):
     use_personas: bool = True
     query_distribution: dict[str, float] | None = None
     chunk_sample_size: int = 0
+    num_workers: int = 4
 
     @field_validator("testset_size")
     @classmethod
     def validate_testset_size(cls, v: int) -> int:
-        if v < 1 or v > 100:
-            raise ValueError("testset_size must be between 1 and 100")
+        if v < 1 or v > 400:
+            raise ValueError("testset_size must be between 1 and 400")
         return v
 
     @field_validator("num_personas")
@@ -87,6 +88,13 @@ class TestSetCreate(BaseModel):
     def validate_num_personas(cls, v: int) -> int:
         if v < 1 or v > 10:
             raise ValueError("num_personas must be between 1 and 10")
+        return v
+
+    @field_validator("num_workers")
+    @classmethod
+    def validate_num_workers(cls, v: int) -> int:
+        if v < 1 or v > 8:
+            raise ValueError("num_workers must be between 1 and 8")
         return v
 
 
@@ -166,6 +174,7 @@ class ChunkConfigCreate(BaseModel):
     params: dict
     step2_method: str | None = None
     step2_params: dict | None = None
+    filter_params: dict | None = None
 
     @field_validator("method")
     @classmethod
@@ -210,6 +219,11 @@ class EmbeddingConfigCreate(BaseModel):
 
 class EmbedRequest(BaseModel):
     chunk_config_id: int
+    use_contextual_prefix: bool = False
+
+
+class DocumentContextUpdate(BaseModel):
+    context_label: str
 
 
 class SearchRequest(BaseModel):
@@ -245,6 +259,8 @@ class RagConfigCreate(BaseModel):
     alpha: float | None = None
     response_mode: str = "single_shot"
     max_steps: int = 3
+    reranker_model: str | None = None
+    reranker_top_k: int | None = None
 
     @field_validator("search_type")
     @classmethod
@@ -308,6 +324,8 @@ class RagConfigUpdate(BaseModel):
     alpha: float | None = None
     response_mode: str | None = None
     max_steps: int | None = None
+    reranker_model: str | None = None
+    reranker_top_k: int | None = None
 
     @field_validator("search_type")
     @classmethod

@@ -157,6 +157,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
         "use_personas": req.use_personas,
         "query_distribution": req.query_distribution,
         "chunk_sample_size": req.chunk_sample_size,
+        "num_workers": req.num_workers,
         "total_chunks": total_chunks,
         "sampled_chunks": len(chunks),
     }
@@ -178,6 +179,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 num_personas=req.num_personas,
                 custom_personas=req.custom_personas,
                 query_distribution=req.query_distribution,
+                num_workers=req.num_workers,
             ),
         )
     except Exception as e:

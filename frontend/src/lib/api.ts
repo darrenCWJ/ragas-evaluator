@@ -11,6 +11,7 @@ export interface Document {
   id: number;
   filename: string;
   file_type: string;
+  context_label: string | null;
   created_at: string;
 }
 
@@ -22,6 +23,7 @@ export interface ChunkConfig {
   params: Record<string, number | string>;
   step2_method: string | null;
   step2_params: Record<string, number | string> | null;
+  filter_params: Record<string, number> | null;
   created_at: string;
 }
 
@@ -31,6 +33,7 @@ export interface ChunkConfigCreate {
   params: Record<string, number | string>;
   step2_method?: string | null;
   step2_params?: Record<string, number | string> | null;
+  filter_params?: Record<string, number> | null;
 }
 
 export interface ChunkPreviewResult {
@@ -42,7 +45,8 @@ export interface ChunkPreviewResult {
 
 export interface ChunkGenerateResult {
   total_chunks: number;
-  documents: { document_id: number; filename: string; chunk_count: number }[];
+  skipped_documents: number;
+  documents: { document_id: number; filename: string; chunk_count: number; skipped: boolean }[];
 }
 
 // --- Embedding Config Types ---
@@ -87,6 +91,8 @@ export interface RagConfig {
   alpha: number | null;
   response_mode: string;
   max_steps: number | null;
+  reranker_model: string | null;
+  reranker_top_k: number | null;
   created_at: string;
 }
 
@@ -103,6 +109,8 @@ export interface RagConfigCreate {
   alpha?: number | null;
   response_mode?: string;
   max_steps?: number | null;
+  reranker_model?: string | null;
+  reranker_top_k?: number | null;
 }
 
 export interface RagConfigExpanded extends RagConfig {
@@ -366,9 +374,11 @@ export async function previewChunks(
 export async function generateChunks(
   projectId: number,
   configId: number,
+  force: boolean = false,
 ): Promise<ChunkGenerateResult> {
+  const query = force ? "?force=true" : "";
   return request<ChunkGenerateResult>(
-    `/api/projects/${projectId}/chunk-configs/${configId}/generate`,
+    `/api/projects/${projectId}/chunk-configs/${configId}/generate${query}`,
     { method: "POST" },
   );
 }
@@ -407,10 +417,31 @@ export async function embedChunks(
   projectId: number,
   configId: number,
   chunkConfigId: number,
+  useContextualPrefix: boolean = false,
 ): Promise<EmbedResult> {
   return request<EmbedResult>(
     `/api/projects/${projectId}/embedding-configs/${configId}/embed`,
-    { method: "POST", body: JSON.stringify({ chunk_config_id: chunkConfigId }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        chunk_config_id: chunkConfigId,
+        use_contextual_prefix: useContextualPrefix,
+      }),
+    },
+  );
+}
+
+export async function updateDocumentContextLabel(
+  projectId: number,
+  documentId: number,
+  contextLabel: string,
+): Promise<{ detail: string; context_label: string }> {
+  return request<{ detail: string; context_label: string }>(
+    `/api/projects/${projectId}/documents/${documentId}/context-label`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ context_label: contextLabel }),
+    },
   );
 }
 
@@ -495,6 +526,7 @@ export interface TestSetCreate {
   use_personas?: boolean;
   query_distribution?: Record<string, number>;
   chunk_sample_size?: number;
+  num_workers?: number;
 }
 
 export interface TestQuestion {

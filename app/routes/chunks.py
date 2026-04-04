@@ -18,6 +18,8 @@ def _parse_chunk_config_row(row) -> dict:
     s2p = d.pop("step2_params_json", None)
     d["step2_method"] = s2m
     d["step2_params"] = json.loads(s2p) if s2p else None
+    fp = d.pop("filter_params_json", None)
+    d["filter_params"] = json.loads(fp) if fp else None
     return d
 
 
@@ -31,7 +33,7 @@ async def create_chunk_config(project_id: int, req: ChunkConfigCreate):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     cursor = conn.execute(
-        "INSERT INTO chunk_configs (project_id, name, method, params_json, step2_method, step2_params_json) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunk_configs (project_id, name, method, params_json, step2_method, step2_params_json, filter_params_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             project_id,
             req.name,
@@ -39,6 +41,7 @@ async def create_chunk_config(project_id: int, req: ChunkConfigCreate):
             json.dumps(req.params),
             req.step2_method,
             json.dumps(req.step2_params) if req.step2_params else None,
+            json.dumps(req.filter_params) if req.filter_params else None,
         ),
     )
     conn.commit()
@@ -95,13 +98,23 @@ async def delete_chunk_config(project_id: int, config_id: int):
             status_code=409,
             detail=f"Chunk config is referenced by {rag_refs['cnt']} RAG config(s)",
         )
+    exp_refs = conn.execute(
+        "SELECT COUNT(*) as cnt FROM experiments WHERE chunk_config_id = ?",
+        (config_id,),
+    ).fetchone()
+    if exp_refs["cnt"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Chunk config is referenced by {exp_refs['cnt']} experiment(s)",
+        )
+    conn.execute("DELETE FROM chunks WHERE chunk_config_id = ?", (config_id,))
     conn.execute("DELETE FROM chunk_configs WHERE id = ?", (config_id,))
     conn.commit()
     return {"detail": "Chunk config deleted"}
 
 
 @router.post("/projects/{project_id}/chunk-configs/{config_id}/generate")
-async def generate_chunks(project_id: int, config_id: int):
+async def generate_chunks(project_id: int, config_id: int, force: bool = False):
     conn = db.init.get_db()
 
     project = conn.execute(
@@ -124,19 +137,62 @@ async def generate_chunks(project_id: int, config_id: int):
         if config_row["step2_params_json"]
         else None
     )
+    filter_params = (
+        json.loads(config_row["filter_params_json"])
+        if config_row["filter_params_json"]
+        else None
+    )
 
-    conn.execute("DELETE FROM chunks WHERE chunk_config_id = ?", (config_id,))
+    if force:
+        conn.execute("DELETE FROM chunks WHERE chunk_config_id = ?", (config_id,))
+
+    # Find document IDs that already have chunks for this config
+    already_chunked = {
+        row["document_id"]
+        for row in conn.execute(
+            "SELECT DISTINCT document_id FROM chunks WHERE chunk_config_id = ?",
+            (config_id,),
+        ).fetchall()
+    }
 
     documents = conn.execute(
         "SELECT id, filename, content FROM documents WHERE project_id = ?",
         (project_id,),
     ).fetchall()
 
+    # Remove chunks for documents that no longer exist in the project
+    current_doc_ids = {doc["id"] for doc in documents}
+    stale_doc_ids = already_chunked - current_doc_ids
+    if stale_doc_ids:
+        placeholders = ",".join("?" for _ in stale_doc_ids)
+        conn.execute(
+            f"DELETE FROM chunks WHERE chunk_config_id = ? AND document_id IN ({placeholders})",
+            (config_id, *stale_doc_ids),
+        )
+
     total_chunks = 0
+    skipped = 0
     doc_results = []
     for doc in documents:
+        if not force and doc["id"] in already_chunked:
+            existing_count = conn.execute(
+                "SELECT COUNT(*) as cnt FROM chunks WHERE document_id = ? AND chunk_config_id = ?",
+                (doc["id"], config_id),
+            ).fetchone()["cnt"]
+            total_chunks += existing_count
+            skipped += 1
+            doc_results.append(
+                {
+                    "document_id": doc["id"],
+                    "filename": doc["filename"],
+                    "chunk_count": existing_count,
+                    "skipped": True,
+                }
+            )
+            continue
+
         chunks = chunk_text_pipeline(
-            doc["content"], method, params, step2_method, step2_params
+            doc["content"], method, params, step2_method, step2_params, filter_params
         )
         for chunk in chunks:
             conn.execute(
@@ -149,11 +205,16 @@ async def generate_chunks(project_id: int, config_id: int):
                 "document_id": doc["id"],
                 "filename": doc["filename"],
                 "chunk_count": len(chunks),
+                "skipped": False,
             }
         )
 
     conn.commit()
-    return {"total_chunks": total_chunks, "documents": doc_results}
+    return {
+        "total_chunks": total_chunks,
+        "skipped_documents": skipped,
+        "documents": doc_results,
+    }
 
 
 @router.post("/projects/{project_id}/chunk-configs/{config_id}/preview")
@@ -186,9 +247,14 @@ async def preview_chunks(project_id: int, config_id: int, document_id: int):
         if config_row["step2_params_json"]
         else None
     )
+    filter_params = (
+        json.loads(config_row["filter_params_json"])
+        if config_row["filter_params_json"]
+        else None
+    )
 
     chunks = chunk_text_pipeline(
-        doc["content"], method, params, step2_method, step2_params
+        doc["content"], method, params, step2_method, step2_params, filter_params
     )
     return {
         "document_id": doc["id"],

@@ -1,8 +1,13 @@
-"""Chunking engine with 4 configurable strategies and 2-step pipeline support."""
+"""Chunking engine backed by langchain-text-splitters with 6 strategies and 2-step pipeline support."""
 
-import re
+from langchain_text_splitters import (
+    CharacterTextSplitter,
+    MarkdownTextSplitter,
+    RecursiveCharacterTextSplitter,
+    TokenTextSplitter,
+)
 
-VALID_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap"}
+VALID_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"}
 
 _PARAM_ALIASES = {
     "parent_chunk_size": "parent_size",
@@ -37,11 +42,10 @@ def chunk_text(text: str, method: str, params: dict) -> list[str]:
     Returns [] for empty/whitespace-only text.
     """
     params = _coerce_numeric(params)
-    # Normalize frontend param names to engine param names
     params = {_PARAM_ALIASES.get(k, k): v for k, v in params.items()}
-    # "overlap" means "chunk_overlap" for recursive (fixed_overlap already uses "overlap")
     if method == "recursive" and "overlap" in params and "chunk_overlap" not in params:
         params["chunk_overlap"] = params.pop("overlap")
+
     if method not in VALID_METHODS:
         raise ValueError(f"Invalid chunking method '{method}'. Must be one of: {', '.join(sorted(VALID_METHODS))}")
 
@@ -56,6 +60,44 @@ def chunk_text(text: str, method: str, params: dict) -> list[str]:
         return _semantic(text, **params)
     elif method == "fixed_overlap":
         return _fixed_overlap(text, **params)
+    elif method == "markdown":
+        return _markdown(text, **params)
+    elif method == "token":
+        return _token(text, **params)
+
+    return [text]
+
+
+def filter_chunks(
+    chunks: list[str],
+    min_char_length: int = 0,
+    min_word_count: int = 0,
+    max_whitespace_ratio: float = 1.0,
+) -> list[str]:
+    """Filter out low-quality chunks based on configurable thresholds.
+
+    Args:
+        chunks: List of chunk strings to filter.
+        min_char_length: Drop chunks shorter than this (0 = disabled).
+        min_word_count: Drop chunks with fewer words than this (0 = disabled).
+        max_whitespace_ratio: Drop chunks where whitespace/special char ratio exceeds this (1.0 = disabled).
+    """
+    filtered = []
+    for chunk in chunks:
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        if min_char_length > 0 and len(stripped) < min_char_length:
+            continue
+        if min_word_count > 0 and len(stripped.split()) < min_word_count:
+            continue
+        if max_whitespace_ratio < 1.0:
+            non_alnum = sum(1 for c in stripped if not c.isalnum())
+            ratio = non_alnum / len(stripped) if stripped else 1.0
+            if ratio > max_whitespace_ratio:
+                continue
+        filtered.append(chunk)
+    return filtered
 
 
 def chunk_text_pipeline(
@@ -64,127 +106,93 @@ def chunk_text_pipeline(
     params: dict,
     step2_method: str | None,
     step2_params: dict | None,
+    filter_params: dict | None = None,
 ) -> list[str]:
-    """Run a 1- or 2-step chunking pipeline.
+    """Run a 1- or 2-step chunking pipeline with optional post-filtering.
 
     Step 1: chunk_text(text, method, params)
     Step 2 (if provided): chunk_text on each step 1 result with step2_method/step2_params
+    Filter (if provided): remove low-quality chunks based on filter_params
     """
     step1_chunks = chunk_text(text, method, params)
 
     if step2_method is None or step2_params is None:
-        return step1_chunks
+        chunks = step1_chunks
+    else:
+        step2_chunks = []
+        for chunk in step1_chunks:
+            sub_chunks = chunk_text(chunk, step2_method, step2_params)
+            step2_chunks.extend(sub_chunks)
+        chunks = step2_chunks
 
-    step2_chunks = []
-    for chunk in step1_chunks:
-        sub_chunks = chunk_text(chunk, step2_method, step2_params)
-        step2_chunks.extend(sub_chunks)
+    if filter_params:
+        chunks = filter_chunks(
+            chunks,
+            min_char_length=filter_params.get("min_char_length", 0),
+            min_word_count=filter_params.get("min_word_count", 0),
+            max_whitespace_ratio=filter_params.get("max_whitespace_ratio", 1.0),
+        )
 
-    return step2_chunks
+    return chunks
 
 
 # --- Strategy implementations ---
 
 
 def _recursive(text: str, chunk_size: int = 500, chunk_overlap: int = 50) -> list[str]:
-    """Split by separators in priority order, merging pieces to target chunk_size."""
-    separators = ["\n\n", "\n", ". ", " ", ""]
-
-    def _split_with_separator(t: str, sep: str) -> list[str]:
-        if sep == "":
-            return list(t)
-        parts = t.split(sep)
-        # Re-attach separator to end of each part (except last)
-        result = []
-        for i, part in enumerate(parts):
-            if i < len(parts) - 1:
-                result.append(part + sep)
-            else:
-                result.append(part)
-        return [p for p in result if p]
-
-    def _merge_pieces(pieces: list[str], size: int, overlap: int) -> list[str]:
-        chunks = []
-        current = ""
-        for piece in pieces:
-            if len(current) + len(piece) <= size:
-                current += piece
-            else:
-                if current:
-                    chunks.append(current)
-                # Add overlap from end of previous chunk
-                if overlap > 0 and chunks:
-                    prev = chunks[-1]
-                    overlap_text = prev[-overlap:] if len(prev) >= overlap else prev
-                    current = overlap_text + piece
-                else:
-                    current = piece
-        if current:
-            chunks.append(current)
-        return chunks
-
-    # Try each separator level
-    for sep in separators:
-        pieces = _split_with_separator(text, sep)
-        if all(len(p) <= chunk_size for p in pieces) or sep == "":
-            return _merge_pieces(pieces, chunk_size, chunk_overlap)
-
-    return [text]
+    """Split by separators in priority order using RecursiveCharacterTextSplitter."""
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ". ", " ", ""],
+        length_function=len,
+    )
+    return splitter.split_text(text)
 
 
 def _parent_child(text: str, parent_size: int = 1000, child_size: int = 200) -> list[str]:
     """Split into parent chunks, then sub-split each into child chunks.
 
-    Returns flat list of child chunk strings (consistent return type).
+    Returns flat list of child chunk strings.
     """
-    parents = _recursive(text, chunk_size=parent_size, chunk_overlap=0)
+    parent_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=parent_size,
+        chunk_overlap=0,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+    child_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=child_size,
+        chunk_overlap=0,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+    parents = parent_splitter.split_text(text)
     children = []
     for parent in parents:
-        child_chunks = _recursive(parent, chunk_size=child_size, chunk_overlap=0)
-        children.extend(child_chunks)
+        children.extend(child_splitter.split_text(parent))
     return children
 
 
 def _semantic(text: str, max_chunk_size: int = 1000, breakpoint_threshold: float = 0.5) -> list[str]:
-    """Split on semantic boundaries: headings, double newlines, single newlines.
+    """Split on structural boundaries: headings, double newlines, single newlines.
 
-    Falls back to recursive split for oversized sections.
+    Uses RecursiveCharacterTextSplitter with heading-aware separators.
+    Falls back to smaller separators for oversized sections.
     """
-    # Split on headings (lines starting with #)
-    sections = re.split(r'(?=^#{1,6}\s)', text, flags=re.MULTILINE)
-    sections = [s for s in sections if s.strip()]
-
-    # If no heading splits, try double newlines
-    if len(sections) <= 1:
-        sections = [s.strip() for s in text.split("\n\n") if s.strip()]
-
-    # If still no splits, try single newlines
-    if len(sections) <= 1:
-        sections = [s.strip() for s in text.split("\n") if s.strip()]
-
-    chunks = []
-    current = ""
-
-    for section in sections:
-        if len(section) > max_chunk_size:
-            # Flush current buffer
-            if current:
-                chunks.append(current)
-                current = ""
-            # Fall back to recursive for oversized section
-            sub_chunks = _recursive(section, chunk_size=max_chunk_size, chunk_overlap=0)
-            chunks.extend(sub_chunks)
-        elif len(current) + len(section) + 1 <= max_chunk_size:
-            current = current + "\n" + section if current else section
-        else:
-            if current:
-                chunks.append(current)
-            current = section
-
-    if current:
-        chunks.append(current)
-
-    return chunks
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max_chunk_size,
+        chunk_overlap=0,
+        separators=[
+            "\n#{1,6} ",   # Markdown headings
+            "\n\n",        # Double newlines (paragraphs)
+            "\n",          # Single newlines
+            ". ",          # Sentences
+            " ",           # Words
+            "",            # Characters
+        ],
+        is_separator_regex=True,
+        length_function=len,
+    )
+    return splitter.split_text(text)
 
 
 def _fixed_overlap(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]:
@@ -192,14 +200,37 @@ def _fixed_overlap(text: str, chunk_size: int = 300, overlap: int = 50) -> list[
     if chunk_size <= overlap:
         raise ValueError("chunk_size must be greater than overlap")
 
-    chunks = []
-    step = chunk_size - overlap
-    for i in range(0, len(text), step):
-        chunk = text[i:i + chunk_size]
-        if chunk:
-            chunks.append(chunk)
-        # Stop if we've captured the end
-        if i + chunk_size >= len(text):
-            break
+    splitter = CharacterTextSplitter(
+        separator="",
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        length_function=len,
+    )
+    return splitter.split_text(text)
 
-    return chunks
+
+def _markdown(text: str, chunk_size: int = 1000, chunk_overlap: int = 100) -> list[str]:
+    """Markdown-aware splitting that respects document structure.
+
+    Splits on headings, code blocks, and list items before falling back
+    to paragraph and sentence boundaries.
+    """
+    splitter = MarkdownTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    return splitter.split_text(text)
+
+
+def _token(text: str, chunk_size: int = 256, chunk_overlap: int = 30, encoding_name: str = "cl100k_base") -> list[str]:
+    """Token-based splitting aligned to embedding model token limits.
+
+    Uses tiktoken to count tokens, ensuring chunks are within model limits.
+    Default encoding (cl100k_base) matches OpenAI ada-002 / text-embedding-3-*.
+    """
+    splitter = TokenTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        encoding_name=encoding_name,
+    )
+    return splitter.split_text(text)

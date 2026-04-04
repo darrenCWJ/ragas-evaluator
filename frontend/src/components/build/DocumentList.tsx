@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Document } from "../../lib/api";
-import { deleteDocument } from "../../lib/api";
+import { deleteDocument, updateDocumentContextLabel } from "../../lib/api";
 
 interface Props {
   projectId: number;
@@ -20,6 +20,24 @@ export default function DocumentList({
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Context label editing
+  const [editingLabelId, setEditingLabelId] = useState<number | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [savingLabel, setSavingLabel] = useState(false);
+
+  async function handleSaveLabel(docId: number) {
+    setSavingLabel(true);
+    try {
+      await updateDocumentContextLabel(projectId, docId, labelDraft);
+      setEditingLabelId(null);
+      onRefresh();
+    } catch {
+      // keep editing open on error
+    } finally {
+      setSavingLabel(false);
+    }
+  }
 
   async function handleDelete(docId: number) {
     setDeleting(true);
@@ -102,27 +120,43 @@ export default function DocumentList({
       {documents.map((doc) => (
         <li
           key={doc.id}
-          className="flex items-center justify-between rounded-lg bg-card px-4 py-3"
+          className="rounded-lg bg-card px-4 py-3"
         >
-          <div className="flex items-center gap-3 overflow-hidden">
-            <span
-              className={`shrink-0 rounded px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider ${
-                doc.file_type === ".pdf"
-                  ? "bg-score-low/15 text-score-low"
-                  : "bg-accent/15 text-accent"
-              }`}
-            >
-              {doc.file_type.replace(".", "")}
-            </span>
-            <span className="truncate text-sm text-text-primary">
-              {doc.filename}
-            </span>
-            <span className="shrink-0 text-xs text-text-muted">
-              {new Date(doc.created_at).toLocaleDateString()}
-            </span>
-          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3 overflow-hidden">
+              <span
+                className={`shrink-0 rounded px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider ${
+                  doc.file_type === ".pdf"
+                    ? "bg-score-low/15 text-score-low"
+                    : "bg-accent/15 text-accent"
+                }`}
+              >
+                {doc.file_type.replace(".", "")}
+              </span>
+              <span className="truncate text-sm text-text-primary">
+                {doc.filename}
+              </span>
+              <span className="shrink-0 text-xs text-text-muted">
+                {new Date(doc.created_at).toLocaleDateString()}
+              </span>
+            </div>
 
-          {confirmId === doc.id ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                onClick={() => {
+                  if (editingLabelId === doc.id) {
+                    setEditingLabelId(null);
+                  } else {
+                    setLabelDraft(doc.context_label || doc.filename);
+                    setEditingLabelId(doc.id);
+                  }
+                }}
+                className="rounded px-2 py-1 text-xs text-accent hover:bg-accent/10"
+                title="Edit context label for contextual embeddings"
+              >
+                Label
+              </button>
+              {confirmId === doc.id ? (
             <div className="flex shrink-0 items-center gap-2">
               <span className="text-xs text-text-secondary">Delete?</span>
               <button
@@ -139,26 +173,61 @@ export default function DocumentList({
                 No
               </button>
             </div>
-          ) : (
-            <button
-              onClick={() => setConfirmId(doc.id)}
-              className="shrink-0 rounded p-1.5 text-text-muted hover:bg-elevated hover:text-score-low"
-              title="Delete document"
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.5}
+              ) : (
+                <button
+                  onClick={() => setConfirmId(doc.id)}
+                  className="shrink-0 rounded p-1.5 text-text-muted hover:bg-elevated hover:text-score-low"
+                  title="Delete document"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1.5}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Context label editor */}
+          {editingLabelId === doc.id && (
+            <div className="mt-2 flex items-center gap-2 border-t border-border pt-2">
+              <input
+                type="text"
+                value={labelDraft}
+                onChange={(e) => setLabelDraft(e.target.value)}
+                placeholder="Document label for contextual embeddings"
+                className="flex-1 rounded-lg border border-border bg-input px-3 py-1 text-xs text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+              />
+              <button
+                onClick={() => handleSaveLabel(doc.id)}
+                disabled={savingLabel || !labelDraft.trim()}
+                className="rounded bg-accent/15 px-3 py-1 text-xs font-medium text-accent hover:bg-accent/25 disabled:opacity-40"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
-                />
-              </svg>
-            </button>
+                {savingLabel ? "..." : "Save"}
+              </button>
+              <button
+                onClick={() => setEditingLabelId(null)}
+                className="rounded bg-elevated px-2 py-1 text-xs text-text-secondary hover:bg-border"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {/* Show current label if set and different from filename */}
+          {editingLabelId !== doc.id && doc.context_label && doc.context_label !== doc.filename && (
+            <p className="mt-1 text-xs text-text-muted">
+              Label: {doc.context_label}
+            </p>
           )}
         </li>
       ))}
