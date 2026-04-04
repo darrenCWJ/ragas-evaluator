@@ -381,7 +381,8 @@ class RagQueryRequest(BaseModel):
 
 class ExperimentCreate(BaseModel):
     test_set_id: int
-    rag_config_id: int
+    rag_config_id: int | None = None
+    bot_config_id: int | None = None
     name: str
 
     @field_validator("name")
@@ -393,6 +394,12 @@ class ExperimentCreate(BaseModel):
         if len(v) > 200:
             raise ValueError("name must not exceed 200 characters")
         return v
+
+    def model_post_init(self, __context) -> None:
+        if self.rag_config_id is None and self.bot_config_id is None:
+            raise ValueError("Either rag_config_id or bot_config_id must be provided")
+        if self.rag_config_id is not None and self.bot_config_id is not None:
+            raise ValueError("Provide rag_config_id or bot_config_id, not both")
 
 
 class ExperimentRunRequest(BaseModel):
@@ -437,4 +444,58 @@ class BatchApplyRequest(BaseModel):
                 raise ValueError("experiment_name must not be empty")
             if len(v) > 200:
                 raise ValueError("experiment_name must not exceed 200 characters")
+        return v
+
+
+VALID_CONNECTOR_TYPES = {"glean", "openai", "claude", "deepseek", "gemini", "custom"}
+
+
+class BotConfigCreate(BaseModel):
+    name: str
+    connector_type: str
+    config_json: dict
+    prompt_for_sources: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+    @field_validator("connector_type")
+    @classmethod
+    def validate_connector_type(cls, v: str) -> str:
+        if v not in VALID_CONNECTOR_TYPES:
+            raise ValueError(
+                f"connector_type must be one of: {', '.join(sorted(VALID_CONNECTOR_TYPES))}"
+            )
+        return v
+
+
+class BotConfigUpdate(BaseModel):
+    name: str | None = None
+    connector_type: str | None = None
+    config_json: dict | None = None
+    prompt_for_sources: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("name must not be empty")
+        return v
+
+    @field_validator("connector_type")
+    @classmethod
+    def validate_connector_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_CONNECTOR_TYPES:
+            raise ValueError(
+                f"connector_type must be one of: {', '.join(sorted(VALID_CONNECTOR_TYPES))}"
+            )
         return v

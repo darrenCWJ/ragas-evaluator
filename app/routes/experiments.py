@@ -15,8 +15,11 @@ from app.models import (
     ExperimentRunRequest,
     DEFAULT_EXPERIMENT_METRICS,
 )
+from dataclasses import asdict
+
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
 import db.init
+from pipeline.bot_connectors.factory import create_connector
 from pipeline.rag import single_shot_query, multi_step_query
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ def _parse_experiment_row(row) -> dict:
         "chunk_config_id": row["chunk_config_id"],
         "embedding_config_id": row["embedding_config_id"],
         "rag_config_id": row["rag_config_id"],
+        "bot_config_id": row["bot_config_id"],
         "baseline_experiment_id": row["baseline_experiment_id"],
         "status": row["status"],
         "started_at": row["started_at"],
@@ -138,17 +142,6 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Validate rag_config belongs to project
-    rag_config = conn.execute(
-        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
-        (req.rag_config_id, project_id),
-    ).fetchone()
-    if rag_config is None:
-        raise HTTPException(
-            status_code=422,
-            detail="RAG config not found in this project",
-        )
-
     # Validate test_set belongs to project
     test_set = conn.execute(
         "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
@@ -169,6 +162,48 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
         raise HTTPException(
             status_code=422,
             detail="Test set has no approved questions",
+        )
+
+    # --- Bot config path (external bot testing) ---
+    if req.bot_config_id is not None:
+        bot_config = conn.execute(
+            "SELECT * FROM bot_configs WHERE id = ? AND project_id = ?",
+            (req.bot_config_id, project_id),
+        ).fetchone()
+        if bot_config is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Bot config not found in this project",
+            )
+
+        cursor = conn.execute(
+            """INSERT INTO experiments
+               (project_id, test_set_id, name, model, bot_config_id, status)
+               VALUES (?, ?, ?, ?, ?, 'pending')""",
+            (
+                project_id,
+                req.test_set_id,
+                req.name,
+                f"{bot_config['connector_type']}:{bot_config['name']}",
+                req.bot_config_id,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        return _parse_experiment_row(row)
+
+    # --- RAG config path (internal RAG pipeline, legacy) ---
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (req.rag_config_id, project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(
+            status_code=422,
+            detail="RAG config not found in this project",
         )
 
     # Snapshot config from rag_config for reproducibility
@@ -655,31 +690,60 @@ async def run_experiment(
             # Setup scorers
             scorers = setup_scorers(selected_metrics)
 
-            # Build virtual rag_config row (uses snapshotted config + URL project_id)
-            virtual_config = _build_virtual_rag_config_row(experiment, project_id)
-            response_mode = virtual_config["response_mode"]
+            # Determine execution mode: external bot or internal RAG
+            use_bot = experiment["bot_config_id"] is not None
+            connector = None
+            virtual_config = None
+
+            if use_bot:
+                bot_cfg = run_conn.execute(
+                    "SELECT * FROM bot_configs WHERE id = ?",
+                    (experiment["bot_config_id"],),
+                ).fetchone()
+                if bot_cfg is None:
+                    yield f"event: error\ndata: {json.dumps({'message': 'Bot config not found'})}\n\n"
+                    return
+                connector = create_connector(
+                    bot_cfg["connector_type"],
+                    json.loads(bot_cfg["config_json"]),
+                    prompt_for_sources=bool(bot_cfg["prompt_for_sources"]),
+                )
+            else:
+                virtual_config = _build_virtual_rag_config_row(experiment, project_id)
 
             for i, q_row in enumerate(questions, 1):
                 question_text = q_row["question"]
                 qid = q_row["id"]
 
                 try:
-                    # Execute RAG query
-                    if response_mode == "multi_step":
-                        query_result = await multi_step_query(
-                            question_text, virtual_config, run_conn
-                        )
+                    if use_bot:
+                        # External bot query
+                        bot_response = await connector.query(question_text)
+                        generated_answer = bot_response.answer
+                        citations_data = [asdict(c) for c in bot_response.citations]
+                        full_context_dicts = []
+                        usage_info = {
+                            "source": "bot_connector",
+                            "citations": citations_data,
+                            "raw_response": bot_response.raw_response,
+                        }
+                        context_strings = []
                     else:
-                        query_result = await single_shot_query(
-                            question_text, virtual_config, run_conn
-                        )
+                        # Internal RAG query
+                        response_mode = virtual_config["response_mode"]
+                        if response_mode == "multi_step":
+                            query_result = await multi_step_query(
+                                question_text, virtual_config, run_conn
+                            )
+                        else:
+                            query_result = await single_shot_query(
+                                question_text, virtual_config, run_conn
+                            )
 
-                    generated_answer = query_result["answer"]
-                    full_context_dicts = query_result["contexts"]
-                    usage_info = query_result.get("usage", {})
-
-                    # Extract content strings for metric evaluation
-                    context_strings = [c["content"] for c in full_context_dicts]
+                        generated_answer = query_result["answer"]
+                        full_context_dicts = query_result["contexts"]
+                        usage_info = query_result.get("usage", {})
+                        context_strings = [c["content"] for c in full_context_dicts]
 
                     # Get reference answer (prefer user-edited)
                     ref_answer = (

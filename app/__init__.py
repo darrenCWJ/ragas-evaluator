@@ -21,6 +21,7 @@ from app.routes import (
     testsets,
     experiments,
     analyze,
+    bot_configs,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     application.include_router(testsets.router)
     application.include_router(experiments.router)
     application.include_router(analyze.router)
+    application.include_router(bot_configs.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")
