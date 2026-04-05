@@ -1,4 +1,4 @@
-"""Experiment CRUD, runner (SSE), comparison, history, delta, and export routes."""
+"""Experiment CRUD, runner (SSE), source verification, comparison, history, delta, and export routes."""
 
 import csv
 import io
@@ -15,8 +15,13 @@ from app.models import (
     ExperimentRunRequest,
     DEFAULT_EXPERIMENT_METRICS,
 )
+from dataclasses import asdict
+
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
+from evaluation.metrics.custom_metric import CustomMetricConfig
+from evaluation.source_verification import verify_all_citations, VerificationResult
 import db.init
+from pipeline.bot_connectors.factory import create_connector
 from pipeline.rag import single_shot_query, multi_step_query
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,7 @@ def _parse_experiment_row(row) -> dict:
         "chunk_config_id": row["chunk_config_id"],
         "embedding_config_id": row["embedding_config_id"],
         "rag_config_id": row["rag_config_id"],
+        "bot_config_id": row["bot_config_id"],
         "baseline_experiment_id": row["baseline_experiment_id"],
         "status": row["status"],
         "started_at": row["started_at"],
@@ -138,17 +144,6 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Validate rag_config belongs to project
-    rag_config = conn.execute(
-        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
-        (req.rag_config_id, project_id),
-    ).fetchone()
-    if rag_config is None:
-        raise HTTPException(
-            status_code=422,
-            detail="RAG config not found in this project",
-        )
-
     # Validate test_set belongs to project
     test_set = conn.execute(
         "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
@@ -169,6 +164,48 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
         raise HTTPException(
             status_code=422,
             detail="Test set has no approved questions",
+        )
+
+    # --- Bot config path (external bot testing) ---
+    if req.bot_config_id is not None:
+        bot_config = conn.execute(
+            "SELECT * FROM bot_configs WHERE id = ? AND project_id = ?",
+            (req.bot_config_id, project_id),
+        ).fetchone()
+        if bot_config is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Bot config not found in this project",
+            )
+
+        cursor = conn.execute(
+            """INSERT INTO experiments
+               (project_id, test_set_id, name, model, bot_config_id, status)
+               VALUES (?, ?, ?, ?, ?, 'pending')""",
+            (
+                project_id,
+                req.test_set_id,
+                req.name,
+                f"{bot_config['connector_type']}:{bot_config['name']}",
+                req.bot_config_id,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        return _parse_experiment_row(row)
+
+    # --- RAG config path (internal RAG pipeline, legacy) ---
+    rag_config = conn.execute(
+        "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
+        (req.rag_config_id, project_id),
+    ).fetchone()
+    if rag_config is None:
+        raise HTTPException(
+            status_code=422,
+            detail="RAG config not found in this project",
         )
 
     # Snapshot config from rag_config for reproducibility
@@ -607,9 +644,18 @@ async def run_experiment(
             detail=f"Experiment already {experiment['status']}. Only pending or failed experiments can be run.",
         )
 
-    # Silently filter metrics to valid ones
+    # Build set of valid metric names (built-in + custom for this project)
+    conn_check = db.init.get_db()
+    custom_names = {
+        r["name"]
+        for r in conn_check.execute(
+            "SELECT name FROM custom_metrics WHERE project_id = ?", (project_id,)
+        ).fetchall()
+    }
+    valid_names = set(ALL_METRICS) | custom_names
+
     requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
-    selected_metrics = [m for m in requested_metrics if m in ALL_METRICS]
+    selected_metrics = [m for m in requested_metrics if m in valid_names]
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
@@ -652,34 +698,84 @@ async def run_experiment(
             total = len(questions)
             yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': total, 'metrics': selected_metrics})}\n\n"
 
-            # Setup scorers
-            scorers = setup_scorers(selected_metrics)
+            # Load custom metrics for this project
+            custom_rows = run_conn.execute(
+                "SELECT * FROM custom_metrics WHERE project_id = ?",
+                (project_id,),
+            ).fetchall()
+            custom_configs = []
+            for cr in custom_rows:
+                cm_name = cr["name"]
+                if cm_name in selected_metrics:
+                    custom_configs.append(CustomMetricConfig(
+                        name=cm_name,
+                        metric_type=cr["metric_type"],
+                        prompt=cr["prompt"],
+                        rubrics=json.loads(cr["rubrics_json"]) if cr["rubrics_json"] else None,
+                        min_score=cr["min_score"],
+                        max_score=cr["max_score"],
+                    ))
 
-            # Build virtual rag_config row (uses snapshotted config + URL project_id)
-            virtual_config = _build_virtual_rag_config_row(experiment, project_id)
-            response_mode = virtual_config["response_mode"]
+            # Filter selected_metrics to only built-in ones for setup_scorers
+            builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
+
+            # Setup scorers
+            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs)
+
+            # Determine execution mode: external bot or internal RAG
+            use_bot = experiment["bot_config_id"] is not None
+            connector = None
+            virtual_config = None
+
+            if use_bot:
+                bot_cfg = run_conn.execute(
+                    "SELECT * FROM bot_configs WHERE id = ?",
+                    (experiment["bot_config_id"],),
+                ).fetchone()
+                if bot_cfg is None:
+                    yield f"event: error\ndata: {json.dumps({'message': 'Bot config not found'})}\n\n"
+                    return
+                connector = create_connector(
+                    bot_cfg["connector_type"],
+                    json.loads(bot_cfg["config_json"]),
+                    prompt_for_sources=bool(bot_cfg["prompt_for_sources"]),
+                )
+            else:
+                virtual_config = _build_virtual_rag_config_row(experiment, project_id)
 
             for i, q_row in enumerate(questions, 1):
                 question_text = q_row["question"]
                 qid = q_row["id"]
 
                 try:
-                    # Execute RAG query
-                    if response_mode == "multi_step":
-                        query_result = await multi_step_query(
-                            question_text, virtual_config, run_conn
-                        )
+                    if use_bot:
+                        # External bot query
+                        bot_response = await connector.query(question_text)
+                        generated_answer = bot_response.answer
+                        citations_data = [asdict(c) for c in bot_response.citations]
+                        full_context_dicts = []
+                        usage_info = {
+                            "source": "bot_connector",
+                            "citations": citations_data,
+                            "raw_response": bot_response.raw_response,
+                        }
+                        context_strings = []
                     else:
-                        query_result = await single_shot_query(
-                            question_text, virtual_config, run_conn
-                        )
+                        # Internal RAG query
+                        response_mode = virtual_config["response_mode"]
+                        if response_mode == "multi_step":
+                            query_result = await multi_step_query(
+                                question_text, virtual_config, run_conn
+                            )
+                        else:
+                            query_result = await single_shot_query(
+                                question_text, virtual_config, run_conn
+                            )
 
-                    generated_answer = query_result["answer"]
-                    full_context_dicts = query_result["contexts"]
-                    usage_info = query_result.get("usage", {})
-
-                    # Extract content strings for metric evaluation
-                    context_strings = [c["content"] for c in full_context_dicts]
+                        generated_answer = query_result["answer"]
+                        full_context_dicts = query_result["contexts"]
+                        usage_info = query_result.get("usage", {})
+                        context_strings = [c["content"] for c in full_context_dicts]
 
                     # Get reference answer (prefer user-edited)
                     ref_answer = (
@@ -695,6 +791,8 @@ async def run_experiment(
                         generated_answer,
                         ref_answer,
                         context_strings,
+                        custom_scorers=custom_scorers,
+                        llm=llm,
                     )
 
                     # Store result
@@ -1111,3 +1209,155 @@ async def export_experiment(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# --- Source Verification ---
+
+
+@router.post("/projects/{project_id}/experiments/{experiment_id}/verify-sources")
+async def verify_experiment_sources(
+    project_id: int,
+    experiment_id: int,
+    llm_model: str = Query("gpt-4o-mini", description="LLM model for content verification"),
+):
+    """Run source verification on all citations in a bot-connector experiment.
+
+    Checks each citation URL for reachability and uses an LLM to verify
+    whether the page content supports the bot's answer.  Results are stored
+    in the source_verifications table (existing rows for this experiment are
+    replaced).
+    """
+    conn = db.init.get_db()
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["bot_config_id"] is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Source verification is only available for bot-connector experiments",
+        )
+
+    if experiment["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Experiment must be completed (current: {experiment['status']})",
+        )
+
+    # Fetch all results with citations in metadata_json
+    result_rows = conn.execute(
+        "SELECT id, response, metadata_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+
+    # Clear previous verification results for this experiment
+    result_ids = [r["id"] for r in result_rows]
+    if result_ids:
+        placeholders = ",".join("?" for _ in result_ids)
+        conn.execute(
+            f"DELETE FROM source_verifications WHERE experiment_result_id IN ({placeholders})",
+            result_ids,
+        )
+        conn.commit()
+
+    total_verified = 0
+    summary: dict[str, int] = {"verified": 0, "hallucinated": 0, "inaccessible": 0, "unverifiable": 0}
+
+    for result_row in result_rows:
+        metadata = json.loads(result_row["metadata_json"]) if result_row["metadata_json"] else {}
+        citations = metadata.get("citations", [])
+        answer = result_row["response"] or ""
+
+        if not citations:
+            continue
+
+        verifications = await verify_all_citations(citations, answer, llm_model)
+
+        for v in verifications:
+            conn.execute(
+                """INSERT INTO source_verifications
+                   (experiment_result_id, citation_index, title, url, status, details)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    result_row["id"],
+                    v.citation_index,
+                    v.title,
+                    v.url,
+                    v.status,
+                    v.details,
+                ),
+            )
+            summary[v.status] = summary.get(v.status, 0) + 1
+            total_verified += 1
+
+        conn.commit()
+
+    return {
+        "experiment_id": experiment_id,
+        "total_citations_checked": total_verified,
+        "summary": summary,
+    }
+
+
+@router.get("/projects/{project_id}/experiments/{experiment_id}/source-verifications")
+async def get_source_verifications(project_id: int, experiment_id: int):
+    """Return all source verification results for an experiment, grouped by result."""
+    conn = db.init.get_db()
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rows = conn.execute(
+        """SELECT sv.*, er.test_question_id, tq.question
+           FROM source_verifications sv
+           JOIN experiment_results er ON sv.experiment_result_id = er.id
+           JOIN test_questions tq ON er.test_question_id = tq.id
+           WHERE er.experiment_id = ?
+           ORDER BY er.id, sv.citation_index""",
+        (experiment_id,),
+    ).fetchall()
+
+    # Group by experiment_result_id
+    grouped: dict[int, dict] = {}
+    for r in rows:
+        rid = r["experiment_result_id"]
+        if rid not in grouped:
+            grouped[rid] = {
+                "experiment_result_id": rid,
+                "test_question_id": r["test_question_id"],
+                "question": r["question"],
+                "verifications": [],
+            }
+        grouped[rid]["verifications"].append({
+            "id": r["id"],
+            "citation_index": r["citation_index"],
+            "title": r["title"],
+            "url": r["url"],
+            "status": r["status"],
+            "details": r["details"],
+            "created_at": r["created_at"],
+        })
+
+    # Summary counts
+    all_statuses = [r["status"] for r in rows]
+    summary = {
+        "verified": all_statuses.count("verified"),
+        "hallucinated": all_statuses.count("hallucinated"),
+        "inaccessible": all_statuses.count("inaccessible"),
+        "unverifiable": all_statuses.count("unverifiable"),
+        "total": len(all_statuses),
+    }
+
+    return {
+        "experiment_id": experiment_id,
+        "summary": summary,
+        "results": list(grouped.values()),
+    }

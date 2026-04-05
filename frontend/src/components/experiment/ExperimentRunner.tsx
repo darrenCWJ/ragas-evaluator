@@ -2,9 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   runExperimentSSE,
   fetchExperiment,
+  fetchCustomMetrics,
 } from "../../lib/api";
 import type {
   Experiment,
+  CustomMetric,
   ExperimentSSEHandle,
   SSEStartedEvent,
   SSEProgressEvent,
@@ -25,7 +27,7 @@ const DEFAULT_METRICS = [
   "semantic_similarity",
 ];
 
-const ALL_METRICS = [
+const LLM_METRICS = [
   "faithfulness",
   "answer_relevancy",
   "context_precision",
@@ -33,8 +35,114 @@ const ALL_METRICS = [
   "context_entities_recall",
   "noise_sensitivity",
   "factual_correctness",
+  "summarization_score",
+  "aspect_critic",
+  "rubrics_score",
+];
+
+const NVIDIA_METRICS = [
+  "answer_accuracy",
+  "context_relevance",
+  "response_groundedness",
+];
+
+const EMBEDDING_METRICS = [
   "semantic_similarity",
 ];
+
+const STRING_METRICS = [
+  "non_llm_string_similarity",
+  "bleu_score",
+  "rouge_score",
+  "chrf_score",
+  "exact_match",
+  "string_presence",
+];
+
+const METRIC_DESCRIPTIONS: Record<string, string> = {
+  // LLM Metrics
+  faithfulness:
+    "Measures if the response is factually consistent with the retrieved context. Every claim should be supported by the context.",
+  answer_relevancy:
+    "Measures how relevant the response is to the user's question. Penalises incomplete or redundant answers.",
+  context_precision:
+    "Measures how well retrieved contexts are ranked — whether relevant chunks appear before irrelevant ones.",
+  context_recall:
+    "Measures how much of the reference answer can be attributed to the retrieved context. Catches missing retrieval.",
+  context_entities_recall:
+    "Measures the proportion of entities in the reference that also appear in the retrieved contexts.",
+  noise_sensitivity:
+    "Measures how much irrelevant context (noise) degrades the response quality compared to the reference.",
+  factual_correctness:
+    "Compares the response to a reference answer by decomposing both into claims and checking overlap.",
+  summarization_score:
+    "Evaluates how well a summary captures the key information from the source context.",
+  aspect_critic:
+    "Binary LLM judge that evaluates a specific aspect (e.g. harmfulness, correctness) and returns yes/no.",
+  rubrics_score:
+    "LLM judge that scores the response against user-defined rubric criteria with detailed reasoning.",
+  // NVIDIA Metrics
+  answer_accuracy:
+    "Dual LLM-as-a-Judge that measures agreement between the response and a reference answer. Scores from two perspectives then averages.",
+  context_relevance:
+    "Dual LLM-as-a-Judge that evaluates whether retrieved contexts are pertinent to the query. Two independent ratings averaged.",
+  response_groundedness:
+    "Dual LLM-as-a-Judge that checks if every claim in the response is supported by the retrieved contexts.",
+  // Embedding Metrics
+  semantic_similarity:
+    "Cosine similarity between embeddings of the response and the reference answer. No LLM needed.",
+  // String Metrics
+  non_llm_string_similarity:
+    "Character-level string distance (Levenshtein) between the response and reference. Fast, no LLM needed.",
+  bleu_score:
+    "BLEU n-gram precision score comparing response to reference. Common in machine translation evaluation.",
+  rouge_score:
+    "ROUGE recall-oriented score measuring n-gram overlap between response and reference.",
+  chrf_score:
+    "chrF character n-gram F-score. More robust than BLEU for morphologically rich text.",
+  exact_match:
+    "Returns 1 if the response exactly matches the reference (after normalisation), 0 otherwise.",
+  string_presence:
+    "Checks whether the reference string appears anywhere in the response. Simple substring match.",
+};
+
+interface MetricGroupProps {
+  label: string;
+  labelClass: string;
+  metrics: string[];
+  selected: Set<string>;
+  onToggle: (metric: string) => void;
+  activeClass: string;
+  inactiveClass: string;
+}
+
+function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeClass, inactiveClass }: MetricGroupProps) {
+  return (
+    <div>
+      <label className={`mb-2 block text-xs font-medium ${labelClass}`}>
+        {label}
+      </label>
+      <div className="flex flex-wrap gap-2">
+        {metrics.map((metric) => {
+          const checked = selected.has(metric);
+          return (
+            <button
+              key={metric}
+              type="button"
+              onClick={() => onToggle(metric)}
+              title={METRIC_DESCRIPTIONS[metric]}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                checked ? activeClass : inactiveClass
+              }`}
+            >
+              {metric.replace(/_/g, " ")}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 type RunState =
   | { phase: "idle" }
@@ -48,6 +156,7 @@ export default function ExperimentRunner({
   experiment,
   onComplete,
 }: Props) {
+  const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(
     () => new Set(DEFAULT_METRICS),
   );
@@ -57,6 +166,13 @@ export default function ExperimentRunner({
   const handleRef = useRef<ExperimentSSEHandle | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Load custom metrics for this project
+  useEffect(() => {
+    fetchCustomMetrics(projectId)
+      .then(setCustomMetrics)
+      .catch(() => setCustomMetrics([]));
+  }, [projectId]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -185,29 +301,80 @@ export default function ExperimentRunner({
       {/* Idle — metric selection + run button */}
       {runState.phase === "idle" && (
         <div className="space-y-4">
-          <div>
-            <label className="mb-2 block text-xs font-medium text-text-secondary">
-              Select Metrics
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {ALL_METRICS.map((metric) => {
-                const checked = selectedMetrics.has(metric);
-                return (
-                  <button
-                    key={metric}
-                    type="button"
-                    onClick={() => toggleMetric(metric)}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                      checked
-                        ? "border-accent/50 bg-accent/15 text-accent"
-                        : "border-border bg-card text-text-muted hover:border-border-focus hover:text-text-secondary"
-                    }`}
-                  >
-                    {metric.replace(/_/g, " ")}
-                  </button>
-                );
-              })}
-            </div>
+          <div className="space-y-3">
+            {/* LLM Metrics */}
+            <MetricGroup
+              label="LLM Metrics"
+              labelClass="text-text-secondary"
+              metrics={LLM_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-accent/50 bg-accent/15 text-accent"
+              inactiveClass="border-border bg-card text-text-muted hover:border-border-focus hover:text-text-secondary"
+            />
+
+            {/* NVIDIA Metrics */}
+            <MetricGroup
+              label="NVIDIA Metrics"
+              labelClass="text-green-400"
+              metrics={NVIDIA_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-green-500/50 bg-green-500/15 text-green-400"
+              inactiveClass="border-border bg-card text-text-muted hover:border-green-500/30 hover:text-text-secondary"
+            />
+
+            {/* Embedding Metrics */}
+            <MetricGroup
+              label="Embedding Metrics"
+              labelClass="text-sky-400"
+              metrics={EMBEDDING_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-sky-500/50 bg-sky-500/15 text-sky-400"
+              inactiveClass="border-border bg-card text-text-muted hover:border-sky-500/30 hover:text-text-secondary"
+            />
+
+            {/* String Metrics */}
+            <MetricGroup
+              label="String Metrics"
+              labelClass="text-amber-400"
+              metrics={STRING_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-amber-500/50 bg-amber-500/15 text-amber-400"
+              inactiveClass="border-border bg-card text-text-muted hover:border-amber-500/30 hover:text-text-secondary"
+            />
+
+            {/* Custom metrics */}
+            {customMetrics.length > 0 && (
+              <div>
+                <label className="mb-2 block text-xs font-medium text-purple-400">
+                  Custom Metrics
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {customMetrics.map((cm) => {
+                    const checked = selectedMetrics.has(cm.name);
+                    return (
+                      <button
+                        key={cm.name}
+                        type="button"
+                        onClick={() => toggleMetric(cm.name)}
+                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                          checked
+                            ? "border-purple-500/50 bg-purple-500/15 text-purple-400"
+                            : "border-border bg-card text-text-muted hover:border-purple-500/30 hover:text-text-secondary"
+                        }`}
+                        title={`${cm.metric_type.replace(/_/g, " ")} (${cm.min_score}–${cm.max_score})`}
+                      >
+                        {cm.name.replace(/_/g, " ")}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {selectedMetrics.size === 0 && (
               <p className="mt-1.5 text-xs text-red-400">
                 Select at least one metric

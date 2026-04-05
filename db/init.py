@@ -158,6 +158,48 @@ CREATE TABLE IF NOT EXISTS api_configs (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(project_id)
 );
+
+CREATE TABLE IF NOT EXISTS bot_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    connector_type TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    prompt_for_sources BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS source_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_result_id INTEGER NOT NULL REFERENCES experiment_results(id) ON DELETE CASCADE,
+    citation_index INTEGER NOT NULL,
+    title TEXT,
+    url TEXT,
+    status TEXT NOT NULL,
+    details TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS human_annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_result_id INTEGER NOT NULL REFERENCES experiment_results(id) ON DELETE CASCADE,
+    rating TEXT NOT NULL,
+    notes TEXT,
+    annotated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS custom_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    metric_type TEXT NOT NULL,
+    prompt TEXT,
+    rubrics_json TEXT,
+    min_score INTEGER NOT NULL DEFAULT 1,
+    max_score INTEGER NOT NULL DEFAULT 5,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -227,6 +269,13 @@ def init_db() -> sqlite3.Connection:
     # Migration: add filter_params_json to chunk_configs (post-chunking quality filters)
     try:
         conn.execute("ALTER TABLE chunk_configs ADD COLUMN filter_params_json TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add bot_config_id to experiments (Phase 2 — external bot testing)
+    try:
+        conn.execute("ALTER TABLE experiments ADD COLUMN bot_config_id INTEGER REFERENCES bot_configs(id)")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists

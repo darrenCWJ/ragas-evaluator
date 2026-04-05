@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useProject } from "../contexts/ProjectContext";
 import ProjectSelector from "../components/ProjectSelector";
 import ExternalBaselineUpload from "../components/setup/ExternalBaselineUpload";
-import ApiEndpointConfig from "../components/setup/ApiEndpointConfig";
+import BotConnectorConfig from "../components/setup/BotConnectorConfig";
+import CustomMetricBuilder from "../components/setup/CustomMetricBuilder";
 import BaselinePreview from "../components/setup/BaselinePreview";
 
 export default function SetupPage() {
@@ -57,7 +58,8 @@ export default function SetupPage() {
             projectId={project.id}
             onUploaded={() => setRefreshKey((k) => k + 1)}
           />
-          <ApiEndpointConfig projectId={project.id} />
+          <BotConnectorConfig projectId={project.id} />
+          <CustomMetricBuilder projectId={project.id} />
         </div>
 
         {/* Right column: Baseline Preview */}
