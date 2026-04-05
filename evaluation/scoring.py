@@ -1,10 +1,15 @@
 """Metric scorer setup and evaluation helpers."""
 
+from __future__ import annotations
+
 import logging
 
 from openai import AsyncOpenAI
 from ragas.llms import llm_factory
 from ragas.embeddings.base import embedding_factory
+
+from evaluation.metrics import custom_metric
+from evaluation.metrics.custom_metric import CustomMetricConfig
 
 from evaluation.metrics import (
     faithfulness,
@@ -96,7 +101,15 @@ _NO_DEPS = {
 }
 
 
-def setup_scorers(metrics: list[str] | None = None) -> dict:
+def setup_scorers(
+    metrics: list[str] | None = None,
+    custom_configs: list[CustomMetricConfig] | None = None,
+) -> tuple[dict, dict, object]:
+    """Set up built-in + custom metric scorers.
+
+    Returns (builtin_scorers, custom_scorers, llm).
+    The llm is returned so custom DiscreteMetric scorers can use it at score time.
+    """
     selected = metrics or ALL_METRICS
     client = AsyncOpenAI()
     llm = llm_factory("gpt-4o-mini", client=client, max_tokens=16384)
@@ -115,7 +128,14 @@ def setup_scorers(metrics: list[str] | None = None) -> dict:
         elif m in _NO_DEPS:
             scorers[m] = _METRIC_MODULES[m].create_scorer()
 
-    return scorers
+    custom_scorers = {}
+    for cfg in (custom_configs or []):
+        try:
+            custom_scorers[cfg.name] = (cfg, custom_metric.create_scorer(cfg, llm))
+        except Exception as e:
+            logger.warning("Failed to create custom scorer '%s': %s", cfg.name, e)
+
+    return scorers, custom_scorers, llm
 
 
 # Signature patterns for score() calls — grouped by argument shape
@@ -153,6 +173,8 @@ async def evaluate_experiment_row(
     generated_answer: str,
     reference_answer: str,
     contexts: list[str],
+    custom_scorers: dict | None = None,
+    llm=None,
 ) -> dict:
     """Evaluate a generated answer against reference using selected metrics."""
     results = {}
@@ -184,6 +206,29 @@ async def evaluate_experiment_row(
                 results[name] = await mod.score(scorer, question, contexts)
         except Exception as e:
             logger.warning("Metric %s failed: %s", name, e)
+            results[name] = None
+
+    # Evaluate custom metrics
+    for name, (cfg, scorer) in (custom_scorers or {}).items():
+        try:
+            if cfg.metric_type == "integer_range":
+                results[name] = await custom_metric.score_integer_range(
+                    scorer, llm, question, generated_answer, contexts, reference_answer,
+                )
+            elif cfg.metric_type == "similarity":
+                results[name] = await custom_metric.score_similarity(
+                    scorer, llm, generated_answer, reference_answer,
+                )
+            elif cfg.metric_type == "rubrics":
+                results[name] = await custom_metric.score_rubrics(
+                    scorer, question, generated_answer, contexts,
+                )
+            elif cfg.metric_type == "instance_rubrics":
+                # Instance rubrics need per-question rubrics — skip if none provided
+                logger.info("Skipping instance_rubrics metric '%s' (per-question rubrics not yet supported in runner)", name)
+                results[name] = None
+        except Exception as e:
+            logger.warning("Custom metric %s failed: %s", name, e)
             results[name] = None
 
     return results
