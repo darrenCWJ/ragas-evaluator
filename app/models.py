@@ -447,6 +447,51 @@ class BatchApplyRequest(BaseModel):
         return v
 
 
+VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics"}
+
+
+class CustomMetricCreate(BaseModel):
+    name: str
+    metric_type: str
+    prompt: str | None = None
+    rubrics: dict[str, str] | None = None
+    min_score: int = 1
+    max_score: int = 5
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 100:
+            raise ValueError("name must not exceed 100 characters")
+        # Ensure name is a valid metric key (lowercase, underscores)
+        import re
+        if not re.match(r"^[a-z][a-z0-9_]*$", v):
+            raise ValueError("name must be lowercase with underscores only (e.g. 'my_metric')")
+        return v
+
+    @field_validator("metric_type")
+    @classmethod
+    def validate_metric_type(cls, v: str) -> str:
+        if v not in VALID_CUSTOM_METRIC_TYPES:
+            raise ValueError(
+                f"metric_type must be one of: {', '.join(sorted(VALID_CUSTOM_METRIC_TYPES))}"
+            )
+        return v
+
+    def model_post_init(self, __context) -> None:
+        if self.metric_type in ("integer_range", "similarity") and not self.prompt:
+            raise ValueError("prompt is required for integer_range and similarity metric types")
+        if self.metric_type == "rubrics" and not self.rubrics:
+            raise ValueError("rubrics are required for rubrics metric type")
+        if self.min_score >= self.max_score:
+            raise ValueError("min_score must be less than max_score")
+        if self.min_score < 0 or self.max_score > 10:
+            raise ValueError("score range must be between 0 and 10")
+
+
 VALID_CONNECTOR_TYPES = {"glean", "openai", "claude", "deepseek", "gemini", "custom"}
 
 

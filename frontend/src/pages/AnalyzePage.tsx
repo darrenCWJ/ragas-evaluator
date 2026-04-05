@@ -5,6 +5,9 @@ import type { Experiment } from "../lib/api";
 import ExperimentSuggestions from "../components/experiment/ExperimentSuggestions";
 import ExperimentDelta from "../components/experiment/ExperimentDelta";
 import ExperimentResults from "../components/experiment/ExperimentResults";
+import ProjectReportPanel from "../components/experiment/ProjectReportPanel";
+import SourceVerificationPanel from "../components/experiment/SourceVerificationPanel";
+import HumanAnnotationPanel from "../components/experiment/HumanAnnotationPanel";
 
 export default function AnalyzePage() {
   const { project } = useProject();
@@ -107,6 +110,11 @@ export default function AnalyzePage() {
             </div>
           )}
 
+          {/* Project-level report */}
+          <section className="rounded-xl border border-border bg-card p-5">
+            <ProjectReportPanel projectId={project.id} />
+          </section>
+
           {/* Selected experiment sections */}
           {selected && (
             <>
@@ -133,6 +141,26 @@ export default function AnalyzePage() {
               <section className="rounded-xl border border-accent/20 bg-card p-5">
                 <ExperimentResults
                   key={selected.id}
+                  projectId={project.id}
+                  experimentId={selected.id}
+                />
+              </section>
+
+              {/* Source verification — for bot experiments */}
+              {selected.bot_config_id != null && (
+                <section className="rounded-xl border border-border bg-card p-5">
+                  <SourceVerificationPanel
+                    key={`sv-${selected.id}`}
+                    projectId={project.id}
+                    experimentId={selected.id}
+                  />
+                </section>
+              )}
+
+              {/* Human annotation */}
+              <section className="rounded-xl border border-border bg-card p-5">
+                <HumanAnnotationPanel
+                  key={`ann-${selected.id}`}
                   projectId={project.id}
                   experimentId={selected.id}
                 />

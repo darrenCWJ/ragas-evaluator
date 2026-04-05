@@ -188,6 +188,18 @@ CREATE TABLE IF NOT EXISTS human_annotations (
     notes TEXT,
     annotated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS custom_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    metric_type TEXT NOT NULL,
+    prompt TEXT,
+    rubrics_json TEXT,
+    min_score INTEGER NOT NULL DEFAULT 1,
+    max_score INTEGER NOT NULL DEFAULT 5,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
