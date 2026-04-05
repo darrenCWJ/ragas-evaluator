@@ -659,6 +659,7 @@ export interface Experiment {
   chunk_config_id: number;
   embedding_config_id: number;
   rag_config_id: number;
+  bot_config_id: number | null;
   baseline_experiment_id: number | null;
   status: "pending" | "running" | "completed" | "failed";
   started_at: string | null;
@@ -674,7 +675,8 @@ export interface Experiment {
 
 export interface ExperimentCreate {
   test_set_id: number;
-  rag_config_id: number;
+  rag_config_id?: number | null;
+  bot_config_id?: number | null;
   name: string;
 }
 
@@ -1068,4 +1070,300 @@ export async function fetchExperimentHistory(
     `/api/projects/${projectId}/experiments/history`,
   );
   return data.experiments;
+}
+
+// --- Bot Config API ---
+
+export type ConnectorType = "glean" | "openai" | "claude" | "deepseek" | "gemini" | "custom";
+
+export interface BotConfig {
+  id: number;
+  project_id: number;
+  name: string;
+  connector_type: ConnectorType;
+  config_json: Record<string, unknown>;
+  prompt_for_sources: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BotConfigCreatePayload {
+  name: string;
+  connector_type: ConnectorType;
+  config_json: Record<string, unknown>;
+  prompt_for_sources?: boolean;
+}
+
+export async function fetchBotConfigs(projectId: number): Promise<BotConfig[]> {
+  return request<BotConfig[]>(`/api/projects/${projectId}/bot-configs`);
+}
+
+export async function createBotConfig(
+  projectId: number,
+  payload: BotConfigCreatePayload,
+): Promise<BotConfig> {
+  return request<BotConfig>(`/api/projects/${projectId}/bot-configs`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateBotConfig(
+  projectId: number,
+  configId: number,
+  payload: Partial<BotConfigCreatePayload>,
+): Promise<BotConfig> {
+  return request<BotConfig>(`/api/projects/${projectId}/bot-configs/${configId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteBotConfig(
+  projectId: number,
+  configId: number,
+): Promise<void> {
+  return request<void>(`/api/projects/${projectId}/bot-configs/${configId}`, {
+    method: "DELETE",
+  });
+}
+
+// --- Source Verification Types ---
+
+export interface SourceVerification {
+  id: number;
+  citation_index: number;
+  title: string | null;
+  url: string | null;
+  status: "verified" | "hallucinated" | "inaccessible" | "unverifiable";
+  details: string | null;
+  created_at: string;
+}
+
+export interface SourceVerificationGroup {
+  experiment_result_id: number;
+  test_question_id: number;
+  question: string;
+  verifications: SourceVerification[];
+}
+
+export interface SourceVerificationResult {
+  experiment_id: number;
+  results: SourceVerificationGroup[];
+}
+
+// --- Source Verification API ---
+
+export async function fetchSourceVerifications(
+  projectId: number,
+  experimentId: number,
+): Promise<SourceVerificationResult> {
+  return request<SourceVerificationResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/source-verifications`,
+  );
+}
+
+// --- Human Annotation Types ---
+
+export interface AnnotationSampleItem {
+  experiment_result_id: number;
+  test_question_id: number;
+  question: string;
+  reference_answer: string;
+  response: string | null;
+  metrics: Record<string, number>;
+  annotation: {
+    rating: string;
+    notes: string | null;
+    annotated_at: string;
+  } | null;
+}
+
+export interface AnnotationSampleResult {
+  experiment_id: number;
+  total_results: number;
+  sample_size: number;
+  annotated_count: number;
+  sample: AnnotationSampleItem[];
+}
+
+export interface HumanAnnotationCreate {
+  experiment_result_id: number;
+  rating: "accurate" | "partially_accurate" | "inaccurate";
+  notes?: string | null;
+}
+
+export interface EvaluatorAccuracyComparison {
+  experiment_result_id: number;
+  question: string;
+  response: string | null;
+  reference_answer: string;
+  human_rating: string;
+  human_score: number;
+  evaluator_score: number | null;
+  evaluator_rating: string | null;
+  agrees: boolean | null;
+  notes: string | null;
+}
+
+export interface EvaluatorAccuracyResult {
+  experiment_id: number;
+  total_annotations: number;
+  scorable_count: number;
+  agreements: number;
+  agreement_rate: number | null;
+  comparisons: EvaluatorAccuracyComparison[];
+}
+
+// --- Human Annotation API ---
+
+export async function fetchAnnotationSample(
+  projectId: number,
+  experimentId: number,
+): Promise<AnnotationSampleResult> {
+  return request<AnnotationSampleResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/annotation-sample`,
+  );
+}
+
+export async function submitAnnotations(
+  projectId: number,
+  experimentId: number,
+  annotations: HumanAnnotationCreate[],
+): Promise<{ experiment_id: number; submitted: number }> {
+  return request<{ experiment_id: number; submitted: number }>(
+    `/api/projects/${projectId}/experiments/${experimentId}/annotations`,
+    { method: "POST", body: JSON.stringify({ annotations }) },
+  );
+}
+
+export async function fetchEvaluatorAccuracy(
+  projectId: number,
+  experimentId: number,
+): Promise<EvaluatorAccuracyResult> {
+  return request<EvaluatorAccuracyResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/evaluator-accuracy`,
+  );
+}
+
+// --- Project Report Types ---
+
+export interface ExperimentReportEntry {
+  id: number;
+  name: string;
+  bot_config_id: number | null;
+  bot_config_name: string | null;
+  rag_config_id: number | null;
+  rag_config_name: string | null;
+  result_count: number;
+  completed_at: string | null;
+  aggregate_metrics: Record<string, number | null>;
+  overall_score: number | null;
+  source_verification: {
+    verified: number;
+    hallucinated: number;
+    inaccessible: number;
+    unverifiable: number;
+    total: number;
+    pct_verified: number;
+    pct_hallucinated: number;
+  } | null;
+  evaluator_reliability: {
+    total_annotations: number;
+    scorable_count: number;
+    agreements: number;
+    agreement_rate: number;
+  } | null;
+}
+
+export interface BotSummary {
+  bot_config_id: number;
+  bot_config_name: string | null;
+  connector_type: string;
+  experiment_count: number;
+  total_results: number;
+  aggregate_metrics: Record<string, number | null>;
+  overall_score: number | null;
+}
+
+export interface ProjectReport {
+  project_id: number;
+  project_name: string;
+  total_experiments: number;
+  experiments: ExperimentReportEntry[];
+  bot_summary: BotSummary[];
+  overall_metrics: Record<string, number | null> | null;
+  overall_source_verification: {
+    verified: number;
+    hallucinated: number;
+    inaccessible: number;
+    unverifiable: number;
+    total: number;
+    pct_verified: number;
+    pct_hallucinated: number;
+  } | null;
+  overall_evaluator_reliability: {
+    total_annotations: number;
+    scorable_count: number;
+    agreements: number;
+    agreement_rate: number;
+  } | null;
+}
+
+// --- Project Report API ---
+
+export async function fetchProjectReport(
+  projectId: number,
+): Promise<ProjectReport> {
+  return request<ProjectReport>(`/api/projects/${projectId}/report`);
+}
+
+// --- Custom Metrics API ---
+
+export interface CustomMetric {
+  id: number;
+  project_id: number;
+  name: string;
+  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics";
+  prompt: string | null;
+  rubrics: Record<string, string> | null;
+  min_score: number;
+  max_score: number;
+  created_at: string;
+}
+
+export interface CustomMetricCreate {
+  name: string;
+  metric_type: string;
+  prompt?: string | null;
+  rubrics?: Record<string, string> | null;
+  min_score?: number;
+  max_score?: number;
+}
+
+export async function fetchCustomMetrics(
+  projectId: number,
+): Promise<CustomMetric[]> {
+  return request<CustomMetric[]>(`/api/projects/${projectId}/custom-metrics`);
+}
+
+export async function createCustomMetric(
+  projectId: number,
+  data: CustomMetricCreate,
+): Promise<CustomMetric> {
+  return request<CustomMetric>(`/api/projects/${projectId}/custom-metrics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteCustomMetric(
+  projectId: number,
+  metricId: number,
+): Promise<void> {
+  await request<{ deleted: boolean }>(
+    `/api/projects/${projectId}/custom-metrics/${metricId}`,
+    { method: "DELETE" },
+  );
 }

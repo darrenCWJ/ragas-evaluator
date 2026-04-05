@@ -26,10 +26,12 @@ class GleanBotConnector:
         api_key: str,
         *,
         base_url: str = "https://company-be.glean.com",
+        agent_id: str | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
+        self._agent_id = agent_id
         self._timeout = timeout
 
     async def query(self, question: str) -> BotResponse:
@@ -38,6 +40,8 @@ class GleanBotConnector:
                 {"fragments": [{"text": question}]}
             ],
         }
+        if self._agent_id:
+            body["agentId"] = self._agent_id
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",

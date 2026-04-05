@@ -18,6 +18,7 @@ from app.models import (
 from dataclasses import asdict
 
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
+from evaluation.metrics.custom_metric import CustomMetricConfig
 from evaluation.source_verification import verify_all_citations, VerificationResult
 import db.init
 from pipeline.bot_connectors.factory import create_connector
@@ -643,9 +644,18 @@ async def run_experiment(
             detail=f"Experiment already {experiment['status']}. Only pending or failed experiments can be run.",
         )
 
-    # Silently filter metrics to valid ones
+    # Build set of valid metric names (built-in + custom for this project)
+    conn_check = db.init.get_db()
+    custom_names = {
+        r["name"]
+        for r in conn_check.execute(
+            "SELECT name FROM custom_metrics WHERE project_id = ?", (project_id,)
+        ).fetchall()
+    }
+    valid_names = set(ALL_METRICS) | custom_names
+
     requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
-    selected_metrics = [m for m in requested_metrics if m in ALL_METRICS]
+    selected_metrics = [m for m in requested_metrics if m in valid_names]
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
@@ -688,8 +698,29 @@ async def run_experiment(
             total = len(questions)
             yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': total, 'metrics': selected_metrics})}\n\n"
 
+            # Load custom metrics for this project
+            custom_rows = run_conn.execute(
+                "SELECT * FROM custom_metrics WHERE project_id = ?",
+                (project_id,),
+            ).fetchall()
+            custom_configs = []
+            for cr in custom_rows:
+                cm_name = cr["name"]
+                if cm_name in selected_metrics:
+                    custom_configs.append(CustomMetricConfig(
+                        name=cm_name,
+                        metric_type=cr["metric_type"],
+                        prompt=cr["prompt"],
+                        rubrics=json.loads(cr["rubrics_json"]) if cr["rubrics_json"] else None,
+                        min_score=cr["min_score"],
+                        max_score=cr["max_score"],
+                    ))
+
+            # Filter selected_metrics to only built-in ones for setup_scorers
+            builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
+
             # Setup scorers
-            scorers = setup_scorers(selected_metrics)
+            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs)
 
             # Determine execution mode: external bot or internal RAG
             use_bot = experiment["bot_config_id"] is not None
@@ -760,6 +791,8 @@ async def run_experiment(
                         generated_answer,
                         ref_answer,
                         context_strings,
+                        custom_scorers=custom_scorers,
+                        llm=llm,
                     )
 
                     # Store result
