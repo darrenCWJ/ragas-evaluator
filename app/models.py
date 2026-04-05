@@ -381,7 +381,8 @@ class RagQueryRequest(BaseModel):
 
 class ExperimentCreate(BaseModel):
     test_set_id: int
-    rag_config_id: int
+    rag_config_id: int | None = None
+    bot_config_id: int | None = None
     name: str
 
     @field_validator("name")
@@ -393,6 +394,12 @@ class ExperimentCreate(BaseModel):
         if len(v) > 200:
             raise ValueError("name must not exceed 200 characters")
         return v
+
+    def model_post_init(self, __context) -> None:
+        if self.rag_config_id is None and self.bot_config_id is None:
+            raise ValueError("Either rag_config_id or bot_config_id must be provided")
+        if self.rag_config_id is not None and self.bot_config_id is not None:
+            raise ValueError("Provide rag_config_id or bot_config_id, not both")
 
 
 class ExperimentRunRequest(BaseModel):
@@ -437,4 +444,132 @@ class BatchApplyRequest(BaseModel):
                 raise ValueError("experiment_name must not be empty")
             if len(v) > 200:
                 raise ValueError("experiment_name must not exceed 200 characters")
+        return v
+
+
+VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics"}
+
+
+class CustomMetricCreate(BaseModel):
+    name: str
+    metric_type: str
+    prompt: str | None = None
+    rubrics: dict[str, str] | None = None
+    min_score: int = 1
+    max_score: int = 5
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 100:
+            raise ValueError("name must not exceed 100 characters")
+        # Ensure name is a valid metric key (lowercase, underscores)
+        import re
+        if not re.match(r"^[a-z][a-z0-9_]*$", v):
+            raise ValueError("name must be lowercase with underscores only (e.g. 'my_metric')")
+        return v
+
+    @field_validator("metric_type")
+    @classmethod
+    def validate_metric_type(cls, v: str) -> str:
+        if v not in VALID_CUSTOM_METRIC_TYPES:
+            raise ValueError(
+                f"metric_type must be one of: {', '.join(sorted(VALID_CUSTOM_METRIC_TYPES))}"
+            )
+        return v
+
+    def model_post_init(self, __context) -> None:
+        if self.metric_type in ("integer_range", "similarity") and not self.prompt:
+            raise ValueError("prompt is required for integer_range and similarity metric types")
+        if self.metric_type == "rubrics" and not self.rubrics:
+            raise ValueError("rubrics are required for rubrics metric type")
+        if self.min_score >= self.max_score:
+            raise ValueError("min_score must be less than max_score")
+        if self.min_score < 0 or self.max_score > 10:
+            raise ValueError("score range must be between 0 and 10")
+
+
+VALID_CONNECTOR_TYPES = {"glean", "openai", "claude", "deepseek", "gemini", "custom"}
+
+
+class BotConfigCreate(BaseModel):
+    name: str
+    connector_type: str
+    config_json: dict
+    prompt_for_sources: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+    @field_validator("connector_type")
+    @classmethod
+    def validate_connector_type(cls, v: str) -> str:
+        if v not in VALID_CONNECTOR_TYPES:
+            raise ValueError(
+                f"connector_type must be one of: {', '.join(sorted(VALID_CONNECTOR_TYPES))}"
+            )
+        return v
+
+
+VALID_HUMAN_RATINGS = {"accurate", "partially_accurate", "inaccurate"}
+
+
+class HumanAnnotationCreate(BaseModel):
+    experiment_result_id: int
+    rating: str
+    notes: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, v: str) -> str:
+        if v not in VALID_HUMAN_RATINGS:
+            raise ValueError(
+                f"rating must be one of: {', '.join(sorted(VALID_HUMAN_RATINGS))}"
+            )
+        return v
+
+
+class HumanAnnotationBatch(BaseModel):
+    annotations: list[HumanAnnotationCreate]
+
+    @field_validator("annotations")
+    @classmethod
+    def validate_non_empty(cls, v: list) -> list:
+        if not v:
+            raise ValueError("annotations list must not be empty")
+        return v
+
+
+class BotConfigUpdate(BaseModel):
+    name: str | None = None
+    connector_type: str | None = None
+    config_json: dict | None = None
+    prompt_for_sources: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("name must not be empty")
+        return v
+
+    @field_validator("connector_type")
+    @classmethod
+    def validate_connector_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_CONNECTOR_TYPES:
+            raise ValueError(
+                f"connector_type must be one of: {', '.join(sorted(VALID_CONNECTOR_TYPES))}"
+            )
         return v

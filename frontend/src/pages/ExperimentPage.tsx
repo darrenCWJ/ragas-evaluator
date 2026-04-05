@@ -8,6 +8,8 @@ import ExperimentRunner from "../components/experiment/ExperimentRunner";
 import ExperimentResults from "../components/experiment/ExperimentResults";
 import ExperimentCompare from "../components/experiment/ExperimentCompare";
 import ExperimentHistory from "../components/experiment/ExperimentHistory";
+import SourceVerificationPanel from "../components/experiment/SourceVerificationPanel";
+import HumanAnnotationPanel from "../components/experiment/HumanAnnotationPanel";
 
 const MIN_COMPARE = 2;
 const MAX_COMPARE = 5;
@@ -209,13 +211,35 @@ export default function ExperimentPage() {
           {comparingIds.length === 0 &&
             selected &&
             selected.status === "completed" && (
-              <section className="rounded-xl border border-accent/20 bg-card p-5">
-                <ExperimentResults
-                  key={selected.id}
-                  projectId={project.id}
-                  experimentId={selected.id}
-                />
-              </section>
+              <>
+                <section className="rounded-xl border border-accent/20 bg-card p-5">
+                  <ExperimentResults
+                    key={selected.id}
+                    projectId={project.id}
+                    experimentId={selected.id}
+                  />
+                </section>
+
+                {/* Source verification — only for bot-connector experiments */}
+                {selected.bot_config_id != null && (
+                  <section className="rounded-xl border border-border bg-card p-5">
+                    <SourceVerificationPanel
+                      key={`sv-${selected.id}`}
+                      projectId={project.id}
+                      experimentId={selected.id}
+                    />
+                  </section>
+                )}
+
+                {/* Human annotation */}
+                <section className="rounded-xl border border-border bg-card p-5">
+                  <HumanAnnotationPanel
+                    key={`ann-${selected.id}`}
+                    projectId={project.id}
+                    experimentId={selected.id}
+                  />
+                </section>
+              </>
             )}
 
           {/* History — collapsible section at bottom */}
