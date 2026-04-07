@@ -332,6 +332,15 @@ export async function deleteDocument(
   );
 }
 
+export async function deleteAllDocuments(
+  projectId: number,
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/documents`,
+    { method: "DELETE" },
+  );
+}
+
 // --- Chunk Config API ---
 
 export async function fetchChunkConfigs(
@@ -527,6 +536,7 @@ export interface TestSetCreate {
   query_distribution?: Record<string, number>;
   chunk_sample_size?: number;
   num_workers?: number;
+  question_categories?: Record<string, number>;
 }
 
 export interface TestQuestion {
@@ -537,6 +547,7 @@ export interface TestQuestion {
   reference_contexts: string[];
   question_type: string;
   persona: string | null;
+  category: string | null;
   status: string;
   user_edited_answer: string | null;
   user_notes: string | null;
@@ -551,6 +562,76 @@ export interface TestSetSummary {
   rejected: number;
   edited: number;
   completion_pct: number;
+}
+
+// --- Test Set Upload Types ---
+
+export interface UploadPreviewResult {
+  filename: string;
+  total_rows: number;
+  columns: string[];
+  preview: Record<string, string>[];
+}
+
+export interface UploadConfirmResult {
+  id: number;
+  name: string;
+  project_id: number;
+  question_count: number;
+}
+
+// --- Test Set Upload API ---
+
+export async function previewTestSetUpload(
+  projectId: number,
+  file: File,
+): Promise<UploadPreviewResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(
+    `/api/projects/${projectId}/test-sets/upload/preview`,
+    { method: "POST", body: form },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "Unknown error");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.detail) detail = parsed.detail;
+    } catch { /* use raw body */ }
+    throw new ApiError(res.status, detail);
+  }
+  return res.json() as Promise<UploadPreviewResult>;
+}
+
+export async function confirmTestSetUpload(
+  projectId: number,
+  file: File,
+  questionColumn: string,
+  answerColumn: string,
+  contextsColumn?: string,
+  name?: string,
+): Promise<UploadConfirmResult> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("question_column", questionColumn);
+  form.append("answer_column", answerColumn);
+  if (contextsColumn) form.append("contexts_column", contextsColumn);
+  if (name) form.append("name", name);
+  const res = await fetch(
+    `/api/projects/${projectId}/test-sets/upload`,
+    { method: "POST", body: form },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "Unknown error");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.detail) detail = parsed.detail;
+    } catch { /* use raw body */ }
+    throw new ApiError(res.status, detail);
+  }
+  return res.json() as Promise<UploadConfirmResult>;
 }
 
 // --- Test Set API ---
@@ -668,6 +749,8 @@ export interface Experiment {
   // Optional aggregate fields (present on GET single / list)
   test_set_name?: string;
   rag_config_name?: string;
+  has_reference_contexts?: boolean;
+  connector_type?: string | null;
   approved_question_count?: number;
   result_count?: number;
   aggregate_metrics?: Record<string, number | null> | null;
@@ -741,6 +824,16 @@ export async function resetExperiment(
   );
 }
 
+export async function cancelExperiment(
+  projectId: number,
+  experimentId: number,
+): Promise<{ status: string; experiment_id: number }> {
+  return request<{ status: string; experiment_id: number }>(
+    `/api/projects/${projectId}/experiments/${experimentId}/cancel`,
+    { method: "POST" },
+  );
+}
+
 export async function fetchExperimentResults(
   projectId: number,
   experimentId: number,
@@ -756,6 +849,24 @@ export interface SSEStartedEvent {
   experiment_id: number;
   total_questions: number;
   metrics: string[];
+  experiment_name?: string;
+  model?: string;
+  test_set_name?: string;
+}
+
+export interface SSECompletionItem {
+  question: string;
+  response: string | null;
+  error: string | null;
+  metrics?: Record<string, number | null>;
+}
+
+export interface InFlightDetail {
+  question: string;
+  phase: "querying" | "scoring";
+  metrics_done: string[];
+  metrics_active: string[];
+  metrics_pending: string[];
 }
 
 export interface SSEProgressEvent {
@@ -764,6 +875,10 @@ export interface SSEProgressEvent {
   question_id: number;
   question: string;
   error?: string;
+  in_flight?: string[];
+  new_completions?: SSECompletionItem[];
+  scoring_metrics?: string[];
+  in_flight_details?: InFlightDetail[];
 }
 
 export interface SSECompletedEvent {
@@ -792,6 +907,8 @@ export function runExperimentSSE(
   experimentId: number,
   metrics: string[] | null,
   callbacks: ExperimentSSECallbacks,
+  rubrics?: Record<string, string> | null,
+  concurrency?: number,
 ): ExperimentSSEHandle {
   const controller = new AbortController();
   let lastProgress: SSEProgressEvent | null = null;
@@ -803,7 +920,7 @@ export function runExperimentSSE(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ metrics }),
+          body: JSON.stringify({ metrics, rubrics: rubrics ?? null, concurrency: concurrency ?? 5 }),
           signal: controller.signal,
         },
       );
@@ -870,6 +987,96 @@ export function runExperimentSSE(
             }
           } catch {
             // Skip malformed JSON chunks
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as DOMException).name === "AbortError") return;
+      callbacks.onConnectionError?.(err as Error, lastProgress);
+    }
+  })();
+
+  return { abort: () => controller.abort() };
+}
+
+/**
+ * Reconnect to a running experiment's progress stream.
+ * Unlike runExperimentSSE, this uses GET /progress and does not start the experiment.
+ */
+export function observeExperimentProgress(
+  projectId: number,
+  experimentId: number,
+  callbacks: ExperimentSSECallbacks,
+): ExperimentSSEHandle {
+  const controller = new AbortController();
+  let lastProgress: SSEProgressEvent | null = null;
+
+  (async () => {
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/experiments/${experimentId}/progress`,
+        { signal: controller.signal },
+      );
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "Unknown error");
+        callbacks.onError?.({ message: `${res.status}: ${body}` });
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        callbacks.onError?.({ message: "No response stream" });
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+
+          let eventType = "message";
+          let dataStr = "";
+
+          for (const line of part.split("\n")) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataStr = line.slice(5).trim();
+            }
+          }
+
+          if (!dataStr) continue;
+
+          try {
+            const data = JSON.parse(dataStr);
+
+            switch (eventType) {
+              case "started":
+                callbacks.onStarted?.(data as SSEStartedEvent);
+                break;
+              case "progress":
+                lastProgress = data as SSEProgressEvent;
+                callbacks.onProgress?.(lastProgress);
+                break;
+              case "completed":
+                callbacks.onCompleted?.(data as SSECompletedEvent);
+                break;
+              case "error":
+                callbacks.onError?.(data as SSEErrorEvent);
+                break;
+            }
+          } catch {
+            // Skip malformed JSON
           }
         }
       }

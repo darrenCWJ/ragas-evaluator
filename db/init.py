@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_type TEXT NOT NULL,
     content TEXT NOT NULL,
     metadata_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS chunk_configs (
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS chunk_configs (
     params_json TEXT NOT NULL,
     step2_method TEXT,
     step2_params_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     parent_chunk_id INTEGER REFERENCES chunks(id),
     embedding_blob BLOB,
     metadata_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS embedding_configs (
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS embedding_configs (
     type TEXT NOT NULL,
     model_name TEXT,
     params_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS rag_configs (
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS rag_configs (
     system_prompt TEXT,
     response_mode TEXT NOT NULL DEFAULT 'single_shot',
     max_steps INTEGER NOT NULL DEFAULT 3,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS test_sets (
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS test_sets (
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     generation_config_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS test_questions (
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     status TEXT NOT NULL DEFAULT 'pending',
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS experiment_results (
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS experiment_results (
     retrieved_contexts TEXT,
     metrics_json TEXT NOT NULL,
     metadata_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS suggestions (
@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
     implemented BOOLEAN DEFAULT FALSE,
     config_field TEXT,
     suggested_value TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS external_baselines (
@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS external_baselines (
     answer TEXT NOT NULL,
     sources TEXT,
     source_type TEXT NOT NULL DEFAULT 'csv',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS api_configs (
@@ -154,8 +154,8 @@ CREATE TABLE IF NOT EXISTS api_configs (
     endpoint_url TEXT NOT NULL,
     api_key TEXT,
     headers_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
     UNIQUE(project_id)
 );
 
@@ -166,8 +166,8 @@ CREATE TABLE IF NOT EXISTS bot_configs (
     connector_type TEXT NOT NULL,
     config_json TEXT NOT NULL,
     prompt_for_sources BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS source_verifications (
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS source_verifications (
     url TEXT,
     status TEXT NOT NULL,
     details TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS human_annotations (
@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS human_annotations (
     experiment_result_id INTEGER NOT NULL REFERENCES experiment_results(id) ON DELETE CASCADE,
     rating TEXT NOT NULL,
     notes TEXT,
-    annotated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    annotated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS custom_metrics (
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS custom_metrics (
     rubrics_json TEXT,
     min_score INTEGER NOT NULL DEFAULT 1,
     max_score INTEGER NOT NULL DEFAULT 5,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 """
 
@@ -276,6 +276,13 @@ def init_db() -> sqlite3.Connection:
     # Migration: add bot_config_id to experiments (Phase 2 — external bot testing)
     try:
         conn.execute("ALTER TABLE experiments ADD COLUMN bot_config_id INTEGER REFERENCES bot_configs(id)")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add category to test_questions (question category tagging)
+    try:
+        conn.execute("ALTER TABLE test_questions ADD COLUMN category TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists

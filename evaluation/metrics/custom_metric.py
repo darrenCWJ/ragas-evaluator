@@ -56,8 +56,10 @@ async def score_integer_range(
     answer: str,
     contexts: list[str] | None = None,
     reference: str | None = None,
+    min_score: int = 1,
+    max_score: int = 5,
 ) -> float:
-    """Score using DiscreteMetric for integer_range type."""
+    """Score using DiscreteMetric for integer_range type, normalized to 0-1."""
     result = await scorer.ascore(
         llm=llm,
         response=answer,
@@ -65,7 +67,8 @@ async def score_integer_range(
         reference=reference or "",
         retrieved_contexts="\n".join(contexts) if contexts else "",
     )
-    return float(result.value)
+    raw = float(result.value)
+    return (raw - min_score) / (max_score - min_score)
 
 
 async def score_similarity(
@@ -73,14 +76,17 @@ async def score_similarity(
     llm,
     answer: str,
     reference: str,
+    min_score: int = 1,
+    max_score: int = 5,
 ) -> float:
-    """Score using DiscreteMetric for similarity type."""
+    """Score using DiscreteMetric for similarity type, normalized to 0-1."""
     result = await scorer.ascore(
         llm=llm,
         response=answer,
         reference=reference,
     )
-    return float(result.value)
+    raw = float(result.value)
+    return (raw - min_score) / (max_score - min_score)
 
 
 async def score_rubrics(
@@ -89,7 +95,7 @@ async def score_rubrics(
     answer: str,
     contexts: list[str] | None = None,
 ) -> float:
-    """Score using RubricsScore."""
+    """Score using RubricsScore, normalized from 1-5 to 0-1."""
     from ragas.dataset_schema import SingleTurnSample
 
     sample = SingleTurnSample(
@@ -97,7 +103,8 @@ async def score_rubrics(
         response=answer,
         retrieved_contexts=contexts or [],
     )
-    return await scorer.single_turn_ascore(sample)
+    result = await scorer.single_turn_ascore(sample)
+    return (result - 1) / 4
 
 
 async def score_instance_rubrics(
@@ -108,7 +115,7 @@ async def score_instance_rubrics(
     rubrics: dict[str, str],
     contexts: list[str] | None = None,
 ) -> float:
-    """Score using InstanceRubrics with per-question rubrics."""
+    """Score using InstanceRubrics with per-question rubrics, normalized from 1-5 to 0-1."""
     from ragas.dataset_schema import SingleTurnSample
 
     sample = SingleTurnSample(
@@ -118,4 +125,5 @@ async def score_instance_rubrics(
         retrieved_contexts=contexts or [],
         rubrics=rubrics,
     )
-    return await scorer.single_turn_ascore(sample)
+    result = await scorer.single_turn_ascore(sample)
+    return (result - 1) / 4

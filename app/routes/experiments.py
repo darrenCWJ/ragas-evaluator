@@ -1,5 +1,6 @@
 """Experiment CRUD, runner (SSE), source verification, comparison, history, delta, and export routes."""
 
+import asyncio
 import csv
 import io
 import json
@@ -27,6 +28,41 @@ from pipeline.rag import single_shot_query, multi_step_query
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["experiments"])
+
+# Track cancellation signals per experiment id
+_cancel_events: dict[int, asyncio.Event] = {}
+
+# Track progress for running experiments so SSE observers can reconnect
+_experiment_progress: dict[int, dict] = {}
+# Track background tasks so we know which experiments are truly alive
+_background_tasks: dict[int, asyncio.Task] = {}
+
+
+def _reap_stale_experiments(conn) -> int:
+    """Mark 'running' experiments as 'failed' if no active SSE generator exists.
+
+    An experiment is stale when its status is 'running' but there is no
+    cancel event registered — meaning the SSE generator has ended (server
+    restarted, connection dropped, etc.).  No time limit is applied because
+    experiments with many questions can legitimately run for hours.
+    """
+    rows = conn.execute(
+        "SELECT id FROM experiments WHERE status = 'running'"
+    ).fetchall()
+    reaped = 0
+    now = datetime.now()
+    for row in rows:
+        eid = row["id"]
+        if eid not in _cancel_events and eid not in _background_tasks:
+            conn.execute(
+                "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
+                (now.isoformat(), eid),
+            )
+            reaped += 1
+            logger.info("Reaped stale experiment %d (no active generator)", eid)
+    if reaped:
+        conn.commit()
+    return reaped
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +284,9 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
 async def list_experiments(project_id: int):
     conn = db.init.get_db()
 
+    # Auto-detect and clean up stale "running" experiments
+    _reap_stale_experiments(conn)
+
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -267,6 +306,24 @@ async def list_experiments(project_id: int):
             (row["test_set_id"],),
         ).fetchone()["cnt"]
         exp["approved_question_count"] = q_count
+        ts = conn.execute(
+            "SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)
+        ).fetchone()
+        exp["test_set_name"] = ts["name"] if ts else None
+        ctx_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND reference_contexts IS NOT NULL AND reference_contexts != '[]' AND reference_contexts != ''",
+            (row["test_set_id"],),
+        ).fetchone()["cnt"]
+        exp["has_reference_contexts"] = ctx_count > 0
+        # Include connector_type so the frontend knows which metrics are available
+        if row["bot_config_id"]:
+            bc = conn.execute(
+                "SELECT connector_type FROM bot_configs WHERE id = ?",
+                (row["bot_config_id"],),
+            ).fetchone()
+            exp["connector_type"] = bc["connector_type"] if bc else None
+        else:
+            exp["connector_type"] = None
         experiments.append(exp)
 
     return experiments
@@ -659,21 +716,34 @@ async def run_experiment(
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
-    async def _run_generator():
+    # --- Launch background task ---
+    cancel_event = asyncio.Event()
+    _cancel_events[experiment_id] = cancel_event
+    _experiment_progress[experiment_id] = {
+        "phase": "starting", "current": 0, "total": 0,
+        "question": "", "error": None, "result_count": 0,
+        "completed_items": [], "in_flight": [], "scoring_metrics": [],
+    }
+
+    async def _run_background():
         run_conn = db.init.get_db()
         run_conn.row_factory = sqlite3.Row
         completed_count = 0
+        tasks: list[asyncio.Task] = []
 
         try:
             # Atomic status claim -- prevents concurrent run race condition
             cursor = run_conn.execute(
                 "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status IN ('pending', 'failed')",
-                (datetime.utcnow().isoformat(), experiment_id),
+                (datetime.now().isoformat(), experiment_id),
             )
             run_conn.commit()
 
             if cursor.rowcount != 1:
-                yield f"event: error\ndata: {json.dumps({'message': 'Experiment already claimed by another request'})}\n\n"
+                _experiment_progress[experiment_id] = {
+                    "phase": "error", "current": 0, "total": 0,
+                    "question": "", "error": "Experiment already claimed by another request", "result_count": 0,
+                }
                 return
 
             # Clean up partial results from prior failed run (if any)
@@ -696,7 +766,13 @@ async def run_experiment(
             ).fetchall()
 
             total = len(questions)
-            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': total, 'metrics': selected_metrics})}\n\n"
+            _experiment_progress[experiment_id] = {
+                "phase": "running", "current": 0, "total": total,
+                "question": "", "error": None, "result_count": 0,
+                "completed_items": [],  # [{question, response, error, metrics}]
+                "in_flight": [],  # [question_text] (legacy compact list)
+                "in_flight_details": {},  # {qid: {question, phase, metrics_done, metrics_active, metrics_pending}}
+            }
 
             # Load custom metrics for this project
             custom_rows = run_conn.execute(
@@ -720,7 +796,7 @@ async def run_experiment(
             builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
 
             # Setup scorers
-            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs)
+            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
 
             # Determine execution mode: external bot or internal RAG
             use_bot = experiment["bot_config_id"] is not None
@@ -733,7 +809,10 @@ async def run_experiment(
                     (experiment["bot_config_id"],),
                 ).fetchone()
                 if bot_cfg is None:
-                    yield f"event: error\ndata: {json.dumps({'message': 'Bot config not found'})}\n\n"
+                    _experiment_progress[experiment_id] = {
+                        "phase": "error", "current": 0, "total": total,
+                        "question": "", "error": "Bot config not found", "result_count": 0,
+                    }
                     return
                 connector = create_connector(
                     bot_cfg["connector_type"],
@@ -743,117 +822,265 @@ async def run_experiment(
             else:
                 virtual_config = _build_virtual_rag_config_row(experiment, project_id)
 
-            for i, q_row in enumerate(questions, 1):
+            # --- Concurrent question processing ---
+            semaphore = asyncio.Semaphore(req.concurrency)
+            progress_queue: asyncio.Queue = asyncio.Queue()
+
+            async def _process_question(idx: int, q_row):
+                """Process a single question under the semaphore."""
                 question_text = q_row["question"]
                 qid = q_row["id"]
 
-                try:
-                    if use_bot:
-                        # External bot query
-                        bot_response = await connector.query(question_text)
-                        generated_answer = bot_response.answer
-                        citations_data = [asdict(c) for c in bot_response.citations]
-                        full_context_dicts = []
-                        usage_info = {
-                            "source": "bot_connector",
-                            "citations": citations_data,
-                            "raw_response": bot_response.raw_response,
+                async with semaphore:
+                    if cancel_event.is_set():
+                        return  # skip if cancelled
+
+                    # Track in-flight question with detail
+                    prog = _experiment_progress.get(experiment_id)
+                    if prog is not None:
+                        prog["in_flight"] = [*prog["in_flight"], question_text[:120]]
+                        all_metric_names = list(scorers.keys()) + list((custom_scorers or {}).keys())
+                        prog["in_flight_details"][qid] = {
+                            "question": question_text[:200],
+                            "phase": "querying",
+                            "metrics_done": [],
+                            "metrics_active": [],
+                            "metrics_pending": all_metric_names[:],
                         }
-                        context_strings = []
-                    else:
-                        # Internal RAG query
-                        response_mode = virtual_config["response_mode"]
-                        if response_mode == "multi_step":
-                            query_result = await multi_step_query(
-                                question_text, virtual_config, run_conn
+
+                    try:
+                        if use_bot:
+                            bot_response = await asyncio.wait_for(
+                                connector.query(question_text), timeout=120.0
                             )
+                            generated_answer = bot_response.answer
+                            citations_data = [asdict(c) for c in bot_response.citations]
+
+                            # Build context dicts from citations so RAGAS
+                            # metrics (faithfulness, context_precision, etc.)
+                            # can evaluate against the bot's retrieved sources.
+                            full_context_dicts = [
+                                {
+                                    "content": c.snippet,
+                                    "source": c.url or c.title or "unknown",
+                                    "datasource": c.datasource,
+                                    "container": c.container,
+                                }
+                                for c in bot_response.citations
+                                if c.snippet
+                            ]
+                            citation_contexts = [d["content"] for d in full_context_dicts]
+
+                            usage_info = {
+                                "source": "bot_connector",
+                                "citations": citations_data,
+                                "raw_response": bot_response.raw_response,
+                            }
+                            # Use the bot's actual retrieved contexts for
+                            # scoring — these are what RAGAS metrics should
+                            # evaluate (retrieval quality, faithfulness, etc.).
+                            context_strings = citation_contexts
                         else:
-                            query_result = await single_shot_query(
-                                question_text, virtual_config, run_conn
-                            )
+                            response_mode = virtual_config["response_mode"]
+                            if response_mode == "multi_step":
+                                query_result = await multi_step_query(
+                                    question_text, virtual_config, run_conn
+                                )
+                            else:
+                                query_result = await single_shot_query(
+                                    question_text, virtual_config, run_conn
+                                )
+                            generated_answer = query_result["answer"]
+                            full_context_dicts = query_result["contexts"]
+                            usage_info = query_result.get("usage", {})
+                            context_strings = [c["content"] for c in full_context_dicts]
 
-                        generated_answer = query_result["answer"]
-                        full_context_dicts = query_result["contexts"]
-                        usage_info = query_result.get("usage", {})
-                        context_strings = [c["content"] for c in full_context_dicts]
+                        # Update phase to scoring
+                        prog = _experiment_progress.get(experiment_id)
+                        if prog is not None and qid in prog["in_flight_details"]:
+                            prog["in_flight_details"][qid]["phase"] = "scoring"
 
-                    # Get reference answer (prefer user-edited)
-                    ref_answer = (
-                        q_row["user_edited_answer"]
-                        if q_row["user_edited_answer"]
-                        else q_row["reference_answer"]
-                    )
+                        ref_answer = (
+                            q_row["user_edited_answer"]
+                            if q_row["user_edited_answer"]
+                            else q_row["reference_answer"]
+                        )
 
-                    # Evaluate metrics
-                    metrics_result = await evaluate_experiment_row(
-                        scorers,
-                        question_text,
-                        generated_answer,
-                        ref_answer,
-                        context_strings,
-                        custom_scorers=custom_scorers,
-                        llm=llm,
-                    )
+                        def _on_metric_start(metric_name):
+                            prog = _experiment_progress.get(experiment_id)
+                            if prog is not None:
+                                active = set(prog.get("scoring_metrics", []))
+                                active.add(metric_name)
+                                prog["scoring_metrics"] = sorted(active)
+                                # Per-question tracking
+                                detail = prog.get("in_flight_details", {}).get(qid)
+                                if detail is not None:
+                                    if metric_name in detail["metrics_pending"]:
+                                        detail["metrics_pending"] = [m for m in detail["metrics_pending"] if m != metric_name]
+                                    if metric_name not in detail["metrics_active"]:
+                                        detail["metrics_active"] = [*detail["metrics_active"], metric_name]
 
-                    # Store result
-                    run_conn.execute(
-                        """INSERT INTO experiment_results
-                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (
-                            experiment_id,
-                            qid,
+                        def _on_metric_done(metric_name):
+                            prog = _experiment_progress.get(experiment_id)
+                            if prog is not None:
+                                active = set(prog.get("scoring_metrics", []))
+                                active.discard(metric_name)
+                                prog["scoring_metrics"] = sorted(active)
+                                # Per-question tracking
+                                detail = prog.get("in_flight_details", {}).get(qid)
+                                if detail is not None:
+                                    detail["metrics_active"] = [m for m in detail["metrics_active"] if m != metric_name]
+                                    if metric_name not in detail["metrics_done"]:
+                                        detail["metrics_done"] = [*detail["metrics_done"], metric_name]
+
+                        metrics_result = await evaluate_experiment_row(
+                            scorers,
+                            question_text,
                             generated_answer,
-                            json.dumps(full_context_dicts),
-                            json.dumps(metrics_result),
-                            json.dumps(usage_info),
-                        ),
-                    )
-                    run_conn.commit()
-                    completed_count += 1
+                            ref_answer,
+                            context_strings,
+                            custom_scorers=custom_scorers,
+                            llm=llm,
+                            on_metric_start=_on_metric_start,
+                            on_metric_done=_on_metric_done,
+                        )
 
-                    yield f"event: progress\ndata: {json.dumps({'current': i, 'total': total, 'question_id': qid, 'question': question_text[:100]})}\n\n"
+                        await progress_queue.put({
+                            "idx": idx, "qid": qid, "question_text": question_text,
+                            "generated_answer": generated_answer,
+                            "full_context_dicts": full_context_dicts,
+                            "metrics_result": metrics_result,
+                            "usage_info": usage_info,
+                            "error": None,
+                        })
 
-                except Exception as e:
-                    # Per-question error isolation: store error row, continue
-                    logger.warning(
-                        "Experiment %d question %d failed: %s",
-                        experiment_id,
-                        qid,
-                        e,
-                    )
+                    except Exception as e:
+                        logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, e)
+                        await progress_queue.put({
+                            "idx": idx, "qid": qid, "question_text": question_text,
+                            "generated_answer": None,
+                            "full_context_dicts": [],
+                            "metrics_result": {},
+                            "usage_info": {"error": str(e), "question_id": qid},
+                            "error": str(e),
+                        })
+
+            # Launch all question tasks concurrently (semaphore limits actual parallelism)
+            tasks = [
+                asyncio.create_task(_process_question(i, q_row))
+                for i, q_row in enumerate(questions, 1)
+            ]
+
+            # Collect results as they complete
+            finished = 0
+            while finished < total:
+                if cancel_event.is_set():
+                    break
+                try:
+                    result = await asyncio.wait_for(progress_queue.get(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    continue
+                finished += 1
+                qid = result["qid"]
+                question_text = result["question_text"]
+
+                if result["error"] is None:
                     run_conn.execute(
                         """INSERT INTO experiment_results
                            (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         (
-                            experiment_id,
-                            qid,
-                            None,
-                            "[]",
-                            "{}",
-                            json.dumps({"error": str(e), "question_id": qid}),
+                            experiment_id, qid,
+                            result["generated_answer"],
+                            json.dumps(result["full_context_dicts"]),
+                            json.dumps(result["metrics_result"]),
+                            json.dumps(result["usage_info"]),
                         ),
                     )
-                    run_conn.commit()
-                    completed_count += 1
+                else:
+                    run_conn.execute(
+                        """INSERT INTO experiment_results
+                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (experiment_id, qid, None, "[]", "{}", json.dumps(result["usage_info"])),
+                    )
+                run_conn.commit()
+                completed_count += 1
 
-                    yield f"event: progress\ndata: {json.dumps({'current': i, 'total': total, 'question_id': qid, 'question': question_text[:100], 'error': str(e)})}\n\n"
+                # Update shared progress state (preserve accumulated lists)
+                prog = _experiment_progress.get(experiment_id, {})
+                completed_items = prog.get("completed_items", [])
+                in_flight = prog.get("in_flight", [])
 
-            # All questions processed -- mark completed
-            run_conn.execute(
-                "UPDATE experiments SET status = 'completed', completed_at = ? WHERE id = ?",
-                (datetime.utcnow().isoformat(), experiment_id),
-            )
-            run_conn.commit()
+                # Add to completed log (keep last 50 to bound memory)
+                completed_items = [*completed_items, {
+                    "question": question_text[:200],
+                    "response": (result["generated_answer"] or "")[:300] if result["generated_answer"] else None,
+                    "error": result["error"],
+                    "metrics": result["metrics_result"] if result["error"] is None else {},
+                }]
 
-            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': completed_count})}\n\n"
+                # Remove from in-flight
+                q_short = question_text[:120]
+                in_flight = [q for q in in_flight if q != q_short]
+
+                # Remove from in_flight_details
+                in_flight_details = dict(prog.get("in_flight_details", {}))
+                in_flight_details.pop(qid, None)
+
+                _experiment_progress[experiment_id] = {
+                    "phase": "running", "current": finished, "total": total,
+                    "question": question_text[:100],
+                    "error": result["error"],
+                    "result_count": completed_count,
+                    "completed_items": completed_items,
+                    "in_flight": in_flight,
+                    "in_flight_details": in_flight_details,
+                    "scoring_metrics": prog.get("scoring_metrics", []),
+                }
+
+            # Ensure all tasks are done (should already be)
+            await asyncio.gather(*tasks)
+
+            if cancel_event.is_set():
+                run_conn.execute(
+                    "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
+                    (datetime.now().isoformat(), experiment_id),
+                )
+                run_conn.commit()
+                _experiment_progress[experiment_id] = {
+                    "phase": "cancelled", "current": finished, "total": total,
+                    "question": "", "error": None, "result_count": completed_count,
+                }
+            else:
+                # All questions processed -- mark completed
+                run_conn.execute(
+                    "UPDATE experiments SET status = 'completed', completed_at = ? WHERE id = ?",
+                    (datetime.now().isoformat(), experiment_id),
+                )
+                run_conn.commit()
+                _experiment_progress[experiment_id] = {
+                    "phase": "completed", "current": finished, "total": total,
+                    "question": "", "error": None, "result_count": completed_count,
+                }
 
         except Exception as e:
             logger.error("Experiment %d fatal error: %s", experiment_id, e)
-            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+            _experiment_progress[experiment_id] = {
+                "phase": "error", "current": 0, "total": 0,
+                "question": "", "error": str(e), "result_count": 0,
+            }
 
         finally:
+            _cancel_events.pop(experiment_id, None)
+            _background_tasks.pop(experiment_id, None)
+            # Cancel any in-flight question tasks to avoid zombie coroutines
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
             # Cleanup guarantee: if still "running", set to "failed"
             try:
                 row = run_conn.execute(
@@ -863,13 +1090,141 @@ async def run_experiment(
                 if row and row["status"] == "running":
                     run_conn.execute(
                         "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
-                        (datetime.utcnow().isoformat(), experiment_id),
+                        (datetime.now().isoformat(), experiment_id),
                     )
                     run_conn.commit()
             except Exception:
                 pass  # Best-effort cleanup
 
-    return StreamingResponse(_run_generator(), media_type="text/event-stream")
+    task = asyncio.create_task(_run_background())
+    _background_tasks[experiment_id] = task
+
+    # Return SSE stream that observes the background task's progress
+    # Fetch experiment name and test set name for the started event
+    exp_meta_conn = db.init.get_db()
+    exp_meta_row = exp_meta_conn.execute(
+        "SELECT e.name as exp_name, e.model, ts.name as test_set_name "
+        "FROM experiments e JOIN test_sets ts ON e.test_set_id = ts.id WHERE e.id = ?",
+        (experiment_id,),
+    ).fetchone()
+    exp_name = exp_meta_row["exp_name"] if exp_meta_row else ""
+    exp_model = exp_meta_row["model"] if exp_meta_row else ""
+    exp_test_set = exp_meta_row["test_set_name"] if exp_meta_row else ""
+
+    async def _progress_stream():
+        prev_current = -1
+        prev_items_sent = 0
+        prev_scoring = []
+        sent_started = False
+        while True:
+            progress = _experiment_progress.get(experiment_id)
+            if progress is None:
+                break
+
+            phase = progress["phase"]
+
+            if phase == "starting":
+                await asyncio.sleep(0.5)
+                continue
+
+            if phase == "running":
+                if not sent_started and progress["total"] > 0:
+                    sent_started = True
+                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': progress['total'], 'metrics': selected_metrics, 'experiment_name': exp_name, 'model': exp_model, 'test_set_name': exp_test_set})}\n\n"
+
+                completed_items = progress.get("completed_items", [])
+                new_items = completed_items[prev_items_sent:]
+                prev_items_sent = len(completed_items)
+
+                # Convert in_flight_details dict to list for JSON serialisation
+                details_list = list(progress.get("in_flight_details", {}).values())
+
+                yield f"event: progress\ndata: {json.dumps({'current': progress['current'], 'total': progress['total'], 'question': progress['question'], 'error': progress.get('error'), 'in_flight': progress.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': progress.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
+                await asyncio.sleep(0.5)
+                continue
+
+            if phase == "completed":
+                yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': progress['result_count']})}\n\n"
+                break
+
+            if phase == "cancelled":
+                yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': progress['result_count']})}\n\n"
+                break
+
+            if phase == "error":
+                yield f"event: error\ndata: {json.dumps({'message': progress.get('error', 'Unknown error')})}\n\n"
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(_progress_stream(), media_type="text/event-stream")
+
+
+# --- Progress observer (reconnectable SSE) ---
+
+
+@router.get("/projects/{project_id}/experiments/{experiment_id}/progress")
+async def experiment_progress(project_id: int, experiment_id: int):
+    """SSE stream that observes a running experiment's progress.
+
+    This is separate from /run so that the frontend can navigate away and
+    reconnect later without affecting the background task.
+    """
+    progress = _experiment_progress.get(experiment_id)
+    if progress is None:
+        # Check if the experiment is actually running (e.g. server restarted)
+        conn = db.init.get_db()
+        exp = conn.execute(
+            "SELECT status FROM experiments WHERE id = ? AND project_id = ?",
+            (experiment_id, project_id),
+        ).fetchone()
+        if exp is None:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        if exp["status"] != "running":
+            raise HTTPException(status_code=409, detail=f"Experiment is {exp['status']}, not running")
+        raise HTTPException(status_code=409, detail="No active task found for this experiment")
+
+    async def _observe():
+        prev_current = -1
+        prev_items_sent = 0
+        prev_scoring = []
+        while True:
+            prog = _experiment_progress.get(experiment_id)
+            if prog is None:
+                break
+
+            phase = prog["phase"]
+
+            if phase == "starting":
+                await asyncio.sleep(0.5)
+                continue
+
+            if phase == "running":
+                completed_items = prog.get("completed_items", [])
+                new_items = completed_items[prev_items_sent:]
+                prev_items_sent = len(completed_items)
+
+                details_list = list(prog.get("in_flight_details", {}).values())
+
+                yield f"event: progress\ndata: {json.dumps({'current': prog['current'], 'total': prog['total'], 'question': prog['question'], 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
+                await asyncio.sleep(0.5)
+                continue
+
+            if phase == "completed":
+                yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog['result_count']})}\n\n"
+                break
+
+            if phase == "cancelled":
+                yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog['result_count']})}\n\n"
+                break
+
+            if phase == "error":
+                yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(_observe(), media_type="text/event-stream")
 
 
 # --- Reset ---
@@ -877,13 +1232,13 @@ async def run_experiment(
 
 @router.post("/projects/{project_id}/experiments/{experiment_id}/reset")
 async def reset_experiment(project_id: int, experiment_id: int):
-    """Reset a failed experiment so it can be re-run. Deletes partial results."""
+    """Reset a failed or completed experiment so it can be re-run. Deletes existing results."""
     conn = db.init.get_db()
 
-    # Atomic guard: only reset if status is 'failed' and belongs to project
+    # Atomic guard: only reset if status is 'failed', 'completed', or 'running' (stuck) and belongs to project
     cursor = conn.execute(
         "UPDATE experiments SET status = 'pending', started_at = NULL, completed_at = NULL "
-        "WHERE id = ? AND project_id = ? AND status = 'failed'",
+        "WHERE id = ? AND project_id = ? AND status IN ('failed', 'completed', 'running')",
         (experiment_id, project_id),
     )
     conn.commit()
@@ -891,7 +1246,7 @@ async def reset_experiment(project_id: int, experiment_id: int):
     if cursor.rowcount != 1:
         raise HTTPException(
             status_code=409,
-            detail="Only failed experiments can be reset.",
+            detail="Only failed, completed, or running experiments can be reset.",
         )
 
     # Delete partial results
@@ -923,6 +1278,36 @@ async def reset_experiment(project_id: int, experiment_id: int):
         "started_at": experiment["started_at"],
         "completed_at": experiment["completed_at"],
     }
+
+
+# --- Cancel ---
+
+
+@router.post("/projects/{project_id}/experiments/{experiment_id}/cancel")
+async def cancel_experiment(project_id: int, experiment_id: int):
+    """Signal a running experiment to stop. Already-completed results are kept."""
+    conn = db.init.get_db()
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if experiment["status"] != "running":
+        raise HTTPException(status_code=409, detail="Experiment is not running")
+
+    event = _cancel_events.get(experiment_id)
+    if event:
+        event.set()
+    else:
+        # No event means the SSE generator already finished; force status update
+        conn.execute(
+            "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), experiment_id),
+        )
+        conn.commit()
+
+    return {"status": "cancelling", "experiment_id": experiment_id}
 
 
 # --- Delta ---
