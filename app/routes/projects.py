@@ -78,7 +78,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
     if req.description is not None:
         updates.append("description = ?")
         params.append(req.description)
-    updates.append("updated_at = CURRENT_TIMESTAMP")
+    updates.append("updated_at = datetime('now', 'localtime')")
     params.append(project_id)
     try:
         conn.execute(
@@ -272,7 +272,7 @@ async def save_api_config(project_id: int, payload: ApiConfigCreate):
 
     if existing:
         conn.execute(
-            "UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = CURRENT_TIMESTAMP WHERE project_id = ?",
+            "UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = datetime('now', 'localtime') WHERE project_id = ?",
             (payload.endpoint_url, payload.api_key, payload.headers_json, project_id),
         )
         config_id = existing[0]

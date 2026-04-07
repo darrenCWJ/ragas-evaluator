@@ -124,7 +124,7 @@ export default function BuildPage() {
       {/* Row 1: Documents + Chunking */}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_0.82fr]">
         {/* Left column — Documents */}
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <div>
             <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-text-muted">
               Documents
@@ -148,7 +148,7 @@ export default function BuildPage() {
         </div>
 
         {/* Right column — Chunking */}
-        <div>
+        <div className="min-w-0">
           <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-text-muted">
             Chunking Configuration
           </h3>
@@ -166,7 +166,7 @@ export default function BuildPage() {
       {/* Row 2: Embeddings + RAG */}
       <div className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_0.82fr]">
         {/* Left column — Embeddings */}
-        <div>
+        <div className="min-w-0">
           <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-text-muted">
             Embedding Configuration
           </h3>
@@ -184,7 +184,7 @@ export default function BuildPage() {
         </div>
 
         {/* Right column — RAG */}
-        <div>
+        <div className="min-w-0">
           <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-text-muted">
             RAG Configuration
           </h3>

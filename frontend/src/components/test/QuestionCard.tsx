@@ -2,6 +2,20 @@ import { useState } from "react";
 import type { TestQuestion } from "../../lib/api";
 import { annotateQuestion } from "../../lib/api";
 
+const CATEGORY_COLORS: Record<string, string> = {
+  typical: "bg-indigo-500/15 text-indigo-300",
+  in_knowledge_base: "bg-teal-500/15 text-teal-300",
+  edge: "bg-orange-500/15 text-orange-300",
+  out_of_knowledge_base: "bg-purple-500/15 text-purple-300",
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  typical: "Typical",
+  in_knowledge_base: "In KB",
+  edge: "Edge",
+  out_of_knowledge_base: "Out of KB",
+};
+
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-500/15 text-yellow-300",
   approved: "bg-green-500/15 text-green-300",
@@ -145,6 +159,30 @@ export default function QuestionCard({
             </div>
           )}
 
+          {/* Reference contexts */}
+          {!editing && q.reference_contexts.length > 0 && (
+            <details className="mt-2 group">
+              <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
+                <span className="ml-0.5">
+                  Reference contexts ({q.reference_contexts.length})
+                </span>
+              </summary>
+              <div className="mt-2 space-y-2">
+                {q.reference_contexts.map((ctx, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed"
+                  >
+                    <span className="mr-1.5 font-medium text-text-muted">
+                      [{i + 1}]
+                    </span>
+                    {ctx}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
           {/* Edit mode */}
           {editing && (
             <div className="mt-3 space-y-3">
@@ -221,6 +259,15 @@ export default function QuestionCard({
             >
               {q.status}
             </span>
+
+            {/* Category badge */}
+            {q.category && (
+              <span
+                className={`rounded-full px-2 py-0.5 font-medium ${CATEGORY_COLORS[q.category] || "bg-gray-500/15 text-gray-300"}`}
+              >
+                {CATEGORY_LABELS[q.category] || q.category}
+              </span>
+            )}
 
             {/* Question type badge */}
             {q.question_type && (

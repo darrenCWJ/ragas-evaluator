@@ -15,4 +15,5 @@ async def score(scorer, question: str, answer: str, rubrics: dict = None, contex
         rubrics=rubrics or {},
     )
     result = await scorer.single_turn_ascore(sample)
-    return result
+    # Normalize from 1-5 to 0-1
+    return (result - 1) / 4
