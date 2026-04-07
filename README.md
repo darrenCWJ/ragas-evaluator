@@ -1,3 +1,6 @@
+| [README](README.md) | [Features Guide](docs/FEATURES.md) |
+|---|---|
+
 # RAG Evaluator
 
 ## Problem Statement

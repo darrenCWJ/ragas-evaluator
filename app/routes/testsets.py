@@ -1,12 +1,15 @@
 """Test sets, test questions, and annotation routes."""
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import random
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from pydantic import BaseModel
 
 from app.models import (
     TestGenRequest,
@@ -17,6 +20,7 @@ from app.models import (
     VALID_QUESTION_STATUSES,
     BULK_ACTION_TO_STATUS,
     MAX_CHUNKS_FOR_GENERATION,
+    MAX_UPLOAD_QA_ROWS,
 )
 import db.init
 
@@ -31,6 +35,7 @@ def _parse_test_question_row(row) -> dict:
     d = dict(row)
     rc = d.get("reference_contexts")
     d["reference_contexts"] = json.loads(rc) if rc else []
+    d.setdefault("category", "")
     return d
 
 
@@ -158,6 +163,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
         "query_distribution": req.query_distribution,
         "chunk_sample_size": req.chunk_sample_size,
         "num_workers": req.num_workers,
+        "question_categories": req.question_categories,
         "total_chunks": total_chunks,
         "sampled_chunks": len(chunks),
     }
@@ -180,6 +186,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 custom_personas=req.custom_personas,
                 query_distribution=req.query_distribution,
                 num_workers=req.num_workers,
+                question_categories=req.question_categories,
             ),
         )
     except Exception as e:
@@ -209,10 +216,11 @@ async def create_test_set(project_id: int, req: TestSetCreate):
         persona_name = q.get("persona") or (
             q.get("synthesizer_name") if not persona_map else None
         )
+        category = q.get("category", "")
         conn.execute(
             """INSERT INTO test_questions
-               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
             (
                 test_set_id,
                 q.get("user_input", ""),
@@ -220,6 +228,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 json.dumps(q.get("reference_contexts", [])),
                 q.get("synthesizer_name", ""),
                 persona_name,
+                category,
             ),
         )
         inserted_questions.append(
@@ -229,6 +238,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 "reference_contexts": q.get("reference_contexts", []),
                 "question_type": q.get("synthesizer_name", ""),
                 "persona": persona_name,
+                "category": category,
                 "status": "pending",
             }
         )
@@ -241,6 +251,215 @@ async def create_test_set(project_id: int, req: TestSetCreate):
         "question_count": len(inserted_questions),
         "personas": personas,
         "questions": inserted_questions,
+    }
+
+
+def _parse_upload_file(content: bytes, filename: str) -> list[dict]:
+    """Parse a CSV or JSON upload into a list of row dicts."""
+    text = content.decode("utf-8", errors="ignore")
+
+    if filename.lower().endswith(".json"):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
+        if not isinstance(parsed, list):
+            raise HTTPException(
+                status_code=422,
+                detail="JSON must be an array of objects",
+            )
+        return parsed
+
+    # CSV (including .csv, .tsv, or unknown extensions)
+    reader = csv.DictReader(io.StringIO(text))
+    return list(reader)
+
+
+@router.post("/projects/{project_id}/test-sets/upload/preview")
+async def preview_upload(project_id: int, file: UploadFile = File(...)):
+    """Step 1: Upload a CSV/JSON file and preview columns + sample rows.
+
+    Returns the column names and first 5 rows so the user can pick
+    which column is the question and which is the reference answer.
+    """
+    conn = db.init.get_db()
+
+    project = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="File too large (max 10MB)")
+
+    filename = file.filename or "upload"
+    rows = _parse_upload_file(content, filename)
+
+    if not rows:
+        raise HTTPException(status_code=422, detail="No rows found in file")
+    if len(rows) > MAX_UPLOAD_QA_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many rows ({len(rows)}). Maximum {MAX_UPLOAD_QA_ROWS} allowed.",
+        )
+
+    columns = list(rows[0].keys())
+    preview_rows = rows[:5]
+
+    return {
+        "filename": filename,
+        "total_rows": len(rows),
+        "columns": columns,
+        "preview": preview_rows,
+    }
+
+
+class TestSetUploadConfirm(BaseModel):
+    question_column: str
+    answer_column: str
+    contexts_column: str | None = None
+    name: str | None = None
+
+
+@router.post("/projects/{project_id}/test-sets/upload", status_code=201)
+async def upload_test_set(
+    project_id: int,
+    file: UploadFile = File(...),
+    question_column: str = Form(...),
+    answer_column: str = Form(...),
+    contexts_column: str | None = Form(None),
+    name: str | None = Form(None),
+):
+    """Step 2: Upload the same file again with chosen column mappings to create the test set.
+
+    Form fields:
+      - file: the CSV/JSON file
+      - question_column: which column to use as the question
+      - answer_column: which column to use as the reference answer
+      - contexts_column: (optional) column for reference contexts
+      - name: (optional) test set name
+    """
+    conn = db.init.get_db()
+
+    project = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="File too large (max 10MB)")
+
+    filename = file.filename or "upload"
+    rows = _parse_upload_file(content, filename)
+
+    if not rows:
+        raise HTTPException(status_code=422, detail="No rows found in file")
+    if len(rows) > MAX_UPLOAD_QA_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many rows ({len(rows)}). Maximum {MAX_UPLOAD_QA_ROWS} allowed.",
+        )
+
+    # Validate that chosen columns exist
+    columns = set(rows[0].keys())
+    if question_column not in columns:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Column '{question_column}' not found. Available: {sorted(columns)}",
+        )
+    if answer_column not in columns:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Column '{answer_column}' not found. Available: {sorted(columns)}",
+        )
+    if contexts_column and contexts_column not in columns:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Column '{contexts_column}' not found. Available: {sorted(columns)}",
+        )
+
+    # Validate rows have non-empty values in chosen columns
+    for i, row in enumerate(rows):
+        if not (row.get(question_column) or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Row {i + 1}: '{question_column}' is empty",
+            )
+        if not (row.get(answer_column) or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"Row {i + 1}: '{answer_column}' is empty",
+            )
+
+    # Create test_set
+    set_name = name or f"Uploaded ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
+    generation_config = {
+        "source": "upload",
+        "filename": filename,
+        "row_count": len(rows),
+        "column_mapping": {
+            "question": question_column,
+            "answer": answer_column,
+            "contexts": contexts_column,
+        },
+    }
+    cursor = conn.execute(
+        "INSERT INTO test_sets (project_id, name, generation_config_json) VALUES (?, ?, ?)",
+        (project_id, set_name, json.dumps(generation_config)),
+    )
+    conn.commit()
+    test_set_id = cursor.lastrowid
+
+    # Insert questions
+    inserted = []
+    for row in rows:
+        ref_ctx: list = []
+        if contexts_column:
+            raw = row.get(contexts_column, "")
+            if isinstance(raw, list):
+                ref_ctx = raw
+            elif isinstance(raw, str) and raw.strip():
+                try:
+                    ref_ctx = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    ref_ctx = [raw]
+
+        conn.execute(
+            """INSERT INTO test_questions
+               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, status)
+               VALUES (?, ?, ?, ?, 'uploaded', '', 'pending')""",
+            (
+                test_set_id,
+                row[question_column].strip(),
+                row[answer_column].strip(),
+                json.dumps(ref_ctx),
+            ),
+        )
+        inserted.append(
+            {
+                "question": row[question_column].strip(),
+                "reference_answer": row[answer_column].strip(),
+                "reference_contexts": ref_ctx,
+                "question_type": "uploaded",
+                "status": "pending",
+            }
+        )
+    conn.commit()
+
+    return {
+        "id": test_set_id,
+        "name": set_name,
+        "project_id": project_id,
+        "question_count": len(inserted),
+        "questions": inserted,
     }
 
 
@@ -387,7 +606,7 @@ async def annotate_question(
     # Update question
     conn.execute(
         """UPDATE test_questions
-           SET status = ?, user_edited_answer = ?, user_notes = ?, reviewed_at = CURRENT_TIMESTAMP
+           SET status = ?, user_edited_answer = ?, user_notes = ?, reviewed_at = datetime('now', 'localtime')
            WHERE id = ?""",
         (req.status, req.user_edited_answer, req.user_notes, question_id),
     )
@@ -451,7 +670,7 @@ async def bulk_annotate_questions(
 
         # Update specified questions
         cursor = conn.execute(
-            f"UPDATE test_questions SET status = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders}) AND test_set_id = ?",
+            f"UPDATE test_questions SET status = ?, reviewed_at = datetime('now', 'localtime') WHERE id IN ({placeholders}) AND test_set_id = ?",
             (target_status, *req.question_ids, test_set_id),
         )
         conn.commit()
@@ -467,7 +686,7 @@ async def bulk_annotate_questions(
 
         # Update all pending questions in this test set
         cursor = conn.execute(
-            "UPDATE test_questions SET status = ?, reviewed_at = CURRENT_TIMESTAMP WHERE test_set_id = ? AND status = 'pending'",
+            "UPDATE test_questions SET status = ?, reviewed_at = datetime('now', 'localtime') WHERE test_set_id = ? AND status = 'pending'",
             (target_status, test_set_id),
         )
         conn.commit()

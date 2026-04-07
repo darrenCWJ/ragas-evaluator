@@ -10,6 +10,7 @@ import ExperimentCompare from "../components/experiment/ExperimentCompare";
 import ExperimentHistory from "../components/experiment/ExperimentHistory";
 import SourceVerificationPanel from "../components/experiment/SourceVerificationPanel";
 import HumanAnnotationPanel from "../components/experiment/HumanAnnotationPanel";
+import Card from "../components/ui/Card";
 
 const MIN_COMPARE = 2;
 const MAX_COMPARE = 5;
@@ -78,12 +79,12 @@ export default function ExperimentPage() {
         : `Compare ${compareCount} experiments`;
 
   return (
-    <div className="mx-auto max-w-3xl pt-8 xl:max-w-5xl">
-      {/* Header */}
-      <div className="mb-8 flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/15">
+    <div className="mx-auto max-w-3xl pt-6 xl:max-w-5xl">
+      {/* Header — larger for primary workflow page */}
+      <div className="mb-10 flex items-center gap-4">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/15">
           <svg
-            className="h-5 w-5 text-accent"
+            className="h-6 w-6 text-accent"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -97,7 +98,7 @@ export default function ExperimentPage() {
           </svg>
         </div>
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">
+          <h1 className="text-2xl font-semibold text-text-primary">
             Experiment
           </h1>
           <p className="text-sm text-text-secondary">
@@ -108,9 +109,9 @@ export default function ExperimentPage() {
 
       {/* Error */}
       {error && (
-        <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <Card variant="error" padding="md" className="mb-4">
           {error}
-        </div>
+        </Card>
       )}
 
       {/* Loading */}
@@ -121,12 +122,12 @@ export default function ExperimentPage() {
       ) : (
         <div className="space-y-8">
           {/* Create form */}
-          <section className="rounded-xl border border-border bg-card p-5">
+          <Card padding="lg" className="p-5">
             <ExperimentCreate
               projectId={project.id}
               onCreated={loadExperiments}
             />
-          </section>
+          </Card>
 
           {/* Compare bar — shown when any completed experiments exist */}
           {experiments.some((e) => e.status === "completed") && comparingIds.length === 0 && (
@@ -162,20 +163,20 @@ export default function ExperimentPage() {
 
           {/* Comparison view — replaces single results when active */}
           {comparingIds.length > 0 && (
-            <section className="rounded-xl border border-accent/20 bg-card p-5">
+            <Card padding="lg" className="border-accent/20 p-5">
               <ExperimentCompare
                 key={comparingIds.join(",")}
                 projectId={project.id}
                 experimentIds={comparingIds}
                 onClose={handleCloseCompare}
               />
-            </section>
+            </Card>
           )}
 
-          {/* Runner — for pending or failed experiments, and not during comparison */}
+          {/* Runner — for pending, failed, or running experiments, and not during comparison */}
           {comparingIds.length === 0 &&
             selected &&
-            (selected.status === "pending" || selected.status === "failed") && (
+            (selected.status === "pending" || selected.status === "failed" || selected.status === "running") && (
               <section className="rounded-xl border border-accent/30 bg-accent/5 p-5">
                 {selected.status === "failed" && (
                   <div className="mb-4 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5">
@@ -197,7 +198,7 @@ export default function ExperimentPage() {
                     </button>
                   </div>
                 )}
-                {selected.status === "pending" && (
+                {(selected.status === "pending" || selected.status === "running") && (
                   <ExperimentRunner
                     projectId={project.id}
                     experiment={selected}
@@ -207,38 +208,62 @@ export default function ExperimentPage() {
               </section>
             )}
 
+          {/* Retest — for completed experiments, not during comparison */}
+          {comparingIds.length === 0 &&
+            selected &&
+            selected.status === "completed" && (
+              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-elevated/50 px-4 py-2.5">
+                <span className="text-xs text-text-secondary">
+                  Re-run this experiment with different metrics or settings.
+                </span>
+                <button
+                  onClick={async () => {
+                    try {
+                      await resetExperiment(project.id, selected.id);
+                      await loadExperiments();
+                    } catch (err) {
+                      setError((err as Error).message || "Failed to reset experiment");
+                    }
+                  }}
+                  className="rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/25"
+                >
+                  Retest
+                </button>
+              </div>
+            )}
+
           {/* Results — only for completed experiments, and not during comparison */}
           {comparingIds.length === 0 &&
             selected &&
             selected.status === "completed" && (
               <>
-                <section className="rounded-xl border border-accent/20 bg-card p-5">
+                <Card padding="lg" className="border-accent/20 p-5">
                   <ExperimentResults
                     key={selected.id}
                     projectId={project.id}
                     experimentId={selected.id}
                   />
-                </section>
+                </Card>
 
                 {/* Source verification — only for bot-connector experiments */}
                 {selected.bot_config_id != null && (
-                  <section className="rounded-xl border border-border bg-card p-5">
+                  <Card padding="lg" className="p-5">
                     <SourceVerificationPanel
                       key={`sv-${selected.id}`}
                       projectId={project.id}
                       experimentId={selected.id}
                     />
-                  </section>
+                  </Card>
                 )}
 
                 {/* Human annotation */}
-                <section className="rounded-xl border border-border bg-card p-5">
+                <Card padding="lg" className="p-5">
                   <HumanAnnotationPanel
                     key={`ann-${selected.id}`}
                     projectId={project.id}
                     experimentId={selected.id}
                   />
-                </section>
+                </Card>
               </>
             )}
 

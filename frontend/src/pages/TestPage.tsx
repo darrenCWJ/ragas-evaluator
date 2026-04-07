@@ -3,8 +3,10 @@ import { useProject } from "../contexts/ProjectContext";
 import { fetchTestSets, fetchChunkConfigs } from "../lib/api";
 import type { TestSet, ChunkConfig } from "../lib/api";
 import TestSetGenerate from "../components/test/TestSetGenerate";
+import TestSetUpload from "../components/test/TestSetUpload";
 import TestSetList from "../components/test/TestSetList";
 import QuestionList from "../components/test/QuestionList";
+import Card from "../components/ui/Card";
 
 export default function TestPage() {
   const { project } = useProject();
@@ -51,7 +53,7 @@ export default function TestPage() {
         <QuestionList
           projectId={project.id}
           testSet={selectedTestSet}
-          onBack={() => setSelectedTestSet(null)}
+          onBack={() => { setSelectedTestSet(null); loadTestSets(); }}
         />
       </div>
     );
@@ -87,9 +89,9 @@ export default function TestPage() {
 
       {/* Error */}
       {error && (
-        <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <Card variant="error" padding="md" className="mb-4">
           {error}
-        </div>
+        </Card>
       )}
 
       {/* Loading */}
@@ -99,14 +101,22 @@ export default function TestPage() {
         </div>
       ) : (
         <div className="space-y-8">
+          {/* Upload custom Q&A */}
+          <Card padding="lg" className="p-5">
+            <TestSetUpload
+              projectId={project.id}
+              onTestSetCreated={loadTestSets}
+            />
+          </Card>
+
           {/* Generation form */}
-          <section className="rounded-xl border border-border bg-card p-5">
+          <Card padding="lg" className="p-5">
             <TestSetGenerate
               projectId={project.id}
               chunkConfigs={chunkConfigs}
               onTestSetCreated={loadTestSets}
             />
-          </section>
+          </Card>
 
           {/* Test set list */}
           <section>

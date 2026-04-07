@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Document } from "../../lib/api";
-import { deleteDocument, updateDocumentContextLabel } from "../../lib/api";
+import { deleteDocument, deleteAllDocuments, updateDocumentContextLabel } from "../../lib/api";
 
 interface Props {
   projectId: number;
@@ -18,6 +18,7 @@ export default function DocumentList({
   onRefresh,
 }: Props) {
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -49,6 +50,21 @@ export default function DocumentList({
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Delete failed");
       setConfirmId(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function handleDeleteAll() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAllDocuments(projectId);
+      setConfirmDeleteAll(false);
+      onRefresh();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete all failed");
+      setConfirmDeleteAll(false);
     } finally {
       setDeleting(false);
     }
@@ -105,6 +121,36 @@ export default function DocumentList({
 
   return (
     <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-text-muted">
+          {documents.length} document{documents.length !== 1 ? "s" : ""}
+        </span>
+        {confirmDeleteAll ? (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-secondary">Delete all?</span>
+            <button
+              onClick={handleDeleteAll}
+              disabled={deleting}
+              className="rounded bg-score-low/20 px-2 py-1 text-xs font-medium text-score-low hover:bg-score-low/30 disabled:opacity-50"
+            >
+              {deleting ? "..." : "Yes"}
+            </button>
+            <button
+              onClick={() => setConfirmDeleteAll(false)}
+              className="rounded bg-elevated px-2 py-1 text-xs text-text-secondary hover:bg-border"
+            >
+              No
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDeleteAll(true)}
+            className="rounded px-2 py-1 text-xs text-score-low hover:bg-score-low/10"
+          >
+            Delete All
+          </button>
+        )}
+      </div>
       {deleteError && (
         <div className="flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
           <span>{deleteError}</span>

@@ -378,6 +378,97 @@ def generate_testset_with_personas(
     }
 
 
+def _generate_category_questions_via_llm(
+    chunks: list[str],
+    category: str,
+    count: int,
+) -> list[dict]:
+    """Generate questions for edge-case or out-of-KB categories using direct LLM calls.
+
+    For 'edge': generates unusual, adversarial, or boundary-case questions
+    based on the document content.
+    For 'out_of_knowledge_base': generates plausible questions about topics
+    NOT covered by the documents.
+    """
+    if count <= 0:
+        return []
+
+    client = OpenAI()
+
+    # Build a summary of what the KB covers from a sample of chunks
+    sample_chunks = chunks[:20] if len(chunks) > 20 else chunks
+    kb_summary = "\n---\n".join(sample_chunks)
+
+    if category == "edge":
+        system_prompt = (
+            "You are an expert QA test designer. Given excerpts from a knowledge base, "
+            "generate challenging edge-case questions that test the limits of the system. "
+            "These include: ambiguous questions, questions with multiple valid interpretations, "
+            "questions that combine topics in unusual ways, hypothetical scenarios, "
+            "negation questions, questions about exceptions to rules, and boundary conditions. "
+            "Each question should still be related to the knowledge base content but approach it "
+            "from an unusual angle."
+        )
+    elif category == "out_of_knowledge_base":
+        system_prompt = (
+            "You are an expert QA test designer. Given excerpts from a knowledge base, "
+            "generate plausible questions that are OUTSIDE the scope of this knowledge base. "
+            "These questions should be realistic (something a user might actually ask) "
+            "but about topics NOT covered in the provided documents. "
+            "The reference answer for each should explain that the information is not available "
+            "in the knowledge base."
+        )
+    else:
+        system_prompt = (
+            "You are an expert QA test designer. Given excerpts from a knowledge base, "
+            "generate common, expected questions that a typical user would ask in normal scenarios."
+        )
+
+    user_prompt = (
+        f"Knowledge base excerpts:\n\n{kb_summary}\n\n"
+        f"Generate exactly {count} questions as a JSON array. "
+        f"Each element must have: "
+        f'"question" (the question text) and "reference_answer" (the expected answer). '
+        f"Return ONLY the JSON array, no other text."
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.8,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+        import json as _json
+
+        raw = response.choices[0].message.content or "[]"
+        parsed = _json.loads(raw)
+        # Handle both {"questions": [...]} and [...] formats
+        if isinstance(parsed, dict):
+            items = parsed.get("questions", parsed.get("items", []))
+        elif isinstance(parsed, list):
+            items = parsed
+        else:
+            items = []
+
+        results = []
+        for item in items[:count]:
+            results.append({
+                "user_input": item.get("question", ""),
+                "reference": item.get("reference_answer", ""),
+                "reference_contexts": [],
+                "synthesizer_name": category,
+            })
+        return results
+    except Exception:
+        logger.exception("Failed to generate %s questions via LLM", category)
+        return []
+
+
 def generate_project_testset(
     chunks: list[str],
     testset_size: int = 10,
@@ -386,27 +477,105 @@ def generate_project_testset(
     custom_personas: list[dict] | None = None,
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
+    question_categories: dict[str, int] | None = None,
 ) -> dict:
     """Unified entry point for project-scoped test set generation.
 
     Routes to persona-based or chunk-based generation and returns
     a normalized dict with 'personas' and 'questions' keys.
+
+    question_categories: optional dict mapping category names to percentages.
+    Supported categories: typical, in_knowledge_base, edge, out_of_knowledge_base.
+    When provided, questions are generated per-category and tagged.
     """
-    if use_personas:
-        return generate_testset_with_personas(
-            chunks=chunks,
-            testset_size=testset_size,
-            num_personas=num_personas,
-            custom_personas=custom_personas,
-            query_distribution=query_distribution,
-            num_workers=num_workers,
-        )
-    else:
-        questions = generate_testset_from_chunks(
-            chunks=chunks,
-            testset_size=testset_size,
-            custom_personas=custom_personas,
-            query_distribution=query_distribution,
-            num_workers=num_workers,
-        )
-        return {"personas": [], "questions": questions}
+    # If no categories specified, generate all as "in_knowledge_base" (legacy behavior)
+    if not question_categories:
+        if use_personas:
+            result = generate_testset_with_personas(
+                chunks=chunks,
+                testset_size=testset_size,
+                num_personas=num_personas,
+                custom_personas=custom_personas,
+                query_distribution=query_distribution,
+                num_workers=num_workers,
+            )
+        else:
+            questions = generate_testset_from_chunks(
+                chunks=chunks,
+                testset_size=testset_size,
+                custom_personas=custom_personas,
+                query_distribution=query_distribution,
+                num_workers=num_workers,
+            )
+            result = {"personas": [], "questions": questions}
+        # Tag all questions as in_knowledge_base for consistency
+        for q in result.get("questions", []):
+            q["category"] = "in_knowledge_base"
+        return result
+
+    # Category-based generation: split testset_size by category percentages
+    total_pct = sum(question_categories.values())
+    if total_pct == 0:
+        return {"personas": [], "questions": []}
+
+    all_questions: list[dict] = []
+    all_personas: list[dict] = []
+
+    # Ragas-based categories (typical + in_knowledge_base) use the existing generators
+    ragas_categories = {}
+    llm_categories = {}
+    for cat, pct in question_categories.items():
+        if pct <= 0:
+            continue
+        if cat in ("typical", "in_knowledge_base"):
+            ragas_categories[cat] = pct
+        elif cat in ("edge", "out_of_knowledge_base"):
+            llm_categories[cat] = pct
+
+    # Generate Ragas-based questions (typical + in_knowledge_base combined)
+    ragas_total_pct = sum(ragas_categories.values())
+    if ragas_total_pct > 0:
+        ragas_count = max(1, round(testset_size * ragas_total_pct / total_pct))
+
+        if use_personas:
+            ragas_result = generate_testset_with_personas(
+                chunks=chunks,
+                testset_size=ragas_count,
+                num_personas=num_personas,
+                custom_personas=custom_personas,
+                query_distribution=query_distribution,
+                num_workers=num_workers,
+            )
+            all_personas = ragas_result.get("personas", [])
+            ragas_questions = ragas_result.get("questions", [])
+        else:
+            ragas_questions = generate_testset_from_chunks(
+                chunks=chunks,
+                testset_size=ragas_count,
+                custom_personas=custom_personas,
+                query_distribution=query_distribution,
+                num_workers=num_workers,
+            )
+
+        # Split ragas questions between typical and in_knowledge_base
+        if "typical" in ragas_categories and "in_knowledge_base" in ragas_categories:
+            typical_share = ragas_categories["typical"] / ragas_total_pct
+            typical_count = round(len(ragas_questions) * typical_share)
+            for i, q in enumerate(ragas_questions):
+                q["category"] = "typical" if i < typical_count else "in_knowledge_base"
+        else:
+            cat_name = next(iter(ragas_categories))
+            for q in ragas_questions:
+                q["category"] = cat_name
+
+        all_questions.extend(ragas_questions)
+
+    # Generate LLM-based questions (edge + out_of_knowledge_base)
+    for cat, pct in llm_categories.items():
+        cat_count = max(1, round(testset_size * pct / total_pct))
+        cat_questions = _generate_category_questions_via_llm(chunks, cat, cat_count)
+        for q in cat_questions:
+            q["category"] = cat
+        all_questions.extend(cat_questions)
+
+    return {"personas": all_personas, "questions": all_questions}
