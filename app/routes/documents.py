@@ -43,6 +43,14 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}")
+    elif ext == ".docx":
+        try:
+            from docx import Document
+
+            doc = Document(io.BytesIO(content_bytes))
+            text = "\n".join(para.text for para in doc.paragraphs)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not read DOCX: {e}")
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
@@ -102,6 +110,19 @@ async def update_document_context_label(project_id: int, document_id: int, req: 
     )
     conn.commit()
     return {"detail": "Context label updated", "context_label": req.context_label.strip()}
+
+
+@router.delete("/projects/{project_id}/documents")
+async def delete_all_project_documents(project_id: int):
+    conn = db.init.get_db()
+    project = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    conn.execute("DELETE FROM documents WHERE project_id = ?", (project_id,))
+    conn.commit()
+    return {"detail": "All documents deleted"}
 
 
 @router.delete("/projects/{project_id}/documents/{document_id}")

@@ -4,6 +4,50 @@ import { fetchTestQuestions, fetchTestSetSummary } from "../../lib/api";
 import QuestionCard from "./QuestionCard";
 import BulkActions from "./BulkActions";
 
+function escapeCsvField(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function downloadCsv(questions: TestQuestion[], testSetName: string) {
+  const headers = [
+    "question",
+    "reference_answer",
+    "reference_contexts",
+    "question_type",
+    "category",
+    "persona",
+    "status",
+    "user_edited_answer",
+    "user_notes",
+  ];
+  const rows = questions.map((q) =>
+    [
+      q.question,
+      q.reference_answer,
+      q.reference_contexts.join(" | "),
+      q.question_type,
+      q.category ?? "",
+      q.persona ?? "",
+      q.status,
+      q.user_edited_answer ?? "",
+      q.user_notes ?? "",
+    ]
+      .map(escapeCsvField)
+      .join(","),
+  );
+  const csv = [headers.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${testSetName.replace(/[^a-zA-Z0-9_-]/g, "_")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 const STATUS_FILTERS = ["all", "pending", "approved", "rejected", "edited"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
@@ -154,7 +198,7 @@ export default function QuestionList({
         onBulkComplete={handleBulkComplete}
       />
 
-      {/* Status filter tabs + Select all */}
+      {/* Status filter tabs + Select all + Download */}
       <div className="flex items-center gap-2">
         <div className="flex flex-1 gap-1 rounded-lg border border-border bg-elevated p-1">
           {STATUS_FILTERS.map((f) => (
@@ -172,12 +216,20 @@ export default function QuestionList({
           ))}
         </div>
         {questions.length > 0 && (
-          <button
-            onClick={toggleSelectAll}
-            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted transition hover:border-accent hover:text-accent"
-          >
-            {allSelected ? "Deselect All" : "Select All"}
-          </button>
+          <>
+            <button
+              onClick={toggleSelectAll}
+              className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted transition hover:border-accent hover:text-accent"
+            >
+              {allSelected ? "Deselect All" : "Select All"}
+            </button>
+            <button
+              onClick={() => downloadCsv(questions, testSet.name)}
+              className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted transition hover:border-accent hover:text-accent"
+            >
+              Download CSV
+            </button>
+          </>
         )}
       </div>
 

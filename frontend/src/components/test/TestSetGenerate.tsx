@@ -2,13 +2,27 @@ import { useState, useRef, useEffect } from "react";
 import type { ChunkConfig, TestSetCreate } from "../../lib/api";
 import { createTestSet, ApiError } from "../../lib/api";
 
-const GENERATION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (large test sets)
+const GENERATION_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes (large test sets need many LLM calls)
 
 const QUERY_TYPES = [
   { key: "single_hop_specific", label: "Single-hop Specific", description: "Direct factual questions answerable from a single chunk (e.g. \"What is the default timeout?\")" },
   { key: "multi_hop_abstract", label: "Multi-hop Abstract", description: "High-level questions requiring synthesis across multiple chunks (e.g. \"How does the system handle errors?\")" },
   { key: "multi_hop_specific", label: "Multi-hop Specific", description: "Precise questions needing details from multiple chunks (e.g. \"Which config options affect both caching and logging?\")" },
 ] as const;
+
+const QUESTION_CATEGORIES = [
+  { key: "typical", label: "Typical", description: "Common, expected queries users would ask in normal scenarios" },
+  { key: "in_knowledge_base", label: "In Knowledge Base", description: "Questions about content within the knowledge base" },
+  { key: "edge", label: "Edge", description: "Questions in unusual or challenging scenarios" },
+  { key: "out_of_knowledge_base", label: "Out of Knowledge Base", description: "Questions about content outside the knowledge base" },
+] as const;
+
+const DEFAULT_CATEGORIES: Record<string, number> = {
+  typical: 30,
+  in_knowledge_base: 30,
+  edge: 20,
+  out_of_knowledge_base: 20,
+};
 
 const DEFAULT_DISTRIBUTION: Record<string, number> = {
   single_hop_specific: 50,
@@ -39,6 +53,14 @@ export default function TestSetGenerate({
   const [numWorkers, setNumWorkers] = useState(4);
   const [queryDistribution, setQueryDistribution] = useState<Record<string, number>>({ ...DEFAULT_DISTRIBUTION });
   const [useCustomDistribution, setUseCustomDistribution] = useState(false);
+  const [useCategories, setUseCategories] = useState(false);
+  const [enabledCategories, setEnabledCategories] = useState<Record<string, boolean>>({
+    typical: true,
+    in_knowledge_base: true,
+    edge: true,
+    out_of_knowledge_base: true,
+  });
+  const [categoryDistribution, setCategoryDistribution] = useState<Record<string, number>>({ ...DEFAULT_CATEGORIES });
   const [generating, setGenerating] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +129,19 @@ export default function TestSetGenerate({
       };
       if (name.trim()) config.name = name.trim();
 
+      // Include question categories if enabled
+      if (useCategories) {
+        const activeCats: Record<string, number> = {};
+        for (const cat of QUESTION_CATEGORIES) {
+          if (enabledCategories[cat.key]) {
+            activeCats[cat.key] = categoryDistribution[cat.key] ?? 0;
+          }
+        }
+        if (Object.keys(activeCats).length > 0) {
+          config.question_categories = activeCats;
+        }
+      }
+
       // Include custom personas only if valid entries exist (both name and role_description required)
       if (usePersonas && customPersonas.length > 0) {
         const valid = customPersonas.filter(
@@ -131,6 +166,9 @@ export default function TestSetGenerate({
       setNumWorkers(4);
       setUseCustomDistribution(false);
       setQueryDistribution({ ...DEFAULT_DISTRIBUTION });
+      setUseCategories(false);
+      setEnabledCategories({ typical: true, in_knowledge_base: true, edge: true, out_of_knowledge_base: true });
+      setCategoryDistribution({ ...DEFAULT_CATEGORIES });
       onTestSetCreated();
     } catch (err) {
       if ((err as Error).name === "AbortError") {
@@ -474,6 +512,166 @@ export default function TestSetGenerate({
             </button>
           </div>
         )}
+        {/* Question categories toggle */}
+        <div className="sm:col-span-2 flex items-end gap-3 pb-1">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={useCategories}
+              onChange={(e) => setUseCategories(e.target.checked)}
+              className="h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+              disabled={generating}
+            />
+            Question Categories
+          </label>
+        </div>
+
+        {/* Question categories config */}
+        {useCategories && (
+          <div className="sm:col-span-2 space-y-3 rounded-lg border border-border bg-elevated/50 p-3">
+            <p className="text-xs text-text-muted">
+              Select which question categories to include and adjust their proportions.
+            </p>
+            {QUESTION_CATEGORIES.map((cat) => {
+              const enabled = enabledCategories[cat.key] ?? false;
+              const pct = categoryDistribution[cat.key] ?? 0;
+              return (
+                <div key={cat.key} className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(e) => {
+                          const next = { ...enabledCategories, [cat.key]: e.target.checked };
+                          setEnabledCategories(next);
+                          // Redistribute percentages among enabled categories
+                          const enabledKeys = QUESTION_CATEGORIES
+                            .map((c) => c.key)
+                            .filter((k) => next[k]);
+                          if (enabledKeys.length > 0) {
+                            const share = Math.round(100 / enabledKeys.length);
+                            const newDist: Record<string, number> = {};
+                            enabledKeys.forEach((k, i) => {
+                              newDist[k] = i === enabledKeys.length - 1
+                                ? 100 - share * (enabledKeys.length - 1)
+                                : share;
+                            });
+                            QUESTION_CATEGORIES.forEach((c) => {
+                              if (!next[c.key]) newDist[c.key] = 0;
+                            });
+                            setCategoryDistribution(newDist);
+                          }
+                        }}
+                        className="h-3.5 w-3.5 rounded border-border bg-input text-accent accent-accent"
+                        disabled={generating}
+                      />
+                      <div>
+                        <label className="text-xs font-medium text-text-secondary">
+                          {cat.label}
+                        </label>
+                        <p className="text-[11px] leading-tight text-text-muted">{cat.description}</p>
+                      </div>
+                    </div>
+                    {enabled && (
+                      <div className="flex shrink-0 items-baseline gap-0.5">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={pct}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => {
+                            const raw = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                            setCategoryDistribution((prev) => {
+                              const enabledKeys = QUESTION_CATEGORIES
+                                .map((c) => c.key)
+                                .filter((k) => enabledCategories[k] && k !== cat.key);
+                              const otherTotal = enabledKeys.reduce(
+                                (sum, k) => sum + (prev[k] ?? 0),
+                                0,
+                              );
+                              const remaining = 100 - raw;
+                              const next: Record<string, number> = { ...prev, [cat.key]: raw };
+                              if (otherTotal === 0) {
+                                const share = Math.round(remaining / enabledKeys.length);
+                                enabledKeys.forEach((k, i) => {
+                                  next[k] = i === enabledKeys.length - 1
+                                    ? remaining - share * (enabledKeys.length - 1)
+                                    : share;
+                                });
+                              } else {
+                                let allocated = 0;
+                                enabledKeys.forEach((k, i) => {
+                                  if (i === enabledKeys.length - 1) {
+                                    next[k] = remaining - allocated;
+                                  } else {
+                                    const share = Math.round(((prev[k] ?? 0) / otherTotal) * remaining);
+                                    next[k] = share;
+                                    allocated += share;
+                                  }
+                                });
+                              }
+                              return next;
+                            });
+                          }}
+                          disabled={generating}
+                          className="w-10 rounded border border-border bg-input px-1 py-0.5 text-right text-xs tabular-nums text-text-primary focus:border-accent focus:outline-none"
+                        />
+                        <span className="text-xs text-text-muted">%</span>
+                      </div>
+                    )}
+                  </div>
+                  {enabled && (
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={pct}
+                      onChange={(e) => {
+                        const raw = Number(e.target.value);
+                        setCategoryDistribution((prev) => {
+                          const enabledKeys = QUESTION_CATEGORIES
+                            .map((c) => c.key)
+                            .filter((k) => enabledCategories[k] && k !== cat.key);
+                          const otherTotal = enabledKeys.reduce(
+                            (sum, k) => sum + (prev[k] ?? 0),
+                            0,
+                          );
+                          const remaining = 100 - raw;
+                          const next: Record<string, number> = { ...prev, [cat.key]: raw };
+                          if (otherTotal === 0) {
+                            const share = Math.round(remaining / enabledKeys.length);
+                            enabledKeys.forEach((k, i) => {
+                              next[k] = i === enabledKeys.length - 1
+                                ? remaining - share * (enabledKeys.length - 1)
+                                : share;
+                            });
+                          } else {
+                            let allocated = 0;
+                            enabledKeys.forEach((k, i) => {
+                              if (i === enabledKeys.length - 1) {
+                                next[k] = remaining - allocated;
+                              } else {
+                                const share = Math.round(((prev[k] ?? 0) / otherTotal) * remaining);
+                                next[k] = share;
+                                allocated += share;
+                              }
+                            });
+                          }
+                          return next;
+                        });
+                      }}
+                      className="w-full accent-accent"
+                      disabled={generating}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Query distribution toggle */}
         <div className="sm:col-span-2 flex items-end gap-3 pb-1">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { deleteExperiment, ApiError } from "../../lib/api";
+import { deleteExperiment, cancelExperiment, ApiError } from "../../lib/api";
 import type { Experiment } from "../../lib/api";
 
 interface Props {
@@ -53,6 +53,20 @@ export default function ExperimentList({
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<number | null>(null);
+
+  const handleCancel = async (id: number) => {
+    setCancelling(id);
+    try {
+      await cancelExperiment(projectId, id);
+      onRefresh();
+    } catch {
+      // If cancel fails (e.g. already stopped), just refresh to pick up reaper results
+      onRefresh();
+    } finally {
+      setCancelling(null);
+    }
+  };
 
   const handleDelete = async (id: number) => {
     setDeleting(true);
@@ -126,6 +140,14 @@ export default function ExperimentList({
                     </span>
                     <span className="text-text-muted">·</span>
                     <span className="text-text-secondary">{exp.model}</span>
+                    {exp.test_set_name && (
+                      <>
+                        <span className="text-text-muted">·</span>
+                        <span className="text-text-secondary">
+                          {exp.test_set_name}
+                        </span>
+                      </>
+                    )}
                     {exp.approved_question_count != null && (
                       <>
                         <span className="text-text-muted">·</span>
@@ -145,6 +167,17 @@ export default function ExperimentList({
                   className="flex shrink-0 items-center gap-2"
                   onClick={(e) => e.stopPropagation()}
                 >
+                  {/* Cancel button — running experiments only */}
+                  {exp.status === "running" && (
+                    <button
+                      onClick={() => handleCancel(exp.id)}
+                      disabled={cancelling === exp.id}
+                      className="rounded-lg border border-red-500/30 px-2.5 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-40"
+                    >
+                      {cancelling === exp.id ? "Stopping…" : "Stop"}
+                    </button>
+                  )}
+
                   {/* Compare checkbox — completed experiments only */}
                   {exp.status === "completed" && compareSet && onToggleCompare && (
                     <label

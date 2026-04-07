@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   runExperimentSSE,
+  observeExperimentProgress,
   fetchExperiment,
   fetchCustomMetrics,
+  cancelExperiment,
 } from "../../lib/api";
 import type {
   Experiment,
@@ -10,6 +12,8 @@ import type {
   ExperimentSSEHandle,
   SSEStartedEvent,
   SSEProgressEvent,
+  SSECompletionItem,
+  InFlightDetail,
 } from "../../lib/api";
 
 interface Props {
@@ -58,6 +62,23 @@ const STRING_METRICS = [
   "exact_match",
   "string_presence",
 ];
+
+/** Metrics that require retrieved contexts to produce meaningful results. */
+const CONTEXT_REQUIRED_METRICS = new Set([
+  "faithfulness",
+  "context_precision",
+  "context_recall",
+  "context_entities_recall",
+  "noise_sensitivity",
+  "summarization_score",
+  "context_relevance",
+  "response_groundedness",
+  "aspect_critic",
+  "rubrics_score",
+]);
+
+/** Bot connector types that natively return retrieved contexts (citations with snippets). */
+const CONNECTORS_WITH_CONTEXTS = new Set(["glean", "custom"]);
 
 const METRIC_DESCRIPTIONS: Record<string, string> = {
   // LLM Metrics
@@ -114,9 +135,10 @@ interface MetricGroupProps {
   onToggle: (metric: string) => void;
   activeClass: string;
   inactiveClass: string;
+  disabledMetrics?: Set<string>;
 }
 
-function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeClass, inactiveClass }: MetricGroupProps) {
+function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeClass, inactiveClass, disabledMetrics }: MetricGroupProps) {
   return (
     <div>
       <label className={`mb-2 block text-xs font-medium ${labelClass}`}>
@@ -125,14 +147,24 @@ function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeCla
       <div className="flex flex-wrap gap-2">
         {metrics.map((metric) => {
           const checked = selected.has(metric);
+          const disabled = disabledMetrics?.has(metric) ?? false;
           return (
             <button
               key={metric}
               type="button"
-              onClick={() => onToggle(metric)}
-              title={METRIC_DESCRIPTIONS[metric]}
+              onClick={() => !disabled && onToggle(metric)}
+              title={
+                disabled
+                  ? `${metric.replace(/_/g, " ")} — requires retrieved contexts (not available for this connector)`
+                  : METRIC_DESCRIPTIONS[metric]
+              }
+              disabled={disabled}
               className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                checked ? activeClass : inactiveClass
+                disabled
+                  ? "cursor-not-allowed border-border/50 bg-card/30 text-text-muted/40 line-through"
+                  : checked
+                    ? activeClass
+                    : inactiveClass
               }`}
             >
               {metric.replace(/_/g, " ")}
@@ -146,7 +178,7 @@ function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeCla
 
 type RunState =
   | { phase: "idle" }
-  | { phase: "running"; current: number; total: number; currentQuestion: string; lastError?: string }
+  | { phase: "running"; current: number; total: number; currentQuestion: string; lastError?: string; inFlight: string[]; scoringMetrics: string[]; inFlightDetails: InFlightDetail[]; }
   | { phase: "completed"; resultCount: number }
   | { phase: "error"; message: string }
   | { phase: "connection_lost"; lastCurrent: number; lastTotal: number };
@@ -156,9 +188,23 @@ export default function ExperimentRunner({
   experiment,
   onComplete,
 }: Props) {
+  const isBotExperiment = experiment.bot_config_id != null;
+  const connectorType = experiment.connector_type ?? null;
+  const botReturnsContexts = connectorType != null && CONNECTORS_WITH_CONTEXTS.has(connectorType);
+  const hasContexts = !isBotExperiment || botReturnsContexts || (experiment.has_reference_contexts ?? false);
+  const disabledMetrics = hasContexts ? new Set<string>() : CONTEXT_REQUIRED_METRICS;
+
   const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(
-    () => new Set(DEFAULT_METRICS),
+    () => {
+      const defaults = new Set(DEFAULT_METRICS);
+      if (!hasContexts) {
+        for (const m of CONTEXT_REQUIRED_METRICS) {
+          defaults.delete(m);
+        }
+      }
+      return defaults;
+    },
   );
   const [runState, setRunState] = useState<RunState>({ phase: "idle" });
   const [errorCount, setErrorCount] = useState(0);
@@ -166,6 +212,28 @@ export default function ExperimentRunner({
   const handleRef = useRef<ExperimentSSEHandle | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [completedLog, setCompletedLog] = useState<SSECompletionItem[]>([]);
+  const [experimentMeta, setExperimentMeta] = useState<{ name: string; model: string; testSet: string } | null>(null);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
+
+  const DEFAULT_RUBRICS: Record<string, string> = {
+    score1_description: "The response is completely incorrect or irrelevant.",
+    score2_description: "The response is partially correct but has significant errors.",
+    score3_description: "The response is mostly correct but could be improved.",
+    score4_description: "The response is correct and well-structured.",
+    score5_description: "The response is excellent, accurate, and comprehensive.",
+  };
+
+  const [concurrency, setConcurrency] = useState(isBotExperiment ? 2 : 5);
+  const [rubrics, setRubrics] = useState<Record<string, string>>({ ...DEFAULT_RUBRICS });
+
+  const updateRubric = (key: string, value: string) => {
+    setRubrics((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const resetRubrics = () => {
+    setRubrics({ ...DEFAULT_RUBRICS });
+  };
 
   // Load custom metrics for this project
   useEffect(() => {
@@ -174,7 +242,12 @@ export default function ExperimentRunner({
       .catch(() => setCustomMetrics([]));
   }, [projectId]);
 
-  // Cleanup on unmount
+  // Auto-scroll log to bottom when new items arrive
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [completedLog.length]);
+
+  // Cleanup on unmount — only abort the SSE observer, NOT the background task
   useEffect(() => {
     return () => {
       handleRef.current?.abort();
@@ -196,7 +269,57 @@ export default function ExperimentRunner({
     }
   }, []);
 
+  // Auto-reconnect to a running experiment on mount
+  useEffect(() => {
+    if (experiment.status !== "running") return;
+    // Already observing
+    if (handleRef.current) return;
+
+    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "", inFlight: [], scoringMetrics: [], inFlightDetails: [] });
+    startTimer();
+
+    const handle = observeExperimentProgress(projectId, experiment.id, {
+      onProgress: (data: SSEProgressEvent) => {
+        if (data.error) setErrorCount((prev) => prev + 1);
+        if (data.new_completions?.length) {
+          setCompletedLog((prev) => [...prev, ...data.new_completions!]);
+        }
+        setRunState({
+          phase: "running",
+          current: data.current,
+          total: data.total,
+          currentQuestion: data.question,
+          lastError: data.error || undefined,
+          inFlight: data.in_flight ?? [],
+          scoringMetrics: data.scoring_metrics ?? [],
+          inFlightDetails: data.in_flight_details ?? [],
+        });
+      },
+      onCompleted: (data) => {
+        stopTimer();
+        setRunState({ phase: "completed", resultCount: data.result_count });
+        onComplete();
+      },
+      onError: (data) => {
+        stopTimer();
+        setRunState({ phase: "error", message: data.message });
+        onComplete();
+      },
+      onConnectionError: (_err, lastProgress) => {
+        stopTimer();
+        setRunState({
+          phase: "connection_lost",
+          lastCurrent: lastProgress?.current ?? 0,
+          lastTotal: lastProgress?.total ?? 0,
+        });
+      },
+    });
+
+    handleRef.current = handle;
+  }, [experiment.status, experiment.id, projectId, onComplete, startTimer, stopTimer]);
+
   const toggleMetric = (metric: string) => {
+    if (disabledMetrics.has(metric)) return;
     setSelectedMetrics((prev) => {
       const next = new Set(prev);
       if (next.has(metric)) {
@@ -211,8 +334,10 @@ export default function ExperimentRunner({
   const handleRun = () => {
     if (selectedMetrics.size === 0) return;
 
-    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "" });
+    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "", inFlight: [], scoringMetrics: [], inFlightDetails: [] });
     setErrorCount(0);
+    setCompletedLog([]);
+    setExperimentMeta(null);
     startTimer();
 
     const handle = runExperimentSSE(
@@ -221,16 +346,29 @@ export default function ExperimentRunner({
       Array.from(selectedMetrics),
       {
         onStarted: (data: SSEStartedEvent) => {
+          if (data.experiment_name) {
+            setExperimentMeta({
+              name: data.experiment_name,
+              model: data.model ?? "",
+              testSet: data.test_set_name ?? "",
+            });
+          }
           setRunState({
             phase: "running",
             current: 0,
             total: data.total_questions,
             currentQuestion: "",
+            inFlight: [],
+            scoringMetrics: [],
+            inFlightDetails: [],
           });
         },
         onProgress: (data: SSEProgressEvent) => {
           if (data.error) {
             setErrorCount((prev) => prev + 1);
+          }
+          if (data.new_completions?.length) {
+            setCompletedLog((prev) => [...prev, ...data.new_completions!]);
           }
           setRunState({
             phase: "running",
@@ -238,6 +376,9 @@ export default function ExperimentRunner({
             total: data.total,
             currentQuestion: data.question,
             lastError: data.error || undefined,
+            inFlight: data.in_flight ?? [],
+            scoringMetrics: data.scoring_metrics ?? [],
+            inFlightDetails: data.in_flight_details ?? [],
           });
         },
         onCompleted: (data) => {
@@ -259,12 +400,16 @@ export default function ExperimentRunner({
           });
         },
       },
+      selectedMetrics.has("rubrics_score") ? rubrics : null,
+      concurrency,
     );
 
     handleRef.current = handle;
   };
 
   const handleAbort = () => {
+    // Signal the server to stop processing remaining questions
+    cancelExperiment(projectId, experiment.id).catch(() => {});
     handleRef.current?.abort();
     handleRef.current = null;
     stopTimer();
@@ -301,6 +446,14 @@ export default function ExperimentRunner({
       {/* Idle — metric selection + run button */}
       {runState.phase === "idle" && (
         <div className="space-y-4">
+          {disabledMetrics.size > 0 && (
+            <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-300/80">
+              {connectorType
+                ? `The ${connectorType} connector does not return retrieved contexts — context-dependent metrics are disabled.`
+                : "No retrieved contexts available — context-dependent metrics are disabled."}
+            </div>
+          )}
+
           <div className="space-y-3">
             {/* LLM Metrics */}
             <MetricGroup
@@ -311,6 +464,7 @@ export default function ExperimentRunner({
               onToggle={toggleMetric}
               activeClass="border-accent/50 bg-accent/15 text-accent"
               inactiveClass="border-border bg-card text-text-muted hover:border-border-focus hover:text-text-secondary"
+              disabledMetrics={disabledMetrics}
             />
 
             {/* NVIDIA Metrics */}
@@ -322,6 +476,7 @@ export default function ExperimentRunner({
               onToggle={toggleMetric}
               activeClass="border-green-500/50 bg-green-500/15 text-green-400"
               inactiveClass="border-border bg-card text-text-muted hover:border-green-500/30 hover:text-text-secondary"
+              disabledMetrics={disabledMetrics}
             />
 
             {/* Embedding Metrics */}
@@ -333,6 +488,7 @@ export default function ExperimentRunner({
               onToggle={toggleMetric}
               activeClass="border-sky-500/50 bg-sky-500/15 text-sky-400"
               inactiveClass="border-border bg-card text-text-muted hover:border-sky-500/30 hover:text-text-secondary"
+              disabledMetrics={disabledMetrics}
             />
 
             {/* String Metrics */}
@@ -344,6 +500,7 @@ export default function ExperimentRunner({
               onToggle={toggleMetric}
               activeClass="border-amber-500/50 bg-amber-500/15 text-amber-400"
               inactiveClass="border-border bg-card text-text-muted hover:border-amber-500/30 hover:text-text-secondary"
+              disabledMetrics={disabledMetrics}
             />
 
             {/* Custom metrics */}
@@ -355,17 +512,26 @@ export default function ExperimentRunner({
                 <div className="flex flex-wrap gap-2">
                   {customMetrics.map((cm) => {
                     const checked = selectedMetrics.has(cm.name);
+                    const needsContexts = cm.metric_type === "rubrics" || cm.metric_type === "instance_rubrics";
+                    const disabled = needsContexts && !hasContexts;
                     return (
                       <button
                         key={cm.name}
                         type="button"
-                        onClick={() => toggleMetric(cm.name)}
+                        onClick={() => !disabled && toggleMetric(cm.name)}
+                        disabled={disabled}
                         className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                          checked
-                            ? "border-purple-500/50 bg-purple-500/15 text-purple-400"
-                            : "border-border bg-card text-text-muted hover:border-purple-500/30 hover:text-text-secondary"
+                          disabled
+                            ? "cursor-not-allowed border-border/50 bg-card/30 text-text-muted/40 line-through"
+                            : checked
+                              ? "border-purple-500/50 bg-purple-500/15 text-purple-400"
+                              : "border-border bg-card text-text-muted hover:border-purple-500/30 hover:text-text-secondary"
                         }`}
-                        title={`${cm.metric_type.replace(/_/g, " ")} (${cm.min_score}–${cm.max_score})`}
+                        title={
+                          disabled
+                            ? `${cm.name.replace(/_/g, " ")} — requires retrieved contexts (not available for this connector)`
+                            : `${cm.metric_type.replace(/_/g, " ")} (${cm.min_score}–${cm.max_score})`
+                        }
                       >
                         {cm.name.replace(/_/g, " ")}
                       </button>
@@ -382,6 +548,64 @@ export default function ExperimentRunner({
             )}
           </div>
 
+          {/* Rubric editor — shown when rubrics_score is selected */}
+          {selectedMetrics.has("rubrics_score") && (
+            <div className="rounded-lg border border-accent/20 bg-accent/5 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <label className="text-xs font-medium text-accent">
+                  Rubric Criteria (1–5 scale)
+                </label>
+                <button
+                  type="button"
+                  onClick={resetRubrics}
+                  className="text-xs text-text-muted transition hover:text-accent"
+                >
+                  Reset to defaults
+                </button>
+              </div>
+              <div className="space-y-2">
+                {([1, 2, 3, 4, 5] as const).map((n) => {
+                  const key = `score${n}_description`;
+                  return (
+                    <div key={key} className="flex items-start gap-2">
+                      <span className="mt-1.5 w-5 shrink-0 text-center text-xs font-bold text-text-muted">
+                        {n}
+                      </span>
+                      <input
+                        type="text"
+                        value={rubrics[key] ?? ""}
+                        onChange={(e) => updateRubric(key, e.target.value)}
+                        className="flex-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+                        placeholder={`Describe what a score of ${n} means...`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Concurrency control */}
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-medium text-text-secondary">
+              Parallel questions
+            </label>
+            <input
+              type="range"
+              min={1}
+              max={20}
+              value={concurrency}
+              onChange={(e) => setConcurrency(Number(e.target.value))}
+              className="h-1.5 w-32 cursor-pointer accent-accent"
+            />
+            <span className="w-6 text-center text-xs font-mono text-text-primary">
+              {concurrency}
+            </span>
+            <span className="text-xs text-text-muted">
+              {concurrency === 1 ? "(sequential)" : concurrency >= 15 ? "(aggressive)" : ""}
+            </span>
+          </div>
+
           <button
             onClick={handleRun}
             disabled={selectedMetrics.size === 0}
@@ -392,9 +616,18 @@ export default function ExperimentRunner({
         </div>
       )}
 
-      {/* Running — progress bar */}
+      {/* Running — progress + live Q&A feed */}
       {runState.phase === "running" && (
         <div className="space-y-4">
+          {/* Experiment info banner */}
+          {experimentMeta && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border bg-card/50 px-3 py-2">
+              <span className="text-xs font-medium text-text-primary">{experimentMeta.name}</span>
+              <span className="text-xs text-text-muted">{experimentMeta.model}</span>
+              <span className="text-xs text-text-muted">{experimentMeta.testSet}</span>
+            </div>
+          )}
+
           {/* Progress bar */}
           <div>
             <div className="mb-1.5 flex items-center justify-between text-xs">
@@ -425,23 +658,159 @@ export default function ExperimentRunner({
             )}
           </div>
 
-          {/* Current question */}
-          {runState.currentQuestion && (
-            <div className={`rounded-lg border px-3 py-2 ${
-              runState.lastError
-                ? "border-yellow-500/30 bg-yellow-500/5"
-                : "border-border bg-card/50"
-            }`}>
-              <div className="flex items-center gap-1.5">
-                <p className={`text-xs ${runState.lastError ? "text-yellow-400" : "text-text-muted"}`}>
-                  {runState.lastError ? "Failed:" : "Evaluating:"}
-                </p>
-              </div>
-              <p className={`mt-0.5 truncate text-sm ${
-                runState.lastError ? "text-yellow-300/80" : "text-text-secondary"
-              }`}>
-                {runState.currentQuestion}
+          {/* In-flight questions with per-question pipeline */}
+          {runState.inFlightDetails.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-text-muted">
+                Processing ({runState.inFlightDetails.length} in parallel)
               </p>
+              <div className="space-y-2">
+                {runState.inFlightDetails.map((detail, i) => {
+                  const totalMetrics = detail.metrics_done.length + detail.metrics_active.length + detail.metrics_pending.length;
+                  const doneCount = detail.metrics_done.length;
+                  const scoringPct = totalMetrics > 0 ? (doneCount / totalMetrics) * 100 : 0;
+
+                  return (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-border/60 bg-card/50 px-3 py-2.5"
+                    >
+                      {/* Question text */}
+                      <p className="mb-2 text-xs leading-relaxed text-text-secondary">{detail.question}</p>
+
+                      {/* Pipeline steps */}
+                      <div className="space-y-1.5">
+                        {/* Step 1: Querying */}
+                        <div className="flex items-center gap-2">
+                          {detail.phase === "querying" ? (
+                            <svg className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-400" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                          ) : (
+                            <svg className="h-3.5 w-3.5 shrink-0 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                          <span className={`text-xs ${detail.phase === "querying" ? "text-blue-300" : "text-text-muted"}`}>
+                            {isBotExperiment ? "Querying bot" : "Running RAG pipeline"}
+                          </span>
+                        </div>
+
+                        {/* Step 2: Scoring metrics */}
+                        <div className="flex items-center gap-2">
+                          {detail.phase === "querying" ? (
+                            <div className="h-3.5 w-3.5 shrink-0 rounded-full border border-border" />
+                          ) : doneCount < totalMetrics ? (
+                            <svg className="h-3.5 w-3.5 shrink-0 animate-spin text-purple-400" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                          ) : (
+                            <svg className="h-3.5 w-3.5 shrink-0 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                          <span className={`text-xs ${detail.phase === "scoring" ? "text-purple-300" : "text-text-muted"}`}>
+                            Evaluating metrics {detail.phase === "scoring" && totalMetrics > 0 ? `(${doneCount}/${totalMetrics})` : ""}
+                          </span>
+                        </div>
+
+                        {/* Metric progress bar + detail when scoring */}
+                        {detail.phase === "scoring" && totalMetrics > 0 && (
+                          <div className="pl-[22px]">
+                            {/* Mini progress bar */}
+                            <div className="mb-1.5 h-1 overflow-hidden rounded-full bg-elevated">
+                              <div
+                                className="h-full rounded-full bg-purple-500 transition-all duration-300"
+                                style={{ width: `${scoringPct}%` }}
+                              />
+                            </div>
+                            {/* Metric chips */}
+                            <div className="flex flex-wrap gap-1">
+                              {detail.metrics_done.map((m) => (
+                                <span key={m} className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-green-500/10 text-green-400">
+                                  {m.replace(/_/g, " ")} ✓
+                                </span>
+                              ))}
+                              {detail.metrics_active.map((m) => (
+                                <span key={m} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/10 text-purple-300">
+                                  <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-purple-400" />
+                                  {m.replace(/_/g, " ")}
+                                </span>
+                              ))}
+                              {detail.metrics_pending.map((m) => (
+                                <span key={m} className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-zinc-500/10 text-text-muted">
+                                  {m.replace(/_/g, " ")}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Live Q&A feed */}
+          {completedLog.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-text-muted">
+                Completed ({completedLog.length})
+              </p>
+              <div className="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-border bg-elevated/30 p-2">
+                {completedLog.map((item, i) => (
+                  <div
+                    key={i}
+                    className={`rounded-lg border px-3 py-2 ${
+                      item.error
+                        ? "border-red-500/20 bg-red-500/5"
+                        : "border-border/60 bg-card/50"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5 shrink-0 text-xs font-medium text-text-muted">Q:</span>
+                      <p className="text-xs leading-relaxed text-text-secondary">{item.question}</p>
+                    </div>
+                    {item.error ? (
+                      <div className="mt-1.5 flex items-start gap-2">
+                        <span className="mt-0.5 shrink-0 text-xs font-medium text-red-400">E:</span>
+                        <p className="text-xs leading-relaxed text-red-300/80">{item.error}</p>
+                      </div>
+                    ) : item.response ? (
+                      <div className="mt-1.5 flex items-start gap-2">
+                        <span className="mt-0.5 shrink-0 text-xs font-medium text-accent">A:</span>
+                        <p className="text-xs leading-relaxed text-text-primary">{item.response}</p>
+                      </div>
+                    ) : null}
+                    {/* Per-question metric scores */}
+                    {item.metrics && Object.keys(item.metrics).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
+                        {Object.entries(item.metrics).map(([name, value]) => (
+                          <span
+                            key={name}
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                              value === null
+                                ? "bg-zinc-500/10 text-text-muted"
+                                : value >= 0.7
+                                  ? "bg-green-500/10 text-green-400"
+                                  : value >= 0.4
+                                    ? "bg-yellow-500/10 text-yellow-400"
+                                    : "bg-red-500/10 text-red-400"
+                            }`}
+                          >
+                            {name.replace(/_/g, " ")}: {value !== null ? value.toFixed(2) : "—"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
             </div>
           )}
 

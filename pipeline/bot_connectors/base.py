@@ -17,6 +17,8 @@ class Citation:
     title: str | None = None
     url: str | None = None
     snippet: str | None = None
+    datasource: str | None = None
+    container: str | None = None
 
 
 @dataclass(frozen=True)
