@@ -44,7 +44,7 @@ async def lifespan(application: FastAPI):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Ragas Evaluator", version="0.1.0", lifespan=lifespan)
+    application = FastAPI(title="Ragas Evaluator", version="0.4.0-alpha", lifespan=lifespan)
 
     application.add_middleware(
         CORSMiddleware,

@@ -23,6 +23,7 @@ VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
 VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
 VALID_EXPERIMENT_STATUSES = {"pending", "running", "completed", "failed"}
 VALID_QUERY_TYPES = {"single_hop_specific", "multi_hop_abstract", "multi_hop_specific"}
+VALID_QUESTION_CATEGORIES = {"typical", "in_knowledge_base", "edge", "out_of_knowledge_base"}
 
 ALLOWED_LLM_PARAMS = {
     "temperature",
@@ -36,7 +37,8 @@ MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", 0))
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 MAX_BASELINE_CSV_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_BASELINE_ROWS = 1000
-ALLOWED_FILE_TYPES = {".txt", ".pdf"}
+MAX_UPLOAD_QA_ROWS = 2000
+ALLOWED_FILE_TYPES = {".txt", ".pdf", ".docx"}
 
 DEFAULT_EXPERIMENT_METRICS = [
     "faithfulness",
@@ -75,6 +77,7 @@ class TestSetCreate(BaseModel):
     query_distribution: dict[str, float] | None = None
     chunk_sample_size: int = 0
     num_workers: int = 4
+    question_categories: dict[str, int] | None = None
 
     @field_validator("testset_size")
     @classmethod
@@ -404,6 +407,15 @@ class ExperimentCreate(BaseModel):
 
 class ExperimentRunRequest(BaseModel):
     metrics: list[str] | None = None
+    rubrics: dict[str, str] | None = None
+    concurrency: int = 5
+
+    @field_validator("concurrency")
+    @classmethod
+    def validate_concurrency(cls, v: int) -> int:
+        if v < 1 or v > 20:
+            raise ValueError("concurrency must be between 1 and 20")
+        return v
 
 
 class SuggestionUpdate(BaseModel):

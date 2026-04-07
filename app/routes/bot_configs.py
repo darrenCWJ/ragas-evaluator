@@ -117,7 +117,7 @@ async def update_bot_config(project_id: int, config_id: int, req: BotConfigUpdat
         return _parse_bot_config_row(row)
 
     updates.append("updated_at = ?")
-    params.append(datetime.utcnow().isoformat())
+    params.append(datetime.now().isoformat())
     params.append(config_id)
 
     conn.execute(

@@ -5,10 +5,10 @@ def create_scorer(llm):
     return ContextPrecision(llm=llm)
 
 
-async def score(scorer, question: str, answer: str, contexts: list[str]) -> float:
+async def score(scorer, question: str, answer: str, reference: str, contexts: list[str]) -> float:
     result = await scorer.ascore(
         user_input=question,
-        reference=answer,
+        reference=reference,
         retrieved_contexts=contexts,
     )
     return result.value

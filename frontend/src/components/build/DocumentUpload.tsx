@@ -1,7 +1,7 @@
 import { useState, useRef, type DragEvent } from "react";
 import { uploadDocument } from "../../lib/api";
 
-const ALLOWED_EXTENSIONS = [".pdf", ".txt"];
+const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".docx"];
 const MAX_SIZE = 50 * 1024 * 1024; // 50MB
 
 interface Props {
@@ -12,13 +12,14 @@ interface Props {
 export default function DocumentUpload({ projectId, onUploaded }: Props) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function validate(file: File): string | null {
     const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      return `Unsupported file type "${ext}". Only .pdf and .txt allowed.`;
+      return `Unsupported file type "${ext}". Only .pdf, .txt, and .docx allowed.`;
     }
     if (file.size > MAX_SIZE) {
       return `File exceeds 50 MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB).`;
@@ -30,23 +31,38 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
     if (!files || files.length === 0) return;
     setError(null);
 
-    const file = files[0]!;
-    const validationError = validate(file);
-    if (validationError) {
-      setError(validationError);
-      return;
+    const fileArray = Array.from(files);
+
+    // Validate all files first
+    for (const file of fileArray) {
+      const validationError = validate(file);
+      if (validationError) {
+        setError(`${file.name}: ${validationError}`);
+        return;
+      }
     }
 
     setUploading(true);
-    try {
-      await uploadDocument(projectId, file);
-      onUploaded();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      if (inputRef.current) inputRef.current.value = "";
+    setProgress({ current: 0, total: fileArray.length });
+    const errors: string[] = [];
+
+    for (let i = 0; i < fileArray.length; i++) {
+      setProgress({ current: i + 1, total: fileArray.length });
+      try {
+        await uploadDocument(projectId, fileArray[i]!);
+      } catch (err) {
+        errors.push(`${fileArray[i]!.name}: ${err instanceof Error ? err.message : "failed"}`);
+      }
     }
+
+    setUploading(false);
+    setProgress(null);
+    if (inputRef.current) inputRef.current.value = "";
+
+    if (errors.length > 0) {
+      setError(errors.join("\n"));
+    }
+    onUploaded();
   }
 
   function onDragOver(e: DragEvent) {
@@ -81,7 +97,8 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.txt"
+          accept=".pdf,.txt,.docx"
+          multiple
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />
@@ -107,7 +124,11 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
                 d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
               />
             </svg>
-            <span className="text-sm text-text-secondary">Uploading...</span>
+            <span className="text-sm text-text-secondary">
+              {progress && progress.total > 1
+                ? `Uploading ${progress.current} of ${progress.total}...`
+                : "Uploading..."}
+            </span>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2">
@@ -125,10 +146,10 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
               />
             </svg>
             <p className="text-sm text-text-secondary">
-              Drag & drop a file here, or{" "}
+              Drag & drop files here, or{" "}
               <span className="text-accent underline">browse</span>
             </p>
-            <p className="text-xs text-text-muted">.pdf, .txt — max 50 MB</p>
+            <p className="text-xs text-text-muted">.pdf, .txt, .docx — max 50 MB</p>
           </div>
         )}
       </div>
