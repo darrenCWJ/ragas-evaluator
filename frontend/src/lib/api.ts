@@ -531,7 +531,7 @@ export interface TestSetCreate {
   name?: string;
   testset_size?: number;
   num_personas?: number;
-  custom_personas?: { name: string; role_description: string }[];
+  custom_personas?: { name: string; role_description: string; question_style?: string }[];
   use_personas?: boolean;
   query_distribution?: Record<string, number>;
   chunk_sample_size?: number;
@@ -641,6 +641,87 @@ export async function fetchTestSets(projectId: number): Promise<TestSet[]> {
     `/api/projects/${projectId}/test-sets`,
   );
   return data.test_sets;
+}
+
+// --- Persona Types ---
+
+export interface SavedPersona {
+  id: number;
+  name: string;
+  role_description: string;
+  question_style: string;
+  created_at: string;
+}
+
+// --- Persona API ---
+
+export async function fetchPersonas(
+  projectId: number,
+): Promise<SavedPersona[]> {
+  const data = await request<{ personas: SavedPersona[] }>(
+    `/api/projects/${projectId}/personas`,
+  );
+  return data.personas;
+}
+
+export async function savePersonasBulk(
+  projectId: number,
+  personas: { name: string; role_description: string; question_style: string }[],
+): Promise<SavedPersona[]> {
+  const data = await request<{ personas: SavedPersona[] }>(
+    `/api/projects/${projectId}/personas/bulk`,
+    {
+      method: "POST",
+      body: JSON.stringify(personas),
+    },
+  );
+  return data.personas;
+}
+
+export async function deletePersona(
+  projectId: number,
+  personaId: number,
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/personas/${personaId}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function generatePersonas(
+  projectId: number,
+  chunkConfigId: number,
+  numPersonas: number = 3,
+  mode: "fast" | "full" = "fast",
+  signal?: AbortSignal,
+): Promise<{ name: string; role_description: string; question_style: string }[]> {
+  const data = await request<{
+    personas: { name: string; role_description: string; question_style: string }[];
+  }>(`/api/projects/${projectId}/generate-personas`, {
+    method: "POST",
+    body: JSON.stringify({
+      chunk_config_id: chunkConfigId,
+      num_personas: numPersonas,
+      mode,
+    }),
+    signal,
+  });
+  return data.personas;
+}
+
+export interface GenerationProgress {
+  active: boolean;
+  stage?: string;
+  questions_generated?: number;
+  target_size?: number;
+}
+
+export async function fetchGenerationProgress(
+  projectId: number,
+): Promise<GenerationProgress> {
+  return request<GenerationProgress>(
+    `/api/projects/${projectId}/test-sets/generation-progress`,
+  );
 }
 
 export async function createTestSet(

@@ -25,6 +25,7 @@ from app.routes import (
     annotations,
     reports,
     custom_metrics,
+    personas,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ async def lifespan(application: FastAPI):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Ragas Evaluator", version="0.4.0-alpha", lifespan=lifespan)
+    application = FastAPI(title="Ragas Evaluator", version="0.4.1-alpha", lifespan=lifespan)
 
     application.add_middleware(
         CORSMiddleware,
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     application.include_router(annotations.router)
     application.include_router(reports.router)
     application.include_router(custom_metrics.router)
+    application.include_router(personas.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")

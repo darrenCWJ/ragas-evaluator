@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException
 
 from app.models import (
     ApplySuggestionRequest,
-    BatchApplyItem,
     BatchApplyRequest,
     SuggestionUpdate,
 )

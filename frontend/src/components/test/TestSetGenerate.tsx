@@ -1,6 +1,14 @@
-import { useState, useRef, useEffect } from "react";
-import type { ChunkConfig, TestSetCreate } from "../../lib/api";
-import { createTestSet, ApiError } from "../../lib/api";
+import { useState, useRef, useEffect, useCallback } from "react";
+import type { ChunkConfig, TestSetCreate, SavedPersona, GenerationProgress } from "../../lib/api";
+import {
+  createTestSet,
+  generatePersonas,
+  fetchPersonas,
+  savePersonasBulk,
+  deletePersona,
+  fetchGenerationProgress,
+  ApiError,
+} from "../../lib/api";
 
 const GENERATION_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes (large test sets need many LLM calls)
 
@@ -23,6 +31,68 @@ const DEFAULT_CATEGORIES: Record<string, number> = {
   edge: 20,
   out_of_knowledge_base: 20,
 };
+
+/**
+ * Redistribute percentages when one slider changes.
+ * Spreads the delta evenly across the other keys, round-robin,
+ * so a small change (e.g. 1%) rotates across all others instead
+ * of always landing on the same key.
+ */
+function redistributeEvenly(
+  keys: string[],
+  total: number,
+  prev: Record<string, number>,
+): Record<string, number> {
+  if (keys.length === 0) return {};
+
+  const prevTotal = keys.reduce((s, k) => s + (prev[k] ?? 0), 0);
+
+  // If all others are zero, split evenly
+  if (prevTotal === 0) {
+    const base = Math.floor(total / keys.length);
+    let rem = total - base * keys.length;
+    const result: Record<string, number> = {};
+    for (const k of keys) {
+      result[k] = base + (rem > 0 ? 1 : 0);
+      if (rem > 0) rem--;
+    }
+    return result;
+  }
+
+  const delta = total - prevTotal; // positive = others need more, negative = others need less
+  const result: Record<string, number> = {};
+
+  // Start with current values
+  for (const k of keys) {
+    result[k] = prev[k] ?? 0;
+  }
+
+  // Distribute delta one unit at a time, cycling through keys
+  // sorted by current value descending (shrink the biggest first when negative,
+  // grow the smallest first when positive)
+  const sorted = delta >= 0
+    ? [...keys].sort((a, b) => (result[a] ?? 0) - (result[b] ?? 0))   // smallest first for growth
+    : [...keys].sort((a, b) => (result[b] ?? 0) - (result[a] ?? 0));  // biggest first for shrink
+
+  let remaining = Math.abs(delta);
+  let idx = 0;
+  while (remaining > 0) {
+    const k = sorted[idx % sorted.length];
+    if (delta >= 0) {
+      result[k]++;
+    } else if (result[k] > 0) {
+      result[k]--;
+    } else {
+      // skip keys already at 0 when shrinking
+      idx++;
+      continue;
+    }
+    remaining--;
+    idx++;
+  }
+
+  return result;
+}
 
 const DEFAULT_DISTRIBUTION: Record<string, number> = {
   single_hop_specific: 50,
@@ -47,7 +117,7 @@ export default function TestSetGenerate({
   const [numPersonas, setNumPersonas] = useState<string>("3");
   const [usePersonas, setUsePersonas] = useState(true);
   const [customPersonas, setCustomPersonas] = useState<
-    { name: string; role_description: string }[]
+    { name: string; role_description: string; question_style: string }[]
   >([]);
   const [chunkSampleSize, setChunkSampleSize] = useState<string>("100");
   const [numWorkers, setNumWorkers] = useState(4);
@@ -62,21 +132,60 @@ export default function TestSetGenerate({
   });
   const [categoryDistribution, setCategoryDistribution] = useState<Record<string, number>>({ ...DEFAULT_CATEGORIES });
   const [generating, setGenerating] = useState(false);
+  const [generatingPersonas, setGeneratingPersonas] = useState(false);
+  const [personaGenMode, setPersonaGenMode] = useState<"fast" | "full">("fast");
+  const [savedPersonas, setSavedPersonas] = useState<SavedPersona[]>([]);
+  const [savingPersonas, setSavingPersonas] = useState(false);
+  const [showSavedPersonas, setShowSavedPersonas] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [progress, setProgress] = useState<GenerationProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState<string | null>(null);
   const [personasError, setPersonasError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  const loadSavedPersonas = useCallback(async () => {
+    try {
+      const personas = await fetchPersonas(projectId);
+      setSavedPersonas(personas);
+    } catch {
+      // silent — not critical
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadSavedPersonas();
+  }, [loadSavedPersonas]);
+
   useEffect(() => {
     if (!generating) {
       setElapsed(0);
+      setProgress(null);
       return;
     }
     const t0 = Date.now();
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
     return () => clearInterval(id);
   }, [generating]);
+
+  // Poll generation progress while generating
+  useEffect(() => {
+    if (!generating) return;
+    let cancelled = false;
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const p = await fetchGenerationProgress(projectId);
+          if (!cancelled) setProgress(p);
+        } catch {
+          // ignore polling errors
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [generating, projectId]);
 
   const validateSize = (s: string) => {
     const v = Number(s);
@@ -96,6 +205,73 @@ export default function TestSetGenerate({
     }
     setPersonasError(null);
     return true;
+  };
+
+  const handleAutoGeneratePersonas = async () => {
+    if (chunkConfigId === "" || !validatePersonas(numPersonas)) return;
+    setGeneratingPersonas(true);
+    setError(null);
+    try {
+      const personas = await generatePersonas(
+        projectId,
+        chunkConfigId as number,
+        Number(numPersonas),
+        personaGenMode,
+      );
+      setCustomPersonas(personas);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Failed to auto-generate personas",
+      );
+    } finally {
+      setGeneratingPersonas(false);
+    }
+  };
+
+  const handleSavePersonas = async () => {
+    const valid = customPersonas.filter(
+      (p) => p.name.trim() && p.role_description.trim(),
+    );
+    if (valid.length === 0) return;
+    setSavingPersonas(true);
+    try {
+      await savePersonasBulk(projectId, valid);
+      await loadSavedPersonas();
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Failed to save personas",
+      );
+    } finally {
+      setSavingPersonas(false);
+    }
+  };
+
+  const handleLoadSavedPersona = (p: SavedPersona) => {
+    const exists = customPersonas.some(
+      (c) => c.name === p.name && c.role_description === p.role_description,
+    );
+    if (!exists) {
+      setCustomPersonas((prev) => [
+        ...prev,
+        {
+          name: p.name,
+          role_description: p.role_description,
+          question_style: p.question_style,
+        },
+      ]);
+    }
+    setShowSavedPersonas(false);
+  };
+
+  const handleDeleteSavedPersona = async (personaId: number) => {
+    try {
+      await deletePersona(projectId, personaId);
+      setSavedPersonas((prev) => prev.filter((p) => p.id !== personaId));
+    } catch {
+      // silent
+    }
   };
 
   const handleGenerate = async () => {
@@ -151,6 +327,7 @@ export default function TestSetGenerate({
           config.custom_personas = valid.map((p) => ({
             name: p.name.trim(),
             role_description: p.role_description.trim(),
+            question_style: p.question_style.trim(),
           }));
         }
       }
@@ -210,18 +387,45 @@ export default function TestSetGenerate({
     const secs = elapsed % 60;
     const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 
-    const steps = [
-      { label: "Extracting summaries from chunks", threshold: 0 },
-      { label: "Building embeddings", threshold: 30 },
-      { label: "Extracting themes & entities", threshold: 60 },
-      { label: "Building knowledge graph relationships", threshold: 90 },
-      { label: "Generating personas", threshold: 120 },
-      { label: "Synthesizing questions", threshold: 150 },
-    ];
-    let activeIdx = 0;
-    for (let i = steps.length - 1; i >= 0; i--) {
-      if (elapsed >= (steps[i]?.threshold ?? 0)) { activeIdx = i; break; }
-    }
+    const STAGE_LABELS: Record<string, string> = {
+      building_knowledge_graph: "Building knowledge graph",
+      kg_loaded_from_cache: "Loaded knowledge graph from cache",
+      kg_extracting_headlines: "Extracting headlines from chunks",
+      kg_splitting_headlines: "Splitting chunks by headlines",
+      kg_extracting_keyphrases: "Extracting keyphrases (slowest step)",
+      kg_building_overlap: "Building overlap scores between nodes",
+      generating_personas: "Generating personas",
+      generating_questions: "Synthesizing questions",
+      generating_special_categories: "Generating edge & out-of-KB questions",
+    };
+    // When KG is loaded from cache, show a single "loaded from cache" step
+    // instead of the individual KG build sub-steps.
+    const currentStage = progress?.stage ?? "building_knowledge_graph";
+    const kgCached = currentStage === "kg_loaded_from_cache"
+      || (!currentStage.startsWith("kg_") && currentStage !== "building_knowledge_graph");
+
+    const STAGE_ORDER = kgCached
+      ? [
+          "kg_loaded_from_cache",
+          "generating_personas",
+          "generating_questions",
+          "generating_special_categories",
+        ]
+      : [
+          "building_knowledge_graph",
+          "kg_extracting_headlines",
+          "kg_splitting_headlines",
+          "kg_extracting_keyphrases",
+          "kg_building_overlap",
+          "generating_personas",
+          "generating_questions",
+          "generating_special_categories",
+        ];
+
+    const currentStageIdx = STAGE_ORDER.indexOf(currentStage);
+    const questionsGenerated = progress?.questions_generated ?? 0;
+    const targetSize = progress?.target_size ?? (Number(testsetSize) || 10);
+    const pct = Math.min(100, Math.round((questionsGenerated / targetSize) * 100));
 
     return (
       <div className="space-y-4">
@@ -240,27 +444,50 @@ export default function TestSetGenerate({
             <p className="mt-1 text-xs tabular-nums text-text-muted">Elapsed: {timeStr}</p>
           </div>
 
-          {/* Steps */}
-          <div className="w-full max-w-xs space-y-2">
-            {steps.map((step, i) => (
-              <div key={i} className="flex items-center gap-2">
-                {i < activeIdx ? (
-                  <svg className="h-4 w-4 shrink-0 text-score-high" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : i === activeIdx ? (
-                  <svg className="h-4 w-4 shrink-0 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : (
-                  <div className="h-4 w-4 shrink-0 rounded-full border border-border" />
-                )}
-                <span className={`text-xs ${i <= activeIdx ? "text-text-secondary" : "text-text-muted"}`}>
-                  {step.label}
+          {/* Question counter */}
+          {progress?.active && (
+            <div className="w-full max-w-xs space-y-2">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm font-medium tabular-nums text-text-primary">
+                  {questionsGenerated} / {targetSize} questions
                 </span>
+                <span className="text-xs tabular-nums text-text-muted">{pct}%</span>
               </div>
-            ))}
+              <div className="h-2 w-full overflow-hidden rounded-full bg-border/50">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-500 ease-out"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Stage steps */}
+          <div className="w-full max-w-xs space-y-2">
+            {STAGE_ORDER.map((stage, i) => {
+              const label = STAGE_LABELS[stage] ?? stage;
+              const isDone = i < currentStageIdx;
+              const isActive = i === currentStageIdx;
+              return (
+                <div key={stage} className="flex items-center gap-2">
+                  {isDone ? (
+                    <svg className="h-4 w-4 shrink-0 text-score-high" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : isActive ? (
+                    <svg className="h-4 w-4 shrink-0 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <div className="h-4 w-4 shrink-0 rounded-full border border-border" />
+                  )}
+                  <span className={`text-xs ${i <= currentStageIdx ? "text-text-secondary" : "text-text-muted"}`}>
+                    {label}
+                  </span>
+                </div>
+              );
+            })}
           </div>
 
           <p className="text-xs text-text-muted">This may take a few minutes depending on chunk count.</p>
@@ -432,84 +659,222 @@ export default function TestSetGenerate({
               </span>
             </label>
 
-            {customPersonas.length > 0 && (
-              <div className="mb-2 space-y-2">
+            {generatingPersonas && (
+              <div className="mb-2 space-y-3">
+                {Array.from({ length: Number(numPersonas) || 3 }).map((_, i) => (
+                  <div key={i} className="animate-pulse rounded-lg border border-border bg-input/50 p-2.5 space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <div className="w-1/3 h-8 rounded-lg bg-border/50" />
+                      <div className="flex-1 h-8 rounded-lg bg-border/50" />
+                      <div className="shrink-0 h-8 w-8 rounded-md bg-border/50" />
+                    </div>
+                    <div className="w-full h-8 rounded-lg bg-border/50" />
+                  </div>
+                ))}
+                <p className="text-xs text-accent">
+                  {personaGenMode === "full"
+                    ? "Building knowledge graph and generating personas (this may take a few minutes)..."
+                    : "Analyzing documents and generating personas..."}
+                </p>
+              </div>
+            )}
+
+            {!generatingPersonas && customPersonas.length > 0 && (
+              <div className="mb-2 space-y-3">
                 {customPersonas.map((p, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <input
-                      type="text"
-                      value={p.name}
-                      onChange={(e) => {
-                        setCustomPersonas((prev) =>
-                          prev.map((item, j) =>
-                            j === i ? { name: e.target.value, role_description: item.role_description } : item,
-                          ),
-                        );
-                      }}
-                      placeholder="Name"
-                      className="w-1/3 rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
-                      disabled={generating}
-                    />
-                    <input
-                      type="text"
-                      value={p.role_description}
-                      onChange={(e) => {
-                        setCustomPersonas((prev) =>
-                          prev.map((item, j) =>
-                            j === i ? { name: item.name, role_description: e.target.value } : item,
-                          ),
-                        );
-                      }}
-                      placeholder="Role description"
-                      className="flex-1 rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
-                      disabled={generating}
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCustomPersonas(customPersonas.filter((_, j) => j !== i))
-                      }
-                      disabled={generating}
-                      className="shrink-0 rounded-md border border-border p-1.5 text-text-muted transition hover:border-red-500/40 hover:text-red-400 disabled:opacity-40"
-                      title="Remove persona"
-                    >
-                      <svg
-                        className="h-3.5 w-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
+                  <div key={i} className="rounded-lg border border-border bg-input/50 p-2.5 space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="text"
+                        value={p.name}
+                        onChange={(e) => {
+                          setCustomPersonas((prev) =>
+                            prev.map((item, j) =>
+                              j === i ? { ...item, name: e.target.value } : item,
+                            ),
+                          );
+                        }}
+                        placeholder="Name"
+                        className="w-1/3 rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+                        disabled={generating}
+                      />
+                      <input
+                        type="text"
+                        value={p.role_description}
+                        onChange={(e) => {
+                          setCustomPersonas((prev) =>
+                            prev.map((item, j) =>
+                              j === i ? { ...item, role_description: e.target.value } : item,
+                            ),
+                          );
+                        }}
+                        placeholder="Role description"
+                        className="flex-1 rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+                        disabled={generating}
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCustomPersonas(customPersonas.filter((_, j) => j !== i))
+                        }
+                        disabled={generating}
+                        className="shrink-0 rounded-md border border-border p-1.5 text-text-muted transition hover:border-red-500/40 hover:text-red-400 disabled:opacity-40"
+                        title="Remove persona"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M6 18 18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
+                        <svg
+                          className="h-3.5 w-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 18 18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={p.question_style}
+                      onChange={(e) => {
+                        setCustomPersonas((prev) =>
+                          prev.map((item, j) =>
+                            j === i ? { ...item, question_style: e.target.value } : item,
+                          ),
+                        );
+                      }}
+                      placeholder="Question style (e.g. formal technical queries, brief keyword searches, scenario-based questions)"
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent focus:outline-none"
+                      disabled={generating}
+                    />
                   </div>
                 ))}
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={() =>
-                setCustomPersonas([
-                  ...customPersonas,
-                  { name: "", role_description: "" },
-                ])
-              }
-              disabled={generating || customPersonas.length >= (Number(numPersonas) || 1)}
-              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              + Add Persona
-              {customPersonas.length >= (Number(numPersonas) || 1) && (
-                <span className="ml-1 text-text-muted">
-                  (max {numPersonas})
-                </span>
+            {/* Generation mode toggle */}
+            <div className="mb-2 flex items-center gap-3">
+              <span className="text-xs text-text-muted">Generation mode:</span>
+              <button
+                type="button"
+                onClick={() => setPersonaGenMode("fast")}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  personaGenMode === "fast"
+                    ? "bg-accent text-white"
+                    : "border border-border text-text-muted hover:border-accent hover:text-accent"
+                }`}
+                disabled={generating || generatingPersonas}
+              >
+                Fast
+              </button>
+              <button
+                type="button"
+                onClick={() => setPersonaGenMode("full")}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  personaGenMode === "full"
+                    ? "bg-accent text-white"
+                    : "border border-border text-text-muted hover:border-accent hover:text-accent"
+                }`}
+                disabled={generating || generatingPersonas}
+              >
+                Full (Knowledge Graph)
+              </button>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setCustomPersonas([
+                    ...customPersonas,
+                    { name: "", role_description: "", question_style: "" },
+                  ])
+                }
+                disabled={generating || generatingPersonas || customPersonas.length >= (Number(numPersonas) || 1)}
+                className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                + Add Persona
+                {customPersonas.length >= (Number(numPersonas) || 1) && (
+                  <span className="ml-1 text-text-muted">
+                    (max {numPersonas})
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={handleAutoGeneratePersonas}
+                disabled={generating || generatingPersonas || chunkConfigId === ""}
+                className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {generatingPersonas
+                  ? personaGenMode === "full"
+                    ? "Building knowledge graph…"
+                    : "Generating…"
+                  : `Auto Generate (${personaGenMode === "full" ? "Full" : "Fast"})`}
+              </button>
+              {customPersonas.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleSavePersonas}
+                  disabled={savingPersonas || generating}
+                  className="rounded-md border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {savingPersonas ? "Saving…" : "Save Personas"}
+                </button>
               )}
-            </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowSavedPersonas(!showSavedPersonas)}
+                  disabled={generating || generatingPersonas || savedPersonas.length === 0}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Load Saved{savedPersonas.length > 0 && ` (${savedPersonas.length})`}
+                </button>
+                {showSavedPersonas && savedPersonas.length > 0 && (
+                  <div className="absolute left-0 top-full z-10 mt-1 max-h-60 w-80 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg">
+                    {savedPersonas.map((p) => (
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-b-0"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleLoadSavedPersona(p)}
+                          className="flex-1 text-left"
+                        >
+                          <p className="text-sm font-medium text-text-primary">{p.name}</p>
+                          <p className="truncate text-xs text-text-muted">{p.role_description}</p>
+                          {p.question_style && (
+                            <p className="truncate text-xs text-accent/70">{p.question_style}</p>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSavedPersona(p.id)}
+                          className="shrink-0 rounded p-1 text-text-muted transition hover:text-red-400"
+                          title="Delete saved persona"
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {personaGenMode === "full" && (
+              <p className="mt-1 text-xs text-text-muted">
+                Full mode builds a knowledge graph from your documents for more accurate personas. This takes longer.
+              </p>
+            )}
           </div>
         )}
         {/* Question categories toggle */}
@@ -587,32 +952,9 @@ export default function TestSetGenerate({
                               const enabledKeys = QUESTION_CATEGORIES
                                 .map((c) => c.key)
                                 .filter((k) => enabledCategories[k] && k !== cat.key);
-                              const otherTotal = enabledKeys.reduce(
-                                (sum, k) => sum + (prev[k] ?? 0),
-                                0,
-                              );
                               const remaining = 100 - raw;
-                              const next: Record<string, number> = { ...prev, [cat.key]: raw };
-                              if (otherTotal === 0) {
-                                const share = Math.round(remaining / enabledKeys.length);
-                                enabledKeys.forEach((k, i) => {
-                                  next[k] = i === enabledKeys.length - 1
-                                    ? remaining - share * (enabledKeys.length - 1)
-                                    : share;
-                                });
-                              } else {
-                                let allocated = 0;
-                                enabledKeys.forEach((k, i) => {
-                                  if (i === enabledKeys.length - 1) {
-                                    next[k] = remaining - allocated;
-                                  } else {
-                                    const share = Math.round(((prev[k] ?? 0) / otherTotal) * remaining);
-                                    next[k] = share;
-                                    allocated += share;
-                                  }
-                                });
-                              }
-                              return next;
+                              const distributed = redistributeEvenly(enabledKeys, remaining, prev);
+                              return { ...prev, [cat.key]: raw, ...distributed };
                             });
                           }}
                           disabled={generating}
@@ -634,32 +976,9 @@ export default function TestSetGenerate({
                           const enabledKeys = QUESTION_CATEGORIES
                             .map((c) => c.key)
                             .filter((k) => enabledCategories[k] && k !== cat.key);
-                          const otherTotal = enabledKeys.reduce(
-                            (sum, k) => sum + (prev[k] ?? 0),
-                            0,
-                          );
                           const remaining = 100 - raw;
-                          const next: Record<string, number> = { ...prev, [cat.key]: raw };
-                          if (otherTotal === 0) {
-                            const share = Math.round(remaining / enabledKeys.length);
-                            enabledKeys.forEach((k, i) => {
-                              next[k] = i === enabledKeys.length - 1
-                                ? remaining - share * (enabledKeys.length - 1)
-                                : share;
-                            });
-                          } else {
-                            let allocated = 0;
-                            enabledKeys.forEach((k, i) => {
-                              if (i === enabledKeys.length - 1) {
-                                next[k] = remaining - allocated;
-                              } else {
-                                const share = Math.round(((prev[k] ?? 0) / otherTotal) * remaining);
-                                next[k] = share;
-                                allocated += share;
-                              }
-                            });
-                          }
-                          return next;
+                          const distributed = redistributeEvenly(enabledKeys, remaining, prev);
+                          return { ...prev, [cat.key]: raw, ...distributed };
                         });
                       }}
                       className="w-full accent-accent"
@@ -716,35 +1035,9 @@ export default function TestSetGenerate({
                             const otherKeys = QUERY_TYPES
                               .map((q) => q.key)
                               .filter((k) => k !== qt.key);
-                            const otherTotal = otherKeys.reduce(
-                              (sum, k) => sum + (prev[k] ?? 0),
-                              0,
-                            );
                             const remaining = 100 - raw;
-                            const next: Record<string, number> = { [qt.key]: raw };
-                            if (otherTotal === 0) {
-                              const share = Math.round(remaining / otherKeys.length);
-                              otherKeys.forEach((k, i) => {
-                                next[k] =
-                                  i === otherKeys.length - 1
-                                    ? remaining - share * (otherKeys.length - 1)
-                                    : share;
-                              });
-                            } else {
-                              let allocated = 0;
-                              otherKeys.forEach((k, i) => {
-                                if (i === otherKeys.length - 1) {
-                                  next[k] = remaining - allocated;
-                                } else {
-                                  const share = Math.round(
-                                    ((prev[k] ?? 0) / otherTotal) * remaining,
-                                  );
-                                  next[k] = share;
-                                  allocated += share;
-                                }
-                              });
-                            }
-                            return next;
+                            const distributed = redistributeEvenly(otherKeys, remaining, prev);
+                            return { [qt.key]: raw, ...distributed };
                           });
                         }}
                         disabled={generating}
@@ -764,35 +1057,9 @@ export default function TestSetGenerate({
                         const otherKeys = QUERY_TYPES
                           .map((q) => q.key)
                           .filter((k) => k !== qt.key);
-                        const otherTotal = otherKeys.reduce(
-                          (sum, k) => sum + (prev[k] ?? 0),
-                          0,
-                        );
                         const remaining = 100 - raw;
-                        const next: Record<string, number> = { [qt.key]: raw };
-                        if (otherTotal === 0) {
-                          const share = Math.round(remaining / otherKeys.length);
-                          otherKeys.forEach((k, i) => {
-                            next[k] =
-                              i === otherKeys.length - 1
-                                ? remaining - share * (otherKeys.length - 1)
-                                : share;
-                          });
-                        } else {
-                          let allocated = 0;
-                          otherKeys.forEach((k, i) => {
-                            if (i === otherKeys.length - 1) {
-                              next[k] = remaining - allocated;
-                            } else {
-                              const share = Math.round(
-                                ((prev[k] ?? 0) / otherTotal) * remaining,
-                              );
-                              next[k] = share;
-                              allocated += share;
-                            }
-                          });
-                        }
-                        return next;
+                        const distributed = redistributeEvenly(otherKeys, remaining, prev);
+                        return { [qt.key]: raw, ...distributed };
                       });
                     }}
                     className="w-full accent-accent"

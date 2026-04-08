@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from app.models import (
     TestGenRequest,
-    PersonaGenRequest,
     TestSetCreate,
     QuestionAnnotation,
     BulkAnnotation,
@@ -70,23 +69,6 @@ async def generate_testset(req: TestGenRequest):
             ),
         )
         return {"personas": [], "questions": questions}
-
-
-@router.post("/generate-personas")
-async def gen_personas(req: PersonaGenRequest):
-    from evaluation.metrics.testgen import generate_personas
-
-    personas = generate_personas(
-        chunks=req.chunks,
-        num_personas=req.num_personas,
-        custom_personas=req.custom_personas,
-    )
-    return {
-        "personas": [
-            {"name": p.name, "role_description": p.role_description}
-            for p in personas
-        ]
-    }
 
 
 @router.post("/upload-document")
@@ -187,6 +169,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 query_distribution=req.query_distribution,
                 num_workers=req.num_workers,
                 question_categories=req.question_categories,
+                project_id=project_id,
             ),
         )
     except Exception as e:
@@ -461,6 +444,16 @@ async def upload_test_set(
         "question_count": len(inserted),
         "questions": inserted,
     }
+
+
+@router.get("/projects/{project_id}/test-sets/generation-progress")
+async def generation_progress(project_id: int):
+    from evaluation.metrics.testgen import get_progress
+
+    progress = get_progress(project_id)
+    if progress is None:
+        return {"active": False}
+    return {"active": True, **progress}
 
 
 @router.get("/projects/{project_id}/test-sets")
@@ -739,3 +732,44 @@ async def test_set_summary(project_id: int, test_set_id: int):
         **counts,
         "completion_pct": completion_pct,
     }
+
+
+# --- Knowledge Graph Cache Routes ---
+
+
+@router.get("/projects/{project_id}/knowledge-graph")
+async def get_knowledge_graph_info(project_id: int):
+    """Return metadata about the cached knowledge graph for a project."""
+    from evaluation.metrics.testgen import get_kg_info
+
+    conn = db.init.get_db()
+    project = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    info = get_kg_info(project_id)
+    if info is None:
+        return {"exists": False}
+    return {"exists": True, **info}
+
+
+@router.delete("/projects/{project_id}/knowledge-graph", status_code=204)
+async def delete_knowledge_graph(project_id: int):
+    """Delete the cached knowledge graph for a project."""
+    from evaluation.metrics.testgen import delete_kg_from_db
+
+    conn = db.init.get_db()
+    project = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    deleted = delete_kg_from_db(project_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail="No knowledge graph found for this project"
+        )
+    return None
