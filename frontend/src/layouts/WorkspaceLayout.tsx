@@ -46,7 +46,7 @@ export default function WorkspaceLayout() {
 
         {/* Sidebar footer */}
         <div className="border-t border-border px-4 py-3">
-          <div className="text-2xs text-text-muted">v0.3.3-alpha</div>
+          <div className="text-2xs text-text-muted">v0.4.1-alpha</div>
         </div>
       </aside>
 
@@ -91,7 +91,7 @@ export default function WorkspaceLayout() {
           <Stepper />
         </div>
         <div className="border-t border-border px-4 py-3">
-          <div className="text-2xs text-text-muted">v0.3.3-alpha</div>
+          <div className="text-2xs text-text-muted">v0.4.1-alpha</div>
         </div>
       </aside>
 

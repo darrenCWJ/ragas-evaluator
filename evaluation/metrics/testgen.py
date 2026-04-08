@@ -11,10 +11,16 @@ Supports:
 - Parallel batch generation for large test sets
 """
 
+import hashlib
+import json as _json
 import logging
 import math
+import signal
+import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
+from pathlib import Path
 
 from openai import OpenAI
 from ragas.llms import llm_factory
@@ -35,8 +41,72 @@ from ragas.testset.synthesizers.multi_hop import (
     MultiHopSpecificQuerySynthesizer,
 )
 
+from db.init import get_db
+
 
 logger = logging.getLogger(__name__)
+
+# Suppress noisy ragas warnings about duplicate node properties.
+logging.getLogger("ragas.testset.graph").setLevel(logging.ERROR)
+logging.getLogger("ragas.testset.transforms").setLevel(logging.ERROR)
+
+# Event checked by workers so Ctrl+C stops generation promptly.
+_shutdown_event = threading.Event()
+
+
+def _register_shutdown_handler() -> None:
+    """Set _shutdown_event on SIGINT so background workers can exit early.
+
+    Only works when called from the main thread; silently skipped otherwise
+    (e.g. when running inside ``run_in_executor``).
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def _handler(signum, frame):
+        _shutdown_event.set()
+        logger.info("Shutdown requested — stopping test generation workers...")
+
+    signal.signal(signal.SIGINT, _handler)
+
+
+# ---------------------------------------------------------------------------
+# Progress tracking — in-memory, keyed by project_id
+# ---------------------------------------------------------------------------
+
+_progress_lock = threading.Lock()
+_progress: dict[int, dict] = {}
+
+
+def set_progress(project_id: int, data: dict) -> None:
+    with _progress_lock:
+        _progress[project_id] = data
+
+
+def update_progress(project_id: int, **fields) -> None:
+    with _progress_lock:
+        if project_id in _progress:
+            _progress[project_id].update(fields)
+
+
+def get_progress(project_id: int) -> dict | None:
+    with _progress_lock:
+        entry = _progress.get(project_id)
+        return entry.copy() if entry is not None else None
+
+
+def clear_progress(project_id: int) -> None:
+    with _progress_lock:
+        _progress.pop(project_id, None)
+
+
+def increment_questions(project_id: int, count: int = 1) -> None:
+    with _progress_lock:
+        if project_id in _progress:
+            _progress[project_id]["questions_generated"] = (
+                _progress[project_id].get("questions_generated", 0) + count
+            )
+
 
 # Over-generate per worker, then deduplicate and trim to requested size.
 OVERGENERATE_FACTOR = 1.3
@@ -140,9 +210,121 @@ def _build_llm_and_embeddings():
 # Knowledge-graph helpers
 # ---------------------------------------------------------------------------
 
+def _chunks_hash(chunks: list[str]) -> str:
+    """Return a stable hash of chunk contents for cache invalidation."""
+    h = hashlib.sha256()
+    for chunk in chunks:
+        h.update(chunk.encode("utf-8"))
+    return h.hexdigest()[:16]
 
-def build_knowledge_graph(chunks: list[str], llm=None, embeddings=None):
-    """Build a KnowledgeGraph from text chunks and apply transforms."""
+
+def load_cached_kg(project_id: int, chunks: list[str]) -> KnowledgeGraph | None:
+    """Return a cached *complete* KG from the database if one exists.
+
+    Partial KGs (from interrupted builds) are ignored — they will be
+    replaced by a fresh build.
+    """
+    h = _chunks_hash(chunks)
+    db = get_db()
+    row = db.execute(
+        "SELECT kg_json, is_complete FROM knowledge_graphs "
+        "WHERE project_id = ? AND chunks_hash = ?",
+        (project_id, h),
+    ).fetchone()
+    if row is None:
+        return None
+    if not row["is_complete"]:
+        logger.info(
+            "Found partial KG cache for project %d — will rebuild", project_id
+        )
+        return None
+
+    logger.info("Loading cached knowledge graph for project %d from DB", project_id)
+    # KnowledgeGraph.load expects a file path — write to a temp file.
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(row["kg_json"])
+        tmp_path = f.name
+    try:
+        kg = KnowledgeGraph.load(tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+    return kg
+
+
+def save_kg_to_db(
+    kg: KnowledgeGraph,
+    project_id: int,
+    chunks: list[str],
+    *,
+    is_complete: bool = True,
+    completed_steps: int = 4,
+    total_steps: int = 4,
+) -> None:
+    """Persist a KG to the database, replacing any stale entry for this project."""
+    h = _chunks_hash(chunks)
+    # Serialize KG via its save method to get the JSON string.
+    with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as f:
+        tmp_path = f.name
+    try:
+        kg.save(tmp_path)
+        kg_json = Path(tmp_path).read_text(encoding="utf-8")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    db = get_db()
+    # Remove old entries for this project (documents may have changed).
+    db.execute("DELETE FROM knowledge_graphs WHERE project_id = ?", (project_id,))
+    db.execute(
+        "INSERT INTO knowledge_graphs "
+        "(project_id, chunks_hash, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (project_id, h, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps),
+    )
+    db.commit()
+    status = "complete" if is_complete else f"partial ({completed_steps}/{total_steps})"
+    logger.info("Saved %s KG for project %d to DB (%d nodes)", status, project_id, len(kg.nodes))
+
+
+def delete_kg_from_db(project_id: int) -> bool:
+    """Delete the cached KG for a project. Returns True if a row was deleted."""
+    db = get_db()
+    cursor = db.execute("DELETE FROM knowledge_graphs WHERE project_id = ?", (project_id,))
+    db.commit()
+    return cursor.rowcount > 0
+
+
+def get_kg_info(project_id: int) -> dict | None:
+    """Return metadata about the cached KG for a project (without the full JSON)."""
+    db = get_db()
+    row = db.execute(
+        "SELECT id, project_id, chunks_hash, num_nodes, num_chunks, "
+        "is_complete, completed_steps, total_steps, created_at "
+        "FROM knowledge_graphs WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def build_knowledge_graph(
+    chunks: list[str],
+    llm=None,
+    embeddings=None,
+    project_id: int | None = None,
+) -> KnowledgeGraph:
+    """Build a KnowledgeGraph from text chunks and apply transforms.
+
+    When *project_id* is provided the KG is cached in the database. Subsequent
+    calls with the same project and chunk content return the cached version
+    instantly.
+    """
+    if project_id is not None:
+        cached = load_cached_kg(project_id, chunks)
+        if cached is not None:
+            update_progress(project_id, stage="kg_loaded_from_cache")
+            return cached
+
     if llm is None or embeddings is None:
         llm, embeddings, _ = _build_llm_and_embeddings()
 
@@ -158,32 +340,193 @@ def build_knowledge_graph(chunks: list[str], llm=None, embeddings=None):
             )
         )
 
-    transforms = [
-        HeadlinesExtractor(llm=llm),
-        HeadlineSplitter(min_tokens=100, max_tokens=500),
-        KeyphrasesExtractor(llm=llm, property_name="keyphrases", max_num=10),
-        OverlapScoreBuilder(
+    # Run transforms one-by-one so we can report progress per step.
+    # If a transform fails (e.g. rate limit), save the partial KG so
+    # progress isn't lost — later calls can resume from the cache.
+    transform_steps = [
+        ("kg_extracting_headlines", HeadlinesExtractor(llm=llm)),
+        ("kg_splitting_headlines", HeadlineSplitter(min_tokens=100, max_tokens=500)),
+        ("kg_extracting_keyphrases", KeyphrasesExtractor(llm=llm, property_name="keyphrases", max_num=10)),
+        ("kg_building_overlap", OverlapScoreBuilder(
             property_name="keyphrases",
             new_property_name="overlap_score",
             threshold=0.01,
             distance_threshold=0.9,
-        ),
+        )),
     ]
-    apply_transforms(kg, transforms=transforms)
+    completed_steps = 0
+    for stage_name, transform in transform_steps:
+        if project_id is not None:
+            update_progress(project_id, stage=stage_name)
+        logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
+        try:
+            apply_transforms(kg, transforms=[transform])
+            completed_steps += 1
+        except Exception:
+            logger.exception(
+                "KG transform '%s' failed after %d/%d steps — saving partial KG",
+                stage_name,
+                completed_steps,
+                len(transform_steps),
+            )
+            if project_id is not None and completed_steps > 0:
+                save_kg_to_db(
+                    kg,
+                    project_id,
+                    chunks,
+                    is_complete=False,
+                    completed_steps=completed_steps,
+                    total_steps=len(transform_steps),
+                )
+            raise
+
+    if project_id is not None:
+        save_kg_to_db(kg, project_id, chunks)
+
     return kg
+
+
+def generate_personas_fast(
+    chunks: list[str],
+    num_personas: int = 3,
+) -> list[dict]:
+    """Generate personas via two lightweight LLM calls covering all chunks.
+
+    Step 1: Extract key topics/themes from ALL chunks (batched if needed).
+    Step 2: Generate diverse personas from the topic summary.
+
+    Much faster than the KG-based approach while still covering the full
+    document scope.
+    """
+    client = OpenAI()
+
+    # --- Step 1: Extract topics from all chunks in batches ---
+    # gpt-4o-mini has a 128k context window; stay well under with ~80k chars per batch
+    MAX_CHARS_PER_BATCH = 80_000
+    batches: list[str] = []
+    current_batch: list[str] = []
+    current_len = 0
+    for chunk in chunks:
+        chunk_len = len(chunk) + 5  # +5 for separator
+        if current_len + chunk_len > MAX_CHARS_PER_BATCH and current_batch:
+            batches.append("\n---\n".join(current_batch))
+            current_batch = []
+            current_len = 0
+        current_batch.append(chunk)
+        current_len += chunk_len
+    if current_batch:
+        batches.append("\n---\n".join(current_batch))
+
+    topic_summaries: list[str] = []
+    for batch_text in batches:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert at identifying key topics and themes "
+                        "in documents. Given document excerpts, list ALL distinct "
+                        "topics, domains, and subject areas covered. Be thorough "
+                        "— do not miss niche or specialized topics. "
+                        "Return a concise bullet-point list, nothing else."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Extract all key topics from these excerpts:\n\n{batch_text}",
+                },
+            ],
+        )
+        topic_summaries.append(resp.choices[0].message.content.strip())
+
+    all_topics = "\n".join(topic_summaries)
+
+    # --- Step 2: Generate personas from the combined topic overview ---
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.7,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You generate test personas for a QA evaluation system. "
+                    "Given a list of topics/themes from a document collection, "
+                    "create diverse personas who would ask different types of "
+                    "questions about this content. Ensure personas cover "
+                    "different expertise levels, roles, and perspectives "
+                    "relevant to the topics. "
+                    "For each persona, also define a 'question_style' that "
+                    "describes HOW they phrase questions (e.g. formal "
+                    "technical queries, casual how-do-I questions, detailed "
+                    "scenario-based questions, brief keyword searches, etc.). "
+                    "Return ONLY a JSON array of objects with 'name', "
+                    "'role_description', and 'question_style' keys. "
+                    "No markdown, no explanation."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Based on these topics covered in the documents, generate "
+                    f"{num_personas} diverse personas:\n\n{all_topics}"
+                ),
+            },
+        ],
+    )
+    text = response.choices[0].message.content.strip()
+    # Strip markdown fences if present
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    try:
+        parsed = _json.loads(text)
+    except _json.JSONDecodeError:
+        logger.error("LLM returned invalid JSON for persona generation: %s", text[:200])
+        return []
+
+    if not isinstance(parsed, list):
+        logger.error("Expected JSON array from LLM, got %s", type(parsed).__name__)
+        return []
+
+    results: list[dict] = []
+    for p in parsed[:num_personas]:
+        if not isinstance(p, dict) or "name" not in p or "role_description" not in p:
+            logger.warning("Skipping malformed persona entry: %s", p)
+            continue
+        results.append({
+            "name": p["name"],
+            "role_description": p["role_description"],
+            "question_style": p.get("question_style", ""),
+        })
+    return results
+
+
+def _merge_persona_fields(p: dict) -> Persona:
+    """Build a ragas Persona, folding question_style into role_description."""
+    desc = p["role_description"]
+    style = p.get("question_style", "").strip()
+    if style:
+        desc = f"{desc}. Question style: {style}"
+    return Persona(name=p["name"], role_description=desc)
 
 
 def generate_personas(
     chunks: list[str],
     num_personas: int = 3,
     custom_personas: list[dict] | None = None,
+    fast: bool = False,
 ) -> list[Persona]:
     """Generate personas from document chunks, or use custom-defined ones."""
     if custom_personas:
-        return [
-            Persona(name=p["name"], role_description=p["role_description"])
-            for p in custom_personas
-        ]
+        return [_merge_persona_fields(p) for p in custom_personas]
+
+    if fast:
+        raw = generate_personas_fast(chunks, num_personas=num_personas)
+        return [_merge_persona_fields(p) for p in raw]
 
     llm, embeddings, _ = _build_llm_and_embeddings()
     kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings)
@@ -200,6 +543,7 @@ def _worker_generate_from_chunks(
     chunks: list[str],
     batch_size: int,
     query_distribution: dict[str, float] | None,
+    project_id: int | None = None,
 ) -> list[dict]:
     """Worker: generate questions from a chunk subset."""
     llm, embeddings, _ = _build_llm_and_embeddings()
@@ -211,7 +555,10 @@ def _worker_generate_from_chunks(
         testset_size=batch_size,
         query_distribution=qd,
     )
-    return [_row_to_dict(row) for _, row in testset.to_pandas().iterrows()]
+    results = [_row_to_dict(row) for _, row in testset.to_pandas().iterrows()]
+    if project_id is not None:
+        increment_questions(project_id, len(results))
+    return results
 
 
 def _worker_generate_from_kg(
@@ -219,6 +566,7 @@ def _worker_generate_from_kg(
     personas: list[Persona],
     batch_size: int,
     query_distribution: dict[str, float] | None,
+    project_id: int | None = None,
 ) -> list[dict]:
     """Worker: generate questions from a shared KnowledgeGraph."""
     llm, _, _ = _build_llm_and_embeddings()
@@ -230,7 +578,10 @@ def _worker_generate_from_kg(
     qd = build_query_distribution(query_distribution, llm=llm) if query_distribution else None
 
     testset = generator.generate(testset_size=batch_size, query_distribution=qd)
-    return [_row_to_dict(row) for _, row in testset.to_pandas().iterrows()]
+    results = [_row_to_dict(row) for _, row in testset.to_pandas().iterrows()]
+    if project_id is not None:
+        increment_questions(project_id, len(results))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +597,7 @@ def generate_testset_from_chunks(
     custom_personas: list[dict] | None = None,
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
+    project_id: int | None = None,
 ) -> list[dict]:
     """Generate test questions from pre-chunked text using parallel workers.
 
@@ -262,7 +614,7 @@ def generate_testset_from_chunks(
     if effective_workers <= 1:
         # Fast path — single worker, no threading overhead.
         generate_size = int(testset_size * OVERGENERATE_FACTOR)
-        results = _worker_generate_from_chunks(chunks, generate_size, query_distribution)
+        results = _worker_generate_from_chunks(chunks, generate_size, query_distribution, project_id=project_id)
         results = _deduplicate_questions(results)
         return results[:testset_size]
 
@@ -281,6 +633,9 @@ def generate_testset_from_chunks(
         testset_size,
     )
 
+    _shutdown_event.clear()
+    _register_shutdown_handler()
+
     all_questions: list[dict] = []
     with ThreadPoolExecutor(max_workers=effective_workers) as pool:
         futures = [
@@ -289,10 +644,15 @@ def generate_testset_from_chunks(
                 partition,
                 per_worker,
                 query_distribution,
+                project_id,
             )
             for partition in chunk_partitions
         ]
         for future in as_completed(futures):
+            if _shutdown_event.is_set():
+                for f in futures:
+                    f.cancel()
+                break
             try:
                 all_questions.extend(future.result())
             except Exception:
@@ -309,6 +669,7 @@ def generate_testset_with_personas(
     custom_personas: list[dict] | None = None,
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
+    project_id: int | None = None,
 ) -> dict:
     """Generate test questions with persona information using parallel workers.
 
@@ -318,21 +679,26 @@ def generate_testset_with_personas(
     llm, embeddings, _ = _build_llm_and_embeddings()
 
     logger.info("Building knowledge graph from %d chunks...", len(chunks))
-    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings)
+    if project_id is not None:
+        update_progress(project_id, stage="building_knowledge_graph")
+    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id)
+
+    if project_id is not None:
+        update_progress(project_id, stage="generating_personas")
 
     if custom_personas:
-        personas = [
-            Persona(name=p["name"], role_description=p["role_description"])
-            for p in custom_personas
-        ]
+        personas = [_merge_persona_fields(p) for p in custom_personas]
     else:
         personas = generate_personas_from_kg(kg=kg, llm=llm, num_personas=num_personas)
+
+    if project_id is not None:
+        update_progress(project_id, stage="generating_questions")
 
     effective_workers = max(1, min(num_workers, testset_size))
 
     if effective_workers <= 1:
         generate_size = int(testset_size * OVERGENERATE_FACTOR)
-        questions = _worker_generate_from_kg(kg, personas, generate_size, query_distribution)
+        questions = _worker_generate_from_kg(kg, personas, generate_size, query_distribution, project_id=project_id)
         questions = _deduplicate_questions(questions)
         questions = questions[:testset_size]
     else:
@@ -346,6 +712,9 @@ def generate_testset_with_personas(
             testset_size,
         )
 
+        _shutdown_event.clear()
+        _register_shutdown_handler()
+
         all_questions: list[dict] = []
         with ThreadPoolExecutor(max_workers=effective_workers) as pool:
             futures = [
@@ -355,10 +724,15 @@ def generate_testset_with_personas(
                     personas,
                     per_worker,
                     query_distribution,
+                    project_id,
                 )
                 for _ in range(effective_workers)
             ]
             for future in as_completed(futures):
+                if _shutdown_event.is_set():
+                    for f in futures:
+                        f.cancel()
+                    break
                 try:
                     all_questions.extend(future.result())
                 except Exception:
@@ -443,8 +817,6 @@ def _generate_category_questions_via_llm(
             max_tokens=4096,
             response_format={"type": "json_object"},
         )
-        import json as _json
-
         raw = response.choices[0].message.content or "[]"
         parsed = _json.loads(raw)
         # Handle both {"questions": [...]} and [...] formats
@@ -478,6 +850,7 @@ def generate_project_testset(
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
     question_categories: dict[str, int] | None = None,
+    project_id: int | None = None,
 ) -> dict:
     """Unified entry point for project-scoped test set generation.
 
@@ -488,6 +861,42 @@ def generate_project_testset(
     Supported categories: typical, in_knowledge_base, edge, out_of_knowledge_base.
     When provided, questions are generated per-category and tagged.
     """
+    # Initialize progress tracking
+    if project_id is not None:
+        set_progress(project_id, {
+            "stage": "building_knowledge_graph",
+            "questions_generated": 0,
+            "target_size": testset_size,
+        })
+
+    try:
+        return _generate_project_testset_inner(
+            chunks=chunks,
+            testset_size=testset_size,
+            use_personas=use_personas,
+            num_personas=num_personas,
+            custom_personas=custom_personas,
+            query_distribution=query_distribution,
+            num_workers=num_workers,
+            question_categories=question_categories,
+            project_id=project_id,
+        )
+    finally:
+        if project_id is not None:
+            clear_progress(project_id)
+
+
+def _generate_project_testset_inner(
+    chunks: list[str],
+    testset_size: int = 10,
+    use_personas: bool = True,
+    num_personas: int = 3,
+    custom_personas: list[dict] | None = None,
+    query_distribution: dict[str, float] | None = None,
+    num_workers: int = 4,
+    question_categories: dict[str, int] | None = None,
+    project_id: int | None = None,
+) -> dict:
     # If no categories specified, generate all as "in_knowledge_base" (legacy behavior)
     if not question_categories:
         if use_personas:
@@ -498,6 +907,7 @@ def generate_project_testset(
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
                 num_workers=num_workers,
+                project_id=project_id,
             )
         else:
             questions = generate_testset_from_chunks(
@@ -506,6 +916,7 @@ def generate_project_testset(
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
                 num_workers=num_workers,
+                project_id=project_id,
             )
             result = {"personas": [], "questions": questions}
         # Tag all questions as in_knowledge_base for consistency
@@ -545,6 +956,7 @@ def generate_project_testset(
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
                 num_workers=num_workers,
+                project_id=project_id,
             )
             all_personas = ragas_result.get("personas", [])
             ragas_questions = ragas_result.get("questions", [])
@@ -555,6 +967,7 @@ def generate_project_testset(
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
                 num_workers=num_workers,
+                project_id=project_id,
             )
 
         # Split ragas questions between typical and in_knowledge_base
@@ -571,11 +984,15 @@ def generate_project_testset(
         all_questions.extend(ragas_questions)
 
     # Generate LLM-based questions (edge + out_of_knowledge_base)
+    if project_id is not None and llm_categories:
+        update_progress(project_id, stage="generating_special_categories")
     for cat, pct in llm_categories.items():
         cat_count = max(1, round(testset_size * pct / total_pct))
         cat_questions = _generate_category_questions_via_llm(chunks, cat, cat_count)
         for q in cat_questions:
             q["category"] = cat
         all_questions.extend(cat_questions)
+        if project_id is not None:
+            increment_questions(project_id, len(cat_questions))
 
     return {"personas": all_personas, "questions": all_questions}

@@ -97,7 +97,7 @@ export default function ProjectSelector() {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 w-72 rounded-xl border border-border bg-card shadow-2xl shadow-black/40">
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-xl border border-border bg-card shadow-2xl shadow-black/40">
           {/* Error banner */}
           {error && (
             <div className="flex items-center justify-between border-b border-border bg-score-low/10 px-3 py-2 text-xs text-score-low">
