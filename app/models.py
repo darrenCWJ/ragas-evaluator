@@ -21,10 +21,6 @@ VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap",
 VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sparse"}
 VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
 VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
-VALID_EXPERIMENT_STATUSES = {"pending", "running", "completed", "failed"}
-VALID_QUERY_TYPES = {"single_hop_specific", "multi_hop_abstract", "multi_hop_specific"}
-VALID_QUESTION_CATEGORIES = {"typical", "in_knowledge_base", "edge", "out_of_knowledge_base"}
-
 ALLOWED_LLM_PARAMS = {
     "temperature",
     "max_tokens",
@@ -59,12 +55,6 @@ class TestGenRequest(BaseModel):
     num_personas: int = 3
     custom_personas: list[dict] | None = None
     use_personas: bool = True
-
-
-class PersonaGenRequest(BaseModel):
-    chunks: list[str]
-    num_personas: int = 3
-    custom_personas: list[dict] | None = None
 
 
 class TestSetCreate(BaseModel):

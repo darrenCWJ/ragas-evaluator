@@ -189,6 +189,15 @@ CREATE TABLE IF NOT EXISTS human_annotations (
     annotated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS personas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    role_description TEXT NOT NULL,
+    question_style TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS custom_metrics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -199,6 +208,20 @@ CREATE TABLE IF NOT EXISTS custom_metrics (
     min_score INTEGER NOT NULL DEFAULT 1,
     max_score INTEGER NOT NULL DEFAULT 5,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_graphs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    chunks_hash TEXT NOT NULL,
+    kg_json TEXT NOT NULL,
+    num_nodes INTEGER NOT NULL DEFAULT 0,
+    num_chunks INTEGER NOT NULL DEFAULT 0,
+    is_complete BOOLEAN NOT NULL DEFAULT TRUE,
+    completed_steps INTEGER NOT NULL DEFAULT 0,
+    total_steps INTEGER NOT NULL DEFAULT 4,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(project_id, chunks_hash)
 );
 """
 

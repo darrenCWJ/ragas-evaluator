@@ -6,7 +6,6 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from app.models import (
-    DocumentContextUpdate,
     EmbeddingConfigCreate,
     EmbedRequest,
     HybridSearchRequest,

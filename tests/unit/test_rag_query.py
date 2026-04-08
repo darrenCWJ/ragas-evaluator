@@ -77,6 +77,8 @@ def _make_config_row(
     sparse_config_id=None,
     alpha=None,
     max_steps=3,
+    reranker_model=None,
+    reranker_top_k=None,
 ):
     """Create a mock config row dict that behaves like sqlite3.Row."""
     data = {
@@ -90,6 +92,8 @@ def _make_config_row(
         "sparse_config_id": sparse_config_id,
         "alpha": alpha,
         "max_steps": max_steps,
+        "reranker_model": reranker_model,
+        "reranker_top_k": reranker_top_k,
     }
     return data
 

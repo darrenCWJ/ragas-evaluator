@@ -20,7 +20,7 @@ from dataclasses import asdict
 
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
 from evaluation.metrics.custom_metric import CustomMetricConfig
-from evaluation.source_verification import verify_all_citations, VerificationResult
+from evaluation.source_verification import verify_all_citations
 import db.init
 from pipeline.bot_connectors.factory import create_connector
 from pipeline.rag import single_shot_query, multi_step_query
