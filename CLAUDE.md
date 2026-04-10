@@ -58,7 +58,6 @@ main.py → app/ (FastAPI)
 ## Environment Variables
 
 - `OPENAI_API_KEY` (required) — OpenAI API access
-- `GLEAN_API_KEY` (optional) — Glean enterprise search
 - `CORS_ORIGINS` (optional) — comma-separated allowed origins
 
 ## Conventions

@@ -8,6 +8,7 @@ import type {
 } from "../../lib/api";
 import {
   fetchRagConfigs,
+  fetchConfigDefaults,
   createRagConfig,
   deleteRagConfig,
   fetchRagConfigExpanded,
@@ -54,7 +55,7 @@ export default function RagConfigPanel({
     chunkConfigs.length > 0 ? chunkConfigs[0]!.id : "",
   );
   const [searchType, setSearchType] = useState<string>("dense");
-  const [llmModel, setLlmModel] = useState("gpt-4o-mini");
+  const [llmModel, setLlmModel] = useState("");
   const [responseMode, setResponseMode] = useState<string>("single_shot");
   const [topK, setTopK] = useState(5);
   const [maxSteps, setMaxSteps] = useState(3);
@@ -104,6 +105,12 @@ export default function RagConfigPanel({
 
   useEffect(() => {
     loadConfigs();
+    // Set default LLM model from backend config
+    fetchConfigDefaults().then((defaults) => {
+      setLlmModel((prev) => prev || defaults.default_eval_model);
+    }).catch(() => {
+      setLlmModel((prev) => prev || "gpt-4o-mini");
+    });
   }, [loadConfigs]);
 
   // Update default selectors when configs change

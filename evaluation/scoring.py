@@ -36,9 +36,12 @@ from evaluation.metrics import (
     summarization_score,
     aspect_critic,
     rubrics_score,
+    instance_rubrics,
     answer_accuracy,
     context_relevance,
     response_groundedness,
+    sql_semantic_equivalence,
+    datacompy_score,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,7 +66,10 @@ ALL_METRICS = [
     "rubrics_score",
     "answer_accuracy",
     "context_relevance",
+    "instance_rubrics",
     "response_groundedness",
+    "sql_semantic_equivalence",
+    "datacompy_score",
 ]
 
 # Maps metric name → module for dynamic dispatch
@@ -87,15 +93,19 @@ _METRIC_MODULES = {
     "rubrics_score": rubrics_score,
     "answer_accuracy": answer_accuracy,
     "context_relevance": context_relevance,
+    "instance_rubrics": instance_rubrics,
     "response_groundedness": response_groundedness,
+    "sql_semantic_equivalence": sql_semantic_equivalence,
+    "datacompy_score": datacompy_score,
 }
 
 # Metrics that need only LLM
 _LLM_ONLY = {
     "faithfulness", "context_precision", "context_recall",
     "context_entities_recall", "noise_sensitivity", "factual_correctness",
-    "summarization_score", "aspect_critic", "rubrics_score",
+    "summarization_score", "aspect_critic", "rubrics_score", "instance_rubrics",
     "answer_accuracy", "context_relevance", "response_groundedness",
+    "sql_semantic_equivalence",
 }
 # Metrics that need LLM + embeddings
 _LLM_AND_EMBED = {"answer_relevancy"}
@@ -105,6 +115,7 @@ _EMBED_ONLY = {"semantic_similarity"}
 _NO_DEPS = {
     "non_llm_string_similarity", "bleu_score", "rouge_score",
     "chrf_score", "exact_match", "string_presence",
+    "datacompy_score",
 }
 
 
@@ -119,10 +130,12 @@ def setup_scorers(
     The llm is returned so custom DiscreteMetric scorers can use it at score time.
     """
     selected = metrics or ALL_METRICS
+    from config import DEFAULT_EVAL_MODEL, DEFAULT_EVAL_EMBEDDING, DEFAULT_EVAL_MAX_TOKENS
+
     client = AsyncOpenAI()
-    llm = llm_factory("gpt-4o-mini", client=client, max_tokens=16384)
+    llm = llm_factory(DEFAULT_EVAL_MODEL, client=client, max_tokens=DEFAULT_EVAL_MAX_TOKENS)
     embeddings = embedding_factory(
-        "openai", model="text-embedding-3-small", client=client
+        "openai", model=DEFAULT_EVAL_EMBEDDING, client=client
     )
 
     scorers = {}
@@ -176,6 +189,11 @@ _SCORE_SIGNATURES = {
     "q_a_ref": {"answer_accuracy"},
     # (scorer, question, contexts)
     "q_ctx": {"context_relevance"},
+    # (scorer, question, answer, rubrics, contexts) — uses per-experiment rubrics
+    "q_a_rubrics_ctx": {"instance_rubrics"},
+    # Domain-specific: uses metadata fields instead of standard question/answer
+    "metadata_sql": {"sql_semantic_equivalence"},
+    "metadata_data": {"datacompy_score"},
 }
 
 # Metrics that require non-empty contexts to run
@@ -185,6 +203,7 @@ _NEEDS_CONTEXTS = (
     | _SCORE_SIGNATURES["ref_ctx"]
     | _SCORE_SIGNATURES["q_a_ref_ctx"]
     | _SCORE_SIGNATURES["q_ctx"]
+    | _SCORE_SIGNATURES["q_a_rubrics_ctx"]
 )
 
 
@@ -197,6 +216,8 @@ async def _score_builtin(
     contexts: list[str],
     on_start=None,
     on_done=None,
+    rubrics: dict[str, str] | None = None,
+    metadata: dict | None = None,
 ) -> tuple[str, float | None]:
     """Score a single built-in metric, returning (name, value)."""
     try:
@@ -208,30 +229,51 @@ async def _score_builtin(
             return name, None
         mod = _METRIC_MODULES[name]
         if name in _SCORE_SIGNATURES["q_a_ctx"]:
-            val = await mod.score(scorer, question, generated_answer, contexts)
+            coro = mod.score(scorer, question, generated_answer, contexts)
         elif name in _SCORE_SIGNATURES["q_a"]:
-            val = await mod.score(scorer, question, generated_answer)
+            coro = mod.score(scorer, question, generated_answer)
         elif name in _SCORE_SIGNATURES["a_ctx"]:
-            val = await mod.score(scorer, generated_answer, contexts)
+            coro = mod.score(scorer, generated_answer, contexts)
         elif name in _SCORE_SIGNATURES["ref_ctx"]:
-            val = await mod.score(scorer, reference_answer, contexts)
+            coro = mod.score(scorer, reference_answer, contexts)
         elif name in _SCORE_SIGNATURES["q_a_ref_ctx"]:
-            val = await mod.score(
+            coro = mod.score(
                 scorer, question, generated_answer, reference_answer, contexts
             )
         elif name in _SCORE_SIGNATURES["a_ref"]:
-            val = await mod.score(scorer, generated_answer, reference_answer)
+            coro = mod.score(scorer, generated_answer, reference_answer)
         elif name in _SCORE_SIGNATURES["q_a_ref"]:
-            val = await mod.score(
+            coro = mod.score(
                 scorer, question, generated_answer, reference_answer
             )
         elif name in _SCORE_SIGNATURES["q_ctx"]:
-            val = await mod.score(scorer, question, contexts)
+            coro = mod.score(scorer, question, contexts)
+        elif name in _SCORE_SIGNATURES["q_a_rubrics_ctx"]:
+            coro = mod.score(scorer, question, generated_answer, rubrics=rubrics, contexts=contexts)
+        elif name in _SCORE_SIGNATURES["metadata_sql"]:
+            meta = metadata or {}
+            ref_sql = meta.get("reference_sql", reference_answer)
+            schema_ctx = meta.get("schema_contexts")
+            coro = mod.score(scorer, generated_answer, ref_sql, schema_ctx)
+        elif name in _SCORE_SIGNATURES["metadata_data"]:
+            meta = metadata or {}
+            ref_data = meta.get("reference_data", reference_answer)
+            coro = mod.score(scorer, generated_answer, ref_data)
+        else:
+            coro = None
+
+        if coro is not None:
+            val = await asyncio.wait_for(coro, timeout=120.0)
         else:
             val = None
         if on_done:
             on_done(name)
         return name, val
+    except asyncio.TimeoutError:
+        logger.warning("Metric %s timed out after 120s", name)
+        if on_done:
+            on_done(name)
+        return name, None
     except Exception as e:
         logger.warning("Metric %s failed: %s", name, e)
         if on_done:
@@ -294,6 +336,8 @@ async def evaluate_experiment_row(
     llm=None,
     on_metric_start=None,
     on_metric_done=None,
+    rubrics: dict[str, str] | None = None,
+    metadata: dict | None = None,
 ) -> dict:
     """Evaluate a generated answer against reference using selected metrics.
 
@@ -310,6 +354,8 @@ async def evaluate_experiment_row(
             _score_builtin(
                 name, scorer, question, generated_answer, reference_answer, contexts,
                 on_start=on_metric_start, on_done=on_metric_done,
+                rubrics=rubrics,
+                metadata=metadata,
             )
         )
 

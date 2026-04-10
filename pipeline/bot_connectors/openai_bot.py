@@ -12,6 +12,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from config import CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
@@ -25,7 +26,7 @@ class OpenAIBotConnector:
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-4o-mini",
+        model: str = CONNECTOR_DEFAULT_MODELS["openai"],
         *,
         system_prompt: str = "",
         prompt_for_sources: bool = False,

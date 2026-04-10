@@ -2,9 +2,13 @@
 
 import statistics
 
-# Duplicated from app.models to avoid circular import (evaluation ↔ app)
-VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
-VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
+# Import from config module directly to avoid circular import through app/__init__.py
+import config as _cfg
+
+SUGGESTION_HIGH_THRESHOLD = _cfg.SUGGESTION_HIGH_THRESHOLD
+SUGGESTION_MEDIUM_THRESHOLD = _cfg.SUGGESTION_MEDIUM_THRESHOLD
+VALID_RESPONSE_MODES = _cfg.VALID_RESPONSE_MODES
+VALID_SEARCH_TYPES = _cfg.VALID_SEARCH_TYPES
 
 
 def generate_suggestions(
@@ -17,9 +21,9 @@ def generate_suggestions(
         return suggestions
 
     def _priority(score):
-        if score < 0.4:
+        if score < SUGGESTION_HIGH_THRESHOLD:
             return "high"
-        elif score < 0.7:
+        elif score < SUGGESTION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"

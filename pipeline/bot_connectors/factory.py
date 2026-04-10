@@ -11,6 +11,7 @@ from typing import Any
 
 from pipeline.bot_connectors.base import BotConnector
 from pipeline.bot_connectors.claude_bot import ClaudeBotConnector
+from pipeline.bot_connectors.csv_connector import CsvBotConnector
 from pipeline.bot_connectors.custom import CustomBotConnector
 from pipeline.bot_connectors.deepseek_bot import DeepSeekBotConnector
 from pipeline.bot_connectors.gemini_bot import GeminiBotConnector
@@ -25,6 +26,7 @@ _REGISTRY: dict[str, type] = {
     "deepseek": DeepSeekBotConnector,
     "gemini": GeminiBotConnector,
     "custom": CustomBotConnector,
+    "csv": CsvBotConnector,
 }
 
 SUPPORTED_TYPES = tuple(_REGISTRY.keys())
@@ -56,9 +58,14 @@ def create_connector(
             f"Supported: {', '.join(SUPPORTED_TYPES)}"
         )
 
-    # Glean and custom connectors don't use prompt_for_sources
+    # CSV connector uses bot_config_id to load data from external_baselines
+    if connector_type == "csv":
+        return cls(bot_config_id=config["bot_config_id"])  # type: ignore[no-any-return]
+
+    # Glean has native citations; custom connectors extract citations via
+    # JSONPath — neither uses prompt_for_sources (an LLM system-prompt hint).
     if connector_type in ("glean", "custom"):
         return cls(**config)  # type: ignore[no-any-return]
 
-    # LLM connectors accept prompt_for_sources
+    # LLM connectors (openai, claude, deepseek, gemini) accept prompt_for_sources
     return cls(**config, prompt_for_sources=prompt_for_sources)  # type: ignore[no-any-return]

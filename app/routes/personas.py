@@ -1,11 +1,17 @@
 """Persona CRUD and generation routes."""
 
 import asyncio
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import db.init
+from config import PERSONA_SUBPROCESS_TIMEOUT
 
 router = APIRouter(prefix="/api", tags=["personas"])
 
@@ -174,27 +180,48 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
     chunks = [r["content"] for r in chunk_rows]
 
     if req.mode == "full":
-        from evaluation.metrics.testgen import generate_personas
-
-        personas_objs = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: generate_personas(
-                chunks=chunks,
-                num_personas=req.num_personas,
-                fast=False,
-            ),
+        # Run in a subprocess to avoid event-loop deadlocks between
+        # FastAPI's asyncio loop and Ragas's internal asyncio.run().
+        script = (
+            "import json, sys, os; "
+            "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
+            "print('SUBPROCESS STARTED, OPENAI_API_KEY set:', bool(os.environ.get('OPENAI_API_KEY')), file=sys.stderr); "
+            "chunks = json.loads(open(sys.argv[2]).read()); "
+            "print(f'Loaded {len(chunks)} chunks', file=sys.stderr); "
+            "from evaluation.metrics.testgen import generate_personas, _enrich_with_question_styles; "
+            "personas = generate_personas(chunks=chunks, num_personas=int(sys.argv[3]), fast=False, project_id=int(sys.argv[4])); "
+            "print(json.dumps(_enrich_with_question_styles(personas)))"
         )
-        # ragas Persona objects — extract fields
-        return {
-            "personas": [
-                {
-                    "name": p.name,
-                    "role_description": p.role_description,
-                    "question_style": "",
-                }
-                for p in personas_objs
-            ]
-        }
+
+        # Write chunks to a temp file to avoid arg-length limits.
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(chunks, f)
+            chunks_path = f.name
+
+        project_dir = str(Path(__file__).resolve().parents[2])
+
+        def _run_subprocess():
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", script, project_dir, chunks_path, str(req.num_personas), str(project_id)],
+                    stdout=subprocess.PIPE,
+                    stderr=None,  # inherit — tqdm progress bars appear in server terminal
+                    text=True,
+                    timeout=PERSONA_SUBPROCESS_TIMEOUT,
+                    env={**__import__("os").environ},
+                )
+                if result.returncode != 0:
+                    raise RuntimeError("KG persona generation failed (check server logs)")
+                return json.loads(result.stdout.strip().split("\n")[-1])
+            finally:
+                Path(chunks_path).unlink(missing_ok=True)
+
+        personas_list = await asyncio.get_running_loop().run_in_executor(
+            None, _run_subprocess,
+        )
+        return {"personas": personas_list}
     else:
         from evaluation.metrics.testgen import generate_personas_fast
 

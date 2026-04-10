@@ -22,7 +22,9 @@ from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_r
 from evaluation.metrics.custom_metric import CustomMetricConfig
 from evaluation.source_verification import verify_all_citations
 import db.init
+from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
 from pipeline.bot_connectors.factory import create_connector
+from app.routes.bot_configs import bot_config_returns_contexts
 from pipeline.rag import single_shot_query, multi_step_query
 
 logger = logging.getLogger(__name__)
@@ -180,6 +182,95 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # --- Bot config path (external bot testing) ---
+    if req.bot_config_id is not None:
+        bot_config = conn.execute(
+            "SELECT * FROM bot_configs WHERE id = ? AND project_id = ?",
+            (req.bot_config_id, project_id),
+        ).fetchone()
+        if bot_config is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Bot config not found in this project",
+            )
+
+        test_set_id = req.test_set_id
+
+        # CSV connectors: auto-create a test set from external_baselines
+        if bot_config["connector_type"] == "csv" and test_set_id is None:
+            baselines = conn.execute(
+                "SELECT question, answer, sources FROM external_baselines WHERE bot_config_id = ?",
+                (req.bot_config_id,),
+            ).fetchall()
+            if not baselines:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No baseline rows found for this CSV bot connector",
+                )
+
+            gen_config = json.dumps({
+                "source": "csv_auto",
+                "bot_config_id": req.bot_config_id,
+                "row_count": len(baselines),
+            })
+            ts_cursor = conn.execute(
+                "INSERT INTO test_sets (project_id, name, generation_config_json) VALUES (?, ?, ?)",
+                (project_id, f"{bot_config['name']} (auto)", gen_config),
+            )
+            test_set_id = ts_cursor.lastrowid
+
+            for bl in baselines:
+                ref_ctx = json.dumps([bl["sources"]]) if bl["sources"] else "[]"
+                conn.execute(
+                    """INSERT INTO test_questions
+                       (test_set_id, question, reference_answer, reference_contexts, question_type, status)
+                       VALUES (?, ?, ?, ?, 'csv_auto', 'approved')""",
+                    (test_set_id, bl["question"], bl["answer"], ref_ctx),
+                )
+            conn.commit()
+        elif test_set_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="test_set_id is required for non-CSV bot connectors",
+            )
+        else:
+            # Validate test_set belongs to project
+            test_set = conn.execute(
+                "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+                (test_set_id, project_id),
+            ).fetchone()
+            if test_set is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Test set not found in this project",
+                )
+
+        cursor = conn.execute(
+            """INSERT INTO experiments
+               (project_id, test_set_id, name, model, bot_config_id, status)
+               VALUES (?, ?, ?, ?, ?, 'pending')""",
+            (
+                project_id,
+                test_set_id,
+                req.name,
+                f"{bot_config['connector_type']}:{bot_config['name']}",
+                req.bot_config_id,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        return _parse_experiment_row(row)
+
+    # --- RAG config path (internal RAG pipeline, legacy) ---
+    if req.test_set_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="test_set_id is required for RAG experiments",
+        )
+
     # Validate test_set belongs to project
     test_set = conn.execute(
         "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
@@ -202,38 +293,6 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
             detail="Test set has no approved questions",
         )
 
-    # --- Bot config path (external bot testing) ---
-    if req.bot_config_id is not None:
-        bot_config = conn.execute(
-            "SELECT * FROM bot_configs WHERE id = ? AND project_id = ?",
-            (req.bot_config_id, project_id),
-        ).fetchone()
-        if bot_config is None:
-            raise HTTPException(
-                status_code=422,
-                detail="Bot config not found in this project",
-            )
-
-        cursor = conn.execute(
-            """INSERT INTO experiments
-               (project_id, test_set_id, name, model, bot_config_id, status)
-               VALUES (?, ?, ?, ?, ?, 'pending')""",
-            (
-                project_id,
-                req.test_set_id,
-                req.name,
-                f"{bot_config['connector_type']}:{bot_config['name']}",
-                req.bot_config_id,
-            ),
-        )
-        conn.commit()
-
-        row = conn.execute(
-            "SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)
-        ).fetchone()
-        return _parse_experiment_row(row)
-
-    # --- RAG config path (internal RAG pipeline, legacy) ---
     rag_config = conn.execute(
         "SELECT * FROM rag_configs WHERE id = ? AND project_id = ?",
         (req.rag_config_id, project_id),
@@ -315,15 +374,35 @@ async def list_experiments(project_id: int):
             (row["test_set_id"],),
         ).fetchone()["cnt"]
         exp["has_reference_contexts"] = ctx_count > 0
-        # Include connector_type so the frontend knows which metrics are available
+        # Check which domain-specific metadata fields exist in the test set
+        sql_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND metadata_json IS NOT NULL AND metadata_json LIKE '%reference_sql%'",
+            (row["test_set_id"],),
+        ).fetchone()["cnt"]
+        data_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND metadata_json IS NOT NULL AND metadata_json LIKE '%reference_data%'",
+            (row["test_set_id"],),
+        ).fetchone()["cnt"]
+        exp["has_reference_sql"] = sql_count > 0
+        exp["has_reference_data"] = data_count > 0
+        # Include connector info so the frontend knows which metrics are available
         if row["bot_config_id"]:
             bc = conn.execute(
-                "SELECT connector_type FROM bot_configs WHERE id = ?",
+                "SELECT connector_type, config_json FROM bot_configs WHERE id = ?",
                 (row["bot_config_id"],),
             ).fetchone()
-            exp["connector_type"] = bc["connector_type"] if bc else None
+            if bc:
+                exp["connector_type"] = bc["connector_type"]
+                bc_config = json.loads(bc["config_json"]) if bc["config_json"] else {}
+                exp["bot_returns_contexts"] = bot_config_returns_contexts(
+                    bc["connector_type"], bc_config
+                )
+            else:
+                exp["connector_type"] = None
+                exp["bot_returns_contexts"] = False
         else:
             exp["connector_type"] = None
+            exp["bot_returns_contexts"] = False
         experiments.append(exp)
 
     return experiments
@@ -767,12 +846,16 @@ async def run_experiment(
 
             total = len(questions)
             _experiment_progress[experiment_id] = {
-                "phase": "running", "current": 0, "total": total,
+                "phase": "setup", "current": 0, "total": total,
                 "question": "", "error": None, "result_count": 0,
-                "completed_items": [],  # [{question, response, error, metrics}]
-                "in_flight": [],  # [question_text] (legacy compact list)
-                "in_flight_details": {},  # {qid: {question, phase, metrics_done, metrics_active, metrics_pending}}
+                "completed_items": [],
+                "in_flight": [],
+                "in_flight_details": {},
+                "setup_step": "Loading metric scorers...",
             }
+
+            # Yield control so the SSE stream can send the setup phase
+            await asyncio.sleep(0)
 
             # Load custom metrics for this project
             custom_rows = run_conn.execute(
@@ -795,11 +878,26 @@ async def run_experiment(
             # Filter selected_metrics to only built-in ones for setup_scorers
             builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
 
-            # Setup scorers
-            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
+            # Setup scorers — run in executor to avoid blocking the event loop
+            logger.info("Experiment %d: setting up scorers for %s", experiment_id, builtin_selected)
+            loop = asyncio.get_event_loop()
+            scorers, custom_scorers, llm = await loop.run_in_executor(
+                None, lambda: setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
+            )
+            logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
+
+            # Transition from setup → running
+            _experiment_progress[experiment_id] = {
+                "phase": "running", "current": 0, "total": total,
+                "question": "", "error": None, "result_count": 0,
+                "completed_items": [],
+                "in_flight": [],
+                "in_flight_details": {},
+            }
 
             # Determine execution mode: external bot or internal RAG
             use_bot = experiment["bot_config_id"] is not None
+            is_csv = False
             connector = None
             virtual_config = None
 
@@ -814,11 +912,14 @@ async def run_experiment(
                         "question": "", "error": "Bot config not found", "result_count": 0,
                     }
                     return
-                connector = create_connector(
-                    bot_cfg["connector_type"],
-                    json.loads(bot_cfg["config_json"]),
-                    prompt_for_sources=bool(bot_cfg["prompt_for_sources"]),
-                )
+                is_csv = bot_cfg["connector_type"] == "csv"
+                if not is_csv:
+                    bot_config_dict = json.loads(bot_cfg["config_json"]) if bot_cfg["config_json"] else {}
+                    connector = create_connector(
+                        bot_cfg["connector_type"],
+                        bot_config_dict,
+                        prompt_for_sources=bool(bot_cfg["prompt_for_sources"]),
+                    )
             else:
                 virtual_config = _build_virtual_rag_config_row(experiment, project_id)
 
@@ -842,16 +943,36 @@ async def run_experiment(
                         all_metric_names = list(scorers.keys()) + list((custom_scorers or {}).keys())
                         prog["in_flight_details"][qid] = {
                             "question": question_text[:200],
-                            "phase": "querying",
+                            "phase": "scoring" if is_csv else "querying",
                             "metrics_done": [],
                             "metrics_active": [],
                             "metrics_pending": all_metric_names[:],
                         }
 
                     try:
-                        if use_bot:
+                        if is_csv:
+                            # CSV data is already in the test question row —
+                            # skip querying and use pre-loaded answers/sources.
+                            logger.info("CSV experiment %d: processing q%d '%s'", experiment_id, qid, question_text[:60])
+                            generated_answer = (
+                                q_row["user_edited_answer"]
+                                if q_row["user_edited_answer"]
+                                else q_row["reference_answer"]
+                            ) or ""
+                            raw_contexts = json.loads(q_row["reference_contexts"]) if q_row["reference_contexts"] else []
+                            full_context_dicts = [
+                                {"content": c, "source": "csv_upload"} if isinstance(c, str)
+                                else c
+                                for c in raw_contexts
+                            ]
+                            context_strings = [
+                                c if isinstance(c, str) else c.get("content", "")
+                                for c in raw_contexts
+                            ]
+                            usage_info = {"source": "csv_preloaded"}
+                        elif use_bot:
                             bot_response = await asyncio.wait_for(
-                                connector.query(question_text), timeout=120.0
+                                connector.query(question_text), timeout=BOT_QUERY_TIMEOUT
                             )
                             generated_answer = bot_response.answer
                             citations_data = [asdict(c) for c in bot_response.citations]
@@ -905,6 +1026,7 @@ async def run_experiment(
                             if q_row["user_edited_answer"]
                             else q_row["reference_answer"]
                         )
+                        q_metadata = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else None
 
                         def _on_metric_start(metric_name):
                             prog = _experiment_progress.get(experiment_id)
@@ -943,6 +1065,8 @@ async def run_experiment(
                             llm=llm,
                             on_metric_start=_on_metric_start,
                             on_metric_done=_on_metric_done,
+                            rubrics=req.rubrics,
+                            metadata=q_metadata,
                         )
 
                         await progress_queue.put({
@@ -1013,7 +1137,7 @@ async def run_experiment(
                 in_flight = prog.get("in_flight", [])
 
                 # Add to completed log (keep last 50 to bound memory)
-                completed_items = [*completed_items, {
+                completed_items = [*completed_items[-49:], {
                     "question": question_text[:200],
                     "response": (result["generated_answer"] or "")[:300] if result["generated_answer"] else None,
                     "error": result["error"],
@@ -1124,6 +1248,14 @@ async def run_experiment(
             phase = progress["phase"]
 
             if phase == "starting":
+                await asyncio.sleep(0.5)
+                continue
+
+            if phase == "setup":
+                if not sent_started and progress["total"] > 0:
+                    sent_started = True
+                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': progress['total'], 'metrics': selected_metrics, 'experiment_name': exp_name, 'model': exp_model, 'test_set_name': exp_test_set})}\n\n"
+                yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': progress['total'], 'question': progress.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
                 await asyncio.sleep(0.5)
                 continue
 
@@ -1603,7 +1735,7 @@ async def export_experiment(
 async def verify_experiment_sources(
     project_id: int,
     experiment_id: int,
-    llm_model: str = Query("gpt-4o-mini", description="LLM model for content verification"),
+    llm_model: str = Query(DEFAULT_EVAL_MODEL, description="LLM model for content verification"),
 ):
     """Run source verification on all citations in a bot-connector experiment.
 

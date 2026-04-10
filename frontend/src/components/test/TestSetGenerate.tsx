@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import type { ChunkConfig, TestSetCreate, SavedPersona, GenerationProgress } from "../../lib/api";
+import { useState, useEffect, useCallback } from "react";
+import type { ChunkConfig, TestSetCreate, SavedPersona, GenerationProgress, KnowledgeGraphInfo, KGBuildProgress } from "../../lib/api";
 import {
   createTestSet,
   generatePersonas,
@@ -7,10 +7,13 @@ import {
   savePersonasBulk,
   deletePersona,
   fetchGenerationProgress,
+  fetchKnowledgeGraphInfo,
+  buildKnowledgeGraph,
+  fetchKGBuildProgress,
+  deleteKnowledgeGraph,
+  resetKnowledgeGraph,
   ApiError,
 } from "../../lib/api";
-
-const GENERATION_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes (large test sets need many LLM calls)
 
 const QUERY_TYPES = [
   { key: "single_hop_specific", label: "Single-hop Specific", description: "Direct factual questions answerable from a single chunk (e.g. \"What is the default timeout?\")" },
@@ -76,12 +79,13 @@ function redistributeEvenly(
 
   let remaining = Math.abs(delta);
   let idx = 0;
+  if (sorted.length === 0) return result;
   while (remaining > 0) {
-    const k = sorted[idx % sorted.length];
+    const k = sorted[idx % sorted.length] as string;
     if (delta >= 0) {
-      result[k]++;
-    } else if (result[k] > 0) {
-      result[k]--;
+      result[k] = (result[k] ?? 0) + 1;
+    } else if ((result[k] ?? 0) > 0) {
+      result[k] = (result[k] ?? 0) - 1;
     } else {
       // skip keys already at 0 when shrinking
       idx++;
@@ -142,7 +146,10 @@ export default function TestSetGenerate({
   const [error, setError] = useState<string | null>(null);
   const [sizeError, setSizeError] = useState<string | null>(null);
   const [personasError, setPersonasError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [kgInfo, setKgInfo] = useState<KnowledgeGraphInfo | null>(null);
+  const [kgBuilding, setKgBuilding] = useState(false);
+  const [kgProgress, setKgProgress] = useState<KGBuildProgress | null>(null);
+  const [overlapMaxNodes, setOverlapMaxNodes] = useState<number | null>(500);
 
   const loadSavedPersonas = useCallback(async () => {
     try {
@@ -153,9 +160,51 @@ export default function TestSetGenerate({
     }
   }, [projectId]);
 
+  const loadKgInfo = useCallback(async () => {
+    try {
+      const info = await fetchKnowledgeGraphInfo(projectId);
+      setKgInfo(info);
+      // Check if a build is actively running (e.g. page refresh mid-build)
+      const progress = await fetchKGBuildProgress(projectId);
+      if (progress.active) {
+        setKgBuilding(true);
+        setKgProgress(progress);
+      }
+    } catch {
+      // silent
+    }
+  }, [projectId]);
+
   useEffect(() => {
     loadSavedPersonas();
-  }, [loadSavedPersonas]);
+    loadKgInfo();
+  }, [loadSavedPersonas, loadKgInfo]);
+
+  // Poll KG build progress
+  useEffect(() => {
+    if (!kgBuilding) return;
+    let cancelled = false;
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const p = await fetchKGBuildProgress(projectId);
+          if (cancelled) break;
+          setKgProgress(p);
+          if (!p.active) {
+            setKgBuilding(false);
+            setKgProgress(null);
+            loadKgInfo();
+            break;
+          }
+        } catch {
+          // ignore
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [kgBuilding, projectId, loadKgInfo]);
 
   useEffect(() => {
     if (!generating) {
@@ -176,7 +225,20 @@ export default function TestSetGenerate({
       while (!cancelled) {
         try {
           const p = await fetchGenerationProgress(projectId);
-          if (!cancelled) setProgress(p);
+          if (cancelled) break;
+          setProgress(p);
+
+          // Generation completed or failed — stop polling
+          if (p.status === "completed") {
+            setGenerating(false);
+            onTestSetCreated();
+            break;
+          }
+          if (p.status === "failed") {
+            setError(p.error_message || "Test generation failed");
+            setGenerating(false);
+            break;
+          }
         } catch {
           // ignore polling errors
         }
@@ -185,7 +247,7 @@ export default function TestSetGenerate({
     };
     poll();
     return () => { cancelled = true; };
-  }, [generating, projectId]);
+  }, [generating, projectId, onTestSetCreated]);
 
   const validateSize = (s: string) => {
     const v = Number(s);
@@ -284,11 +346,6 @@ export default function TestSetGenerate({
     const parsedPersonas = Number(numPersonas);
     const parsedChunkSample = Number(chunkSampleSize) || 0;
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
-
-    setGenerating(true);
     try {
       const config: TestSetCreate = {
         chunk_config_id: chunkConfigId as number,
@@ -332,7 +389,10 @@ export default function TestSetGenerate({
         }
       }
 
-      await createTestSet(projectId, config, controller.signal);
+      // POST returns immediately — generation runs in background
+      await createTestSet(projectId, config);
+
+      // Reset form
       setName("");
       setChunkConfigId("");
       setTestsetSize("10");
@@ -346,14 +406,14 @@ export default function TestSetGenerate({
       setUseCategories(false);
       setEnabledCategories({ typical: true, in_knowledge_base: true, edge: true, out_of_knowledge_base: true });
       setCategoryDistribution({ ...DEFAULT_CATEGORIES });
-      onTestSetCreated();
+
+      // Enter generating state — polling effect will detect completion
+      setGenerating(true);
     } catch (err) {
-      if ((err as Error).name === "AbortError") {
-        setError(
-          "Generation timed out — try a smaller test set size or fewer personas.",
-        );
-      } else if (err instanceof ApiError) {
-        if (err.status === 422) {
+      if (err instanceof ApiError) {
+        if (err.status === 409) {
+          setError("A test set is already being generated for this project.");
+        } else if (err.status === 422) {
           setError(err.message || "No chunks found for this config. Generate chunks in the Build stage first.");
         } else if (err.status === 429) {
           setError("Rate limit exceeded — wait a moment and try again.");
@@ -363,10 +423,6 @@ export default function TestSetGenerate({
       } else {
         setError((err as Error).message || "Generation failed");
       }
-    } finally {
-      clearTimeout(timeout);
-      abortRef.current = null;
-      setGenerating(false);
     }
   };
 
@@ -389,11 +445,17 @@ export default function TestSetGenerate({
 
     const STAGE_LABELS: Record<string, string> = {
       building_knowledge_graph: "Building knowledge graph",
+      kg_resuming_from_checkpoint: "Resuming from checkpoint",
       kg_loaded_from_cache: "Loaded knowledge graph from cache",
       kg_extracting_headlines: "Extracting headlines from chunks",
       kg_splitting_headlines: "Splitting chunks by headlines",
       kg_extracting_keyphrases: "Extracting keyphrases (slowest step)",
       kg_building_overlap: "Building overlap scores between nodes",
+      kg_filtering_nodes: "Filtering low-quality nodes",
+      kg_extracting_themes: "Extracting themes from chunks",
+      kg_extracting_entities: "Extracting named entities",
+      kg_building_summary_similarity: "Building summary similarity links",
+      kg_building_entity_overlap: "Building entity overlap scores",
       generating_personas: "Generating personas",
       generating_questions: "Synthesizing questions",
       generating_special_categories: "Generating edge & out-of-KB questions",
@@ -417,6 +479,13 @@ export default function TestSetGenerate({
           "kg_splitting_headlines",
           "kg_extracting_keyphrases",
           "kg_building_overlap",
+          "kg_extracting_summaries",
+          "kg_filtering_nodes",
+          "kg_embedding_summaries",
+          "kg_extracting_themes",
+          "kg_extracting_entities",
+          "kg_building_summary_similarity",
+          "kg_building_entity_overlap",
           "generating_personas",
           "generating_questions",
           "generating_special_categories",
@@ -606,6 +675,161 @@ export default function TestSetGenerate({
             More workers = faster generation. Increase for large test sets.
           </p>
         </div>
+
+        {/* Knowledge Graph */}
+        {chunkConfigId !== "" && (
+          <div className="sm:col-span-2 rounded-lg border border-border bg-elevated/50 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                Knowledge Graph
+              </h4>
+              {kgInfo?.exists && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await deleteKnowledgeGraph(projectId);
+                      setKgInfo({ exists: false });
+                    } catch {
+                      setError("Failed to delete knowledge graph");
+                    }
+                  }}
+                  disabled={generating || kgBuilding}
+                  className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+
+            {kgBuilding ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <svg className="h-4 w-4 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span className="text-sm text-text-primary">
+                    {kgProgress?.stage === "kg_resuming_from_checkpoint" ? "Resuming from checkpoint..." :
+                     kgProgress?.stage === "kg_extracting_headlines" ? "Extracting headlines..." :
+                     kgProgress?.stage === "kg_splitting_headlines" ? "Splitting headlines..." :
+                     kgProgress?.stage === "kg_extracting_keyphrases" ? "Extracting keyphrases..." :
+                     kgProgress?.stage === "kg_building_overlap" ? "Building overlap scores..." :
+                     kgProgress?.stage === "kg_filtering_nodes" ? "Filtering nodes..." :
+                     kgProgress?.stage === "kg_extracting_themes" ? "Extracting themes..." :
+                     kgProgress?.stage === "kg_extracting_entities" ? "Extracting entities..." :
+                     kgProgress?.stage === "kg_building_summary_similarity" ? "Building similarity..." :
+                     kgProgress?.stage === "kg_building_entity_overlap" ? "Building entity overlap..." :
+                     "Building knowledge graph..."}
+                  </span>
+                </div>
+                {kgProgress?.batch_total && kgProgress.batch_total > 1 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-xs text-text-muted">
+                      <span>Batch {kgProgress.batch_current ?? 0}/{kgProgress.batch_total}</span>
+                      <span>{kgProgress.nodes_processed ?? 0}/{kgProgress.nodes_total ?? 0} nodes</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-bg-tertiary overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-accent transition-all duration-500"
+                        style={{ width: `${((kgProgress.nodes_processed ?? 0) / (kgProgress.nodes_total || 1)) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs text-text-muted">
+                  This may take 30-60 minutes for large document sets.
+                </p>
+              </div>
+            ) : kgInfo?.exists ? (
+              <div className="text-sm text-text-secondary space-y-1">
+                <p>{kgInfo.num_nodes} nodes from {kgInfo.num_chunks} chunks</p>
+                <p className="text-xs text-text-muted">
+                  Built {kgInfo.created_at ? new Date(kgInfo.created_at).toLocaleString() : ""}
+                  {kgInfo.is_complete === false && ` (partial — step ${kgInfo.completed_steps ?? 0}/11)`}
+                </p>
+                {kgInfo.is_complete === false && (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          setKgBuilding(true);
+                          await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes);
+                        } catch (err) {
+                          setKgBuilding(false);
+                          setError(
+                            err instanceof ApiError ? err.message : "Failed to resume KG build",
+                          );
+                        }
+                      }}
+                      className="px-3 py-1 text-xs rounded bg-accent text-white hover:bg-accent/90"
+                    >
+                      Resume Build
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await resetKnowledgeGraph(projectId);
+                          setKgInfo({ exists: false });
+                        } catch (err) {
+                          setError(
+                            err instanceof ApiError ? err.message : "Failed to reset KG",
+                          );
+                        }
+                      }}
+                      className="px-3 py-1 text-xs rounded border border-red-300 text-red-600 hover:bg-red-50"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-text-muted">
+                  Pre-build a knowledge graph for faster "Full" persona generation and richer test sets.
+                </p>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    Overlap node cap
+                  </label>
+                  <select
+                    value={overlapMaxNodes === null ? "none" : String(overlapMaxNodes)}
+                    onChange={(e) => setOverlapMaxNodes(e.target.value === "none" ? null : Number(e.target.value))}
+                    className="rounded border border-border bg-bg-secondary px-2 py-1 text-xs"
+                  >
+                    <option value="250">250 (~1 min)</option>
+                    <option value="500">500 (~3-5 min)</option>
+                    <option value="750">750 (~8-12 min)</option>
+                    <option value="1000">1000 (~15-20 min)</option>
+                    <option value="1500">1500 (~35-45 min)</option>
+                    <option value="none">No limit (can be very slow)</option>
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setKgBuilding(true);
+                      await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes);
+                    } catch (err) {
+                      setKgBuilding(false);
+                      setError(
+                        err instanceof ApiError ? err.message : "Failed to start KG build",
+                      );
+                    }
+                  }}
+                  disabled={generating}
+                  className="rounded-lg border border-accent/30 bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/20 disabled:opacity-40"
+                >
+                  Generate Knowledge Graph
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Use personas toggle */}
         <div className="flex items-end gap-3 pb-1">

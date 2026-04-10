@@ -37,11 +37,17 @@ async def lifespan(application: FastAPI):
 
     try:
         init_db()
-        logger.info("Database initialized at data/ragas.db")
+        from config import DATABASE_PATH
+        logger.info("Database initialized at %s", DATABASE_PATH)
     except Exception as e:
         logger.error("Database initialization failed: %s", e)
         sys.exit(1)
     yield
+    # Cleanup: close shared HTTP clients to avoid "Event loop is closed" warnings
+    from evaluation.metrics.testgen import close_openai_clients
+    from pipeline.llm import close_openai_client
+    await close_openai_clients()
+    await close_openai_client()
 
 
 def create_app() -> FastAPI:

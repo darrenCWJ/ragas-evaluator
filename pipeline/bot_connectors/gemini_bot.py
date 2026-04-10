@@ -14,6 +14,7 @@ from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
+from config import CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 
@@ -23,7 +24,7 @@ class GeminiBotConnector:
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.0-flash",
+        model: str = CONNECTOR_DEFAULT_MODELS["gemini"],
         *,
         system_prompt: str = "",
         prompt_for_sources: bool = False,
