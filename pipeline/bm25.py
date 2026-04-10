@@ -11,8 +11,9 @@ from pathlib import Path
 
 from rank_bm25 import BM25Okapi
 
+from config import BM25_PATH
 
-BM25_DATA_DIR = "data/bm25"
+BM25_DATA_DIR = BM25_PATH
 
 
 def _tokenize(text: str) -> list[str]:

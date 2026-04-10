@@ -10,8 +10,9 @@ import functools
 
 from openai import AsyncOpenAI
 
+from config import EMBEDDING_BATCH_SIZE
 
-BATCH_SIZE = 100
+BATCH_SIZE = EMBEDDING_BATCH_SIZE
 
 # Lazy cache for sentence-transformers models (audit fix — avoids re-loading per request)
 _st_models: dict = {}

@@ -14,6 +14,7 @@ from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
+from config import CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -25,7 +26,7 @@ class DeepSeekBotConnector:
     def __init__(
         self,
         api_key: str,
-        model: str = "deepseek-chat",
+        model: str = CONNECTOR_DEFAULT_MODELS["deepseek"],
         *,
         system_prompt: str = "",
         prompt_for_sources: bool = False,

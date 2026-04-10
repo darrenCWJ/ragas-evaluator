@@ -1,8 +1,21 @@
 """Pydantic models and shared constants for the API."""
 
-import os
-
 from pydantic import BaseModel, Field, field_validator
+
+from config import (
+    ALLOWED_FILE_TYPES,
+    DEFAULT_EXPERIMENT_METRICS,
+    MAX_BASELINE_CSV_SIZE,
+    MAX_BASELINE_ROWS,
+    MAX_CHUNKS_FOR_GENERATION,
+    MAX_UPLOAD_QA_ROWS,
+    MAX_UPLOAD_SIZE,
+    VALID_CHUNK_METHODS,
+    VALID_CONNECTOR_TYPES,
+    VALID_EMBEDDING_TYPES,
+    VALID_RESPONSE_MODES,
+    VALID_SEARCH_TYPES,
+)
 
 
 # --- Validation sets ---
@@ -17,10 +30,6 @@ BULK_ACTION_TO_STATUS = {
     "reject_all": "rejected",
 }
 
-VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"}
-VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sparse"}
-VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
-VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
 ALLOWED_LLM_PARAMS = {
     "temperature",
     "max_tokens",
@@ -28,22 +37,6 @@ ALLOWED_LLM_PARAMS = {
     "frequency_penalty",
     "presence_penalty",
 }
-
-MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", 0))
-MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
-MAX_BASELINE_CSV_SIZE = 10 * 1024 * 1024  # 10MB
-MAX_BASELINE_ROWS = 1000
-MAX_UPLOAD_QA_ROWS = 2000
-ALLOWED_FILE_TYPES = {".txt", ".pdf", ".docx"}
-
-DEFAULT_EXPERIMENT_METRICS = [
-    "faithfulness",
-    "answer_relevancy",
-    "context_precision",
-    "context_recall",
-    "factual_correctness",
-    "semantic_similarity",
-]
 
 
 # --- Request / response models ---
@@ -94,7 +87,9 @@ class TestSetCreate(BaseModel):
 class QuestionAnnotation(BaseModel):
     status: str
     user_edited_answer: str | None = None
+    user_edited_contexts: list[str] | None = None
     user_notes: str | None = None
+    metadata: dict | None = None
 
     @field_validator("status")
     @classmethod
@@ -373,7 +368,7 @@ class RagQueryRequest(BaseModel):
 
 
 class ExperimentCreate(BaseModel):
-    test_set_id: int
+    test_set_id: int | None = None
     rag_config_id: int | None = None
     bot_config_id: int | None = None
     name: str
@@ -492,9 +487,6 @@ class CustomMetricCreate(BaseModel):
             raise ValueError("min_score must be less than max_score")
         if self.min_score < 0 or self.max_score > 10:
             raise ValueError("score range must be between 0 and 10")
-
-
-VALID_CONNECTOR_TYPES = {"glean", "openai", "claude", "deepseek", "gemini", "custom"}
 
 
 class BotConfigCreate(BaseModel):

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { EmbeddingConfig, ChunkConfig } from "../../lib/api";
 import {
   fetchEmbeddingConfigs,
+  fetchConfigDefaults,
   createEmbeddingConfig,
   deleteEmbeddingConfig,
 } from "../../lib/api";
@@ -14,7 +15,7 @@ const EMBEDDING_TYPES = [
 ] as const;
 type EmbeddingType = (typeof EMBEDDING_TYPES)[number];
 
-const TYPE_DEFAULTS: Record<EmbeddingType, string> = {
+const FALLBACK_TYPE_DEFAULTS: Record<EmbeddingType, string> = {
   dense_openai: "text-embedding-3-small",
   dense_sentence_transformers: "all-MiniLM-L6-v2",
   bm25_sparse: "",
@@ -38,13 +39,14 @@ export default function EmbeddingConfigPanel({
   onConfigsChanged,
 }: Props) {
   const [configs, setConfigs] = useState<EmbeddingConfig[]>([]);
+  const [typeDefaults, setTypeDefaults] = useState<Record<EmbeddingType, string>>(FALLBACK_TYPE_DEFAULTS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Form state
   const [name, setName] = useState("");
   const [embType, setEmbType] = useState<EmbeddingType>("dense_openai");
-  const [modelName, setModelName] = useState(TYPE_DEFAULTS.dense_openai);
+  const [modelName, setModelName] = useState(FALLBACK_TYPE_DEFAULTS.dense_openai);
   const [paramsJson, setParamsJson] = useState("");
   const [useDimReduction, setUseDimReduction] = useState(false);
   const [dimensions, setDimensions] = useState(256);
@@ -77,12 +79,22 @@ export default function EmbeddingConfigPanel({
 
   useEffect(() => {
     loadConfigs();
+    // Load embedding default from backend config
+    fetchConfigDefaults().then((defaults) => {
+      setTypeDefaults((prev) => ({
+        ...prev,
+        dense_openai: defaults.default_eval_embedding,
+      }));
+      setModelName(defaults.default_eval_embedding);
+    }).catch(() => {
+      // keep fallback defaults
+    });
   }, [loadConfigs]);
 
   // Update model name default when type changes
   useEffect(() => {
-    setModelName(TYPE_DEFAULTS[embType]);
-  }, [embType]);
+    setModelName(typeDefaults[embType]);
+  }, [embType, typeDefaults]);
 
   const isOpenAIEmb3 =
     embType === "dense_openai" && modelName.startsWith("text-embedding-3");
@@ -118,7 +130,7 @@ export default function EmbeddingConfigPanel({
       });
       setName("");
       setEmbType("dense_openai");
-      setModelName(TYPE_DEFAULTS.dense_openai);
+      setModelName(typeDefaults.dense_openai);
       setParamsJson("");
       setUseDimReduction(false);
       setDimensions(256);
@@ -200,7 +212,7 @@ export default function EmbeddingConfigPanel({
             type="text"
             value={modelName}
             onChange={(e) => setModelName(e.target.value)}
-            placeholder={TYPE_DEFAULTS[embType] || "model name"}
+            placeholder={typeDefaults[embType] || "model name"}
             className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
           />
         </label>

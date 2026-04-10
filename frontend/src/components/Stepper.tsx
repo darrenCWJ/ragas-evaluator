@@ -109,6 +109,8 @@ export default function Stepper() {
 
   const currentPath = location.pathname.split("/").pop() ?? "";
 
+  const isKgActive = currentPath === "knowledge-graph";
+
   return (
     <nav
       role="navigation"
@@ -190,6 +192,55 @@ export default function Stepper() {
           </NavLink>
         );
       })}
+
+      {/* Utility links separator */}
+      <div className="mx-3 my-2 border-t border-border" />
+
+      {/* Knowledge Graph explorer link */}
+      <NavLink
+        to="/knowledge-graph"
+        className={`
+          group relative flex items-center gap-3 rounded-lg px-3 py-2.5
+          transition-all duration-200 outline-none
+          focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
+          ${
+            isKgActive
+              ? "bg-accent-glow text-text-primary"
+              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+          }
+        `}
+      >
+        <span
+          className={`
+            flex h-8 w-8 shrink-0 items-center justify-center rounded-md
+            transition-colors duration-200
+            ${
+              isKgActive
+                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
+                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+            }
+          `}
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z"
+            />
+          </svg>
+        </span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-sm font-medium leading-tight truncate">
+            Knowledge Graphs
+          </span>
+          <span className="text-micro text-text-muted leading-tight truncate">
+            Explore & visualize
+          </span>
+        </div>
+        {isKgActive && (
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+        )}
+      </NavLink>
     </nav>
   );
 }

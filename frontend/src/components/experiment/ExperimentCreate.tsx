@@ -41,6 +41,10 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
         setTestSets(ts.filter((t) => t.approved_count > 0));
         setRagConfigs(rc);
         setBotConfigs(bc);
+        // Auto-select bot mode when no RAG configs exist but bot configs do
+        if (rc.length === 0 && bc.length > 0) {
+          setMode("bot");
+        }
       })
       .catch(() => {
         // Supplementary load — page-level error handles API failures
@@ -48,8 +52,11 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  const hasCsvBotConfigs = botConfigs.some((bc) => bc.connector_type === "csv");
+  const selectedBot = botConfigs.find((bc) => bc.id === botConfigId);
+  const isCsvBot = mode === "bot" && selectedBot?.connector_type === "csv";
   const nameValid = name.trim().length > 0;
-  const testSetValid = testSetId !== "";
+  const testSetValid = isCsvBot || testSetId !== "";
   const ragConfigValid = mode === "rag" ? ragConfigId !== "" : true;
   const botConfigValid = mode === "bot" ? botConfigId !== "" : true;
   const canSubmit = nameValid && testSetValid && ragConfigValid && botConfigValid && !submitting;
@@ -64,7 +71,7 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
     try {
       await createExperiment(projectId, {
         name: name.trim(),
-        test_set_id: testSetId as number,
+        test_set_id: isCsvBot ? undefined : (testSetId as number),
         rag_config_id: mode === "rag" ? (ragConfigId as number) : undefined,
         bot_config_id: mode === "bot" ? (botConfigId as number) : undefined,
       });
@@ -89,7 +96,8 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
     );
   }
 
-  const noPrereqs = testSets.length === 0 || (ragConfigs.length === 0 && botConfigs.length === 0);
+  // CSV bot configs auto-create their test set — don't require a pre-existing test set
+  const noPrereqs = (testSets.length === 0 && !hasCsvBotConfigs) || (ragConfigs.length === 0 && botConfigs.length === 0);
   const hasBotConfigs = botConfigs.length > 0;
 
   return (
@@ -132,34 +140,6 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
             )}
           </div>
 
-          {/* Test Set */}
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-text-secondary">
-              Test Set
-            </label>
-            <select
-              value={testSetId}
-              onChange={(e) =>
-                setTestSetId(e.target.value ? Number(e.target.value) : "")
-              }
-              className={`w-full rounded-lg border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 ${
-                touched && !testSetValid
-                  ? "border-red-500/50 focus:ring-red-500/50"
-                  : "border-border focus:ring-accent"
-              }`}
-            >
-              <option value="">Select test set...</option>
-              {testSets.map((ts) => (
-                <option key={ts.id} value={ts.id}>
-                  {ts.name} ({ts.approved_count} approved)
-                </option>
-              ))}
-            </select>
-            {touched && !testSetValid && (
-              <p className="mt-1 text-xs text-red-400">Test set is required</p>
-            )}
-          </div>
-
           {/* Mode toggle — only show if bot configs exist */}
           {hasBotConfigs && (
             <div>
@@ -190,6 +170,76 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
                   External Bot
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Bot Config — shown in Bot mode */}
+          {mode === "bot" && (
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-text-secondary">
+                Bot Connector
+              </label>
+              <select
+                value={botConfigId}
+                onChange={(e) =>
+                  setBotConfigId(e.target.value ? Number(e.target.value) : "")
+                }
+                className={`w-full rounded-lg border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 ${
+                  touched && !botConfigValid
+                    ? "border-red-500/50 focus:ring-red-500/50"
+                    : "border-border focus:ring-accent"
+                }`}
+              >
+                <option value="">Select bot connector...</option>
+                {botConfigs.map((bc) => (
+                  <option key={bc.id} value={bc.id}>
+                    {bc.name} ({bc.connector_type})
+                  </option>
+                ))}
+              </select>
+              {touched && !botConfigValid && (
+                <p className="mt-1 text-xs text-red-400">
+                  Bot connector is required
+                </p>
+              )}
+              <p className="mt-1.5 text-xs text-text-muted">
+                Questions will be sent to this external bot instead of the internal RAG pipeline.
+              </p>
+            </div>
+          )}
+
+          {/* Test Set — hidden for CSV bot connectors (auto-created from CSV data) */}
+          {!isCsvBot && (
+            <div>
+              <label className="mb-1.5 block text-xs font-medium text-text-secondary">
+                Test Set
+              </label>
+              <select
+                value={testSetId}
+                onChange={(e) =>
+                  setTestSetId(e.target.value ? Number(e.target.value) : "")
+                }
+                className={`w-full rounded-lg border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 ${
+                  touched && !testSetValid
+                    ? "border-red-500/50 focus:ring-red-500/50"
+                    : "border-border focus:ring-accent"
+                }`}
+              >
+                <option value="">Select test set...</option>
+                {testSets.map((ts) => (
+                  <option key={ts.id} value={ts.id}>
+                    {ts.name} ({ts.approved_count} approved)
+                  </option>
+                ))}
+              </select>
+              {touched && !testSetValid && (
+                <p className="mt-1 text-xs text-red-400">Test set is required</p>
+              )}
+            </div>
+          )}
+          {isCsvBot && (
+            <div className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-xs text-text-secondary">
+              Test set will be auto-created from the CSV data ({selectedBot?.name}).
             </div>
           )}
 
@@ -237,41 +287,6 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
                   </div>
                 );
               })()}
-            </div>
-          )}
-
-          {/* Bot Config — shown in Bot mode */}
-          {mode === "bot" && (
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">
-                Bot Connector
-              </label>
-              <select
-                value={botConfigId}
-                onChange={(e) =>
-                  setBotConfigId(e.target.value ? Number(e.target.value) : "")
-                }
-                className={`w-full rounded-lg border bg-input px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 ${
-                  touched && !botConfigValid
-                    ? "border-red-500/50 focus:ring-red-500/50"
-                    : "border-border focus:ring-accent"
-                }`}
-              >
-                <option value="">Select bot connector...</option>
-                {botConfigs.map((bc) => (
-                  <option key={bc.id} value={bc.id}>
-                    {bc.name} ({bc.connector_type})
-                  </option>
-                ))}
-              </select>
-              {touched && !botConfigValid && (
-                <p className="mt-1 text-xs text-red-400">
-                  Bot connector is required
-                </p>
-              )}
-              <p className="mt-1.5 text-xs text-text-muted">
-                Questions will be sent to this external bot instead of the internal RAG pipeline.
-              </p>
             </div>
           )}
 

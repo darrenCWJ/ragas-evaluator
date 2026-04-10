@@ -27,6 +27,14 @@ def _get_openai_client() -> AsyncOpenAI:
     return _openai_client
 
 
+async def close_openai_client() -> None:
+    """Close module-level OpenAI client. Call during app shutdown."""
+    global _openai_client
+    if _openai_client is not None:
+        await _openai_client.close()
+        _openai_client = None
+
+
 def _is_openai_model(model: str) -> bool:
     return any(model.startswith(prefix) for prefix in OPENAI_PREFIXES)
 

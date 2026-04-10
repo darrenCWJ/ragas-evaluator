@@ -139,7 +139,13 @@ export interface ExternalBaseline {
 
 export interface CsvUploadResult {
   imported: number;
+  bot_config_id: number;
   preview: { question: string; answer: string; sources: string }[];
+}
+
+export interface CsvPreviewResult {
+  headers: string[];
+  rows: Record<string, string>[];
 }
 
 // --- API Config Types ---
@@ -175,6 +181,23 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Send a FormData request and parse the response, extracting error detail on failure.
+ */
+async function formRequest<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "Unknown error");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.detail) detail = parsed.detail;
+    } catch { /* use raw body */ }
+    throw new ApiError(res.status, detail);
+  }
+  return res.json() as Promise<T>;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -200,6 +223,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// --- Config Defaults API ---
+
+export interface ConfigDefaults {
+  connector_types: string[];
+  default_models: Record<string, string>;
+  default_eval_model: string;
+  default_eval_embedding: string;
+}
+
+let _configCache: ConfigDefaults | null = null;
+
+export async function fetchConfigDefaults(): Promise<ConfigDefaults> {
+  if (_configCache) return _configCache;
+  _configCache = await request<ConfigDefaults>("/api/config/defaults");
+  return _configCache;
+}
+
 export async function fetchProjects(): Promise<Project[]> {
   return request<Project[]>("/api/projects");
 }
@@ -215,28 +255,32 @@ export async function createProject(
 
 // --- External Baseline API ---
 
+export async function previewBaselineCsv(
+  projectId: number,
+  file: File,
+): Promise<CsvPreviewResult> {
+  const form = new FormData();
+  form.append("file", file);
+  return formRequest<CsvPreviewResult>(`/api/projects/${projectId}/baselines/preview-csv`, form);
+}
+
 export async function uploadBaselineCsv(
   projectId: number,
   file: File,
+  columnMapping: {
+    questionCol: string;
+    answerCol: string;
+    contextCol?: string;
+    configName?: string;
+  },
 ): Promise<CsvUploadResult> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`/api/projects/${projectId}/baselines/upload-csv`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
-    } catch {
-      // use raw body
-    }
-    throw new ApiError(res.status, detail);
-  }
-  return res.json() as Promise<CsvUploadResult>;
+  form.append("question_col", columnMapping.questionCol);
+  form.append("answer_col", columnMapping.answerCol);
+  if (columnMapping.contextCol) form.append("context_col", columnMapping.contextCol);
+  if (columnMapping.configName) form.append("config_name", columnMapping.configName);
+  return formRequest<CsvUploadResult>(`/api/projects/${projectId}/baselines/upload-csv`, form);
 }
 
 export async function fetchBaselines(
@@ -303,23 +347,7 @@ export async function uploadDocument(
 ): Promise<Document> {
   const form = new FormData();
   form.append("file", file);
-  // Do NOT set Content-Type — let browser set multipart boundary
-  const res = await fetch(`/api/projects/${projectId}/documents`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
-    } catch {
-      // use raw body
-    }
-    throw new ApiError(res.status, detail);
-  }
-  return res.json() as Promise<Document>;
+  return formRequest<Document>(`/api/projects/${projectId}/documents`, form);
 }
 
 export async function deleteDocument(
@@ -550,7 +578,9 @@ export interface TestQuestion {
   category: string | null;
   status: string;
   user_edited_answer: string | null;
+  user_edited_contexts: string[] | null;
   user_notes: string | null;
+  metadata: Record<string, unknown> | null;
   reviewed_at: string | null;
 }
 
@@ -588,20 +618,7 @@ export async function previewTestSetUpload(
 ): Promise<UploadPreviewResult> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(
-    `/api/projects/${projectId}/test-sets/upload/preview`,
-    { method: "POST", body: form },
-  );
-  if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
-    } catch { /* use raw body */ }
-    throw new ApiError(res.status, detail);
-  }
-  return res.json() as Promise<UploadPreviewResult>;
+  return formRequest<UploadPreviewResult>(`/api/projects/${projectId}/test-sets/upload/preview`, form);
 }
 
 export async function confirmTestSetUpload(
@@ -609,29 +626,24 @@ export async function confirmTestSetUpload(
   file: File,
   questionColumn: string,
   answerColumn: string,
-  contextsColumn?: string,
-  name?: string,
+  opts?: {
+    contextsColumn?: string;
+    name?: string;
+    referenceSqlColumn?: string;
+    schemaContextsColumn?: string;
+    referenceDataColumn?: string;
+  },
 ): Promise<UploadConfirmResult> {
   const form = new FormData();
   form.append("file", file);
   form.append("question_column", questionColumn);
   form.append("answer_column", answerColumn);
-  if (contextsColumn) form.append("contexts_column", contextsColumn);
-  if (name) form.append("name", name);
-  const res = await fetch(
-    `/api/projects/${projectId}/test-sets/upload`,
-    { method: "POST", body: form },
-  );
-  if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
-    let detail = body;
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
-    } catch { /* use raw body */ }
-    throw new ApiError(res.status, detail);
-  }
-  return res.json() as Promise<UploadConfirmResult>;
+  if (opts?.contextsColumn) form.append("contexts_column", opts.contextsColumn);
+  if (opts?.referenceSqlColumn) form.append("reference_sql_column", opts.referenceSqlColumn);
+  if (opts?.schemaContextsColumn) form.append("schema_contexts_column", opts.schemaContextsColumn);
+  if (opts?.referenceDataColumn) form.append("reference_data_column", opts.referenceDataColumn);
+  if (opts?.name) form.append("name", opts.name);
+  return formRequest<UploadConfirmResult>(`/api/projects/${projectId}/test-sets/upload`, form);
 }
 
 // --- Test Set API ---
@@ -714,6 +726,16 @@ export interface GenerationProgress {
   stage?: string;
   questions_generated?: number;
   target_size?: number;
+  status?: "generating" | "completed" | "failed";
+  test_set_id?: number;
+  error_message?: string;
+}
+
+export interface CreateTestSetResponse {
+  id: number;
+  name: string;
+  project_id: number;
+  status: "generating";
 }
 
 export async function fetchGenerationProgress(
@@ -728,8 +750,8 @@ export async function createTestSet(
   projectId: number,
   config: TestSetCreate,
   signal?: AbortSignal,
-): Promise<TestSet> {
-  return request<TestSet>(`/api/projects/${projectId}/test-sets`, {
+): Promise<CreateTestSetResponse> {
+  return request<CreateTestSetResponse>(`/api/projects/${projectId}/test-sets`, {
     method: "POST",
     body: JSON.stringify(config),
     signal,
@@ -771,7 +793,9 @@ export async function fetchTestSetSummary(
 export interface QuestionAnnotation {
   status: "approved" | "rejected" | "edited";
   user_edited_answer?: string;
+  user_edited_contexts?: string[];
   user_notes?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface BulkAnnotation {
@@ -831,14 +855,17 @@ export interface Experiment {
   test_set_name?: string;
   rag_config_name?: string;
   has_reference_contexts?: boolean;
+  has_reference_sql?: boolean;
+  has_reference_data?: boolean;
   connector_type?: string | null;
+  bot_returns_contexts?: boolean;
   approved_question_count?: number;
   result_count?: number;
   aggregate_metrics?: Record<string, number | null> | null;
 }
 
 export interface ExperimentCreate {
-  test_set_id: number;
+  test_set_id?: number | null;
   rag_config_id?: number | null;
   bot_config_id?: number | null;
   name: string;
@@ -1362,7 +1389,7 @@ export async function fetchExperimentHistory(
 
 // --- Bot Config API ---
 
-export type ConnectorType = "glean" | "openai" | "claude" | "deepseek" | "gemini" | "custom";
+export type ConnectorType = "glean" | "openai" | "claude" | "deepseek" | "gemini" | "custom" | "csv";
 
 export interface BotConfig {
   id: number;
@@ -1371,6 +1398,7 @@ export interface BotConfig {
   connector_type: ConnectorType;
   config_json: Record<string, unknown>;
   prompt_for_sources: boolean;
+  returns_contexts: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -1414,6 +1442,27 @@ export async function deleteBotConfig(
   return request<void>(`/api/projects/${projectId}/bot-configs/${configId}`, {
     method: "DELETE",
   });
+}
+
+export interface BotConfigBaselinesResult {
+  total: number;
+  rows: {
+    id: number;
+    question: string;
+    answer: string;
+    sources: string;
+    created_at: string;
+  }[];
+}
+
+export async function fetchBotConfigBaselines(
+  projectId: number,
+  configId: number,
+  limit = 5,
+): Promise<BotConfigBaselinesResult> {
+  return request<BotConfigBaselinesResult>(
+    `/api/projects/${projectId}/bot-configs/${configId}/baselines?limit=${limit}`,
+  );
 }
 
 // --- Source Verification Types ---
@@ -1654,4 +1703,244 @@ export async function deleteCustomMetric(
     `/api/projects/${projectId}/custom-metrics/${metricId}`,
     { method: "DELETE" },
   );
+}
+
+// --- Knowledge Graph ---
+
+export interface KnowledgeGraphInfo {
+  exists: boolean;
+  id?: number;
+  project_id?: number;
+  num_nodes?: number;
+  num_chunks?: number;
+  is_complete?: boolean;
+  completed_steps?: number;
+  total_steps?: number;
+  heartbeat_stale?: boolean;
+  chunks_stale?: boolean;
+  chunk_config_id?: number;
+  last_heartbeat?: string;
+  created_at?: string;
+}
+
+export interface KGBuildProgress {
+  active: boolean;
+  stage?: string;
+  status?: string;
+  stale?: boolean;
+  num_nodes?: number;
+  num_chunks?: number;
+  batch_current?: number;
+  batch_total?: number;
+  nodes_processed?: number;
+  nodes_total?: number;
+  is_complete?: boolean;
+  completed_steps?: number;
+  total_steps?: number;
+}
+
+export async function fetchKnowledgeGraphInfo(
+  projectId: number,
+): Promise<KnowledgeGraphInfo> {
+  return request<KnowledgeGraphInfo>(
+    `/api/projects/${projectId}/knowledge-graph`,
+  );
+}
+
+export async function buildKnowledgeGraph(
+  projectId: number,
+  chunkConfigId: number,
+  overlapMaxNodes: number | null = 500,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/projects/${projectId}/build-knowledge-graph`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        chunk_config_id: chunkConfigId,
+        overlap_max_nodes: overlapMaxNodes,
+      }),
+    },
+  );
+}
+
+export async function fetchKGBuildProgress(
+  projectId: number,
+): Promise<KGBuildProgress> {
+  return request<KGBuildProgress>(
+    `/api/projects/${projectId}/knowledge-graph/progress`,
+  );
+}
+
+export async function deleteKnowledgeGraph(
+  projectId: number,
+): Promise<void> {
+  await request<void>(
+    `/api/projects/${projectId}/knowledge-graph`,
+    { method: "DELETE" },
+  );
+}
+
+export async function resetKnowledgeGraph(
+  projectId: number,
+): Promise<{ deleted: boolean; was_complete?: boolean }> {
+  return request<{ deleted: boolean; was_complete?: boolean }>(
+    `/api/projects/${projectId}/knowledge-graph/reset`,
+    { method: "POST" },
+  );
+}
+
+export async function rebuildKGLinks(
+  projectId: number,
+  overlapMaxNodes: number | null = 500,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/projects/${projectId}/knowledge-graph/rebuild-links`,
+    {
+      method: "POST",
+      body: JSON.stringify({ overlap_max_nodes: overlapMaxNodes }),
+    },
+  );
+}
+
+export async function updateKnowledgeGraph(
+  projectId: number,
+  chunkConfigId: number,
+  overlapMaxNodes: number | null = 500,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/projects/${projectId}/knowledge-graph/update`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        chunk_config_id: chunkConfigId,
+        overlap_max_nodes: overlapMaxNodes,
+      }),
+    },
+  );
+}
+
+// --- Knowledge Graph Explorer ---
+
+export interface KGListItem {
+  id: number;
+  project_id: number;
+  project_name: string;
+  num_nodes: number;
+  num_chunks: number;
+  is_complete: boolean;
+  completed_steps: number;
+  total_steps: number;
+  chunk_config_id: number | null;
+  chunks_stale: boolean;
+  created_at: string;
+}
+
+export interface KGGraphNode {
+  id: string;
+  type: string;
+  label: string;
+  keyphrases: string[];
+}
+
+export interface KGGraphEdge {
+  source: string;
+  target: string;
+  type: string;
+  score: number;
+}
+
+export interface KGGraphData {
+  nodes: KGGraphNode[];
+  edges: KGGraphEdge[];
+  is_complete: boolean;
+}
+
+export async function fetchAllKnowledgeGraphs(): Promise<KGListItem[]> {
+  return request<KGListItem[]>("/api/knowledge-graphs");
+}
+
+export async function fetchKnowledgeGraphData(
+  projectId: number,
+): Promise<KGGraphData> {
+  return request<KGGraphData>(
+    `/api/projects/${projectId}/knowledge-graph/data`,
+  );
+}
+
+export interface KGStreamCallbacks {
+  onMeta: (meta: { total_nodes: number; total_edges: number; is_complete: boolean }) => void;
+  onNodes: (nodes: KGGraphNode[]) => void;
+  onEdges: (edges: KGGraphEdge[]) => void;
+  onDone: () => void;
+  onError: (error: string) => void;
+}
+
+export function streamKnowledgeGraphData(
+  projectId: number,
+  callbacks: KGStreamCallbacks,
+): () => void {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/knowledge-graph/stream`,
+        { signal: controller.signal },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "Unknown error");
+        callbacks.onError(body);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        callbacks.onError("No response body");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6);
+          try {
+            const event = JSON.parse(json);
+            switch (event.type) {
+              case "meta":
+                callbacks.onMeta(event);
+                break;
+              case "nodes":
+                callbacks.onNodes(event.batch);
+                break;
+              case "edges":
+                callbacks.onEdges(event.batch);
+                break;
+              case "done":
+                callbacks.onDone();
+                break;
+            }
+          } catch {
+            // Skip malformed events
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        callbacks.onError((err as Error).message || "Stream failed");
+      }
+    }
+  })();
+
+  return () => controller.abort();
 }

@@ -15,6 +15,7 @@ from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
+from config import CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 
@@ -24,7 +25,7 @@ class ClaudeBotConnector:
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = CONNECTOR_DEFAULT_MODELS["claude"],
         *,
         system_prompt: str = "",
         prompt_for_sources: bool = False,

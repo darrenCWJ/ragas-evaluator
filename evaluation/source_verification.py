@@ -17,9 +17,11 @@ import httpx
 
 from pipeline.llm import chat_completion
 
+from config import DEFAULT_EVAL_MODEL, SOURCE_VERIFY_FETCH_TIMEOUT
+
 logger = logging.getLogger(__name__)
 
-_FETCH_TIMEOUT = 15  # seconds
+_FETCH_TIMEOUT = SOURCE_VERIFY_FETCH_TIMEOUT
 _MAX_CONTENT_LENGTH = 8000  # chars sent to LLM for verification
 
 _VERIFY_SYSTEM_PROMPT = (
@@ -42,7 +44,7 @@ async def verify_citation(
     citation: dict[str, Any],
     citation_index: int,
     answer: str,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = DEFAULT_EVAL_MODEL,
 ) -> VerificationResult:
     """Verify a single citation against the bot's answer.
 
@@ -174,7 +176,7 @@ async def verify_citation(
 async def verify_all_citations(
     citations: list[dict[str, Any]],
     answer: str,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = DEFAULT_EVAL_MODEL,
 ) -> list[VerificationResult]:
     """Verify all citations for a single bot response.
 

@@ -3,7 +3,9 @@
 import chromadb
 from pathlib import Path
 
-PERSIST_DIRECTORY = str(Path("data/chromadb"))
+from config import CHROMADB_PATH
+
+PERSIST_DIRECTORY = str(CHROMADB_PATH)
 
 _client: chromadb.PersistentClient | None = None
 

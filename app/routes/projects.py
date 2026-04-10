@@ -4,7 +4,9 @@ import csv
 import io
 import sqlite3
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+import json
+
+from fastapi import APIRouter, Form, HTTPException, UploadFile, File
 
 from app.models import (
     ApiConfigCreate,
@@ -119,12 +121,25 @@ def _sanitize_csv_value(val: str) -> str:
     return val
 
 
-@router.post("/projects/{project_id}/baselines/upload-csv", status_code=201)
-async def upload_baseline_csv(project_id: int, file: UploadFile = File(...)):
+def _parse_csv_text(content: bytes) -> tuple[str, csv.DictReader]:
+    """Decode CSV bytes and return (text, DictReader). Raises HTTPException on failure."""
+    if len(content) > MAX_BASELINE_CSV_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum 10MB.")
+    try:
+        text = content.decode("utf-8", errors="replace")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode file as UTF-8")
+    reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames is None:
+        raise HTTPException(status_code=400, detail="CSV file is empty or has no headers")
+    return text, reader
+
+
+@router.post("/projects/{project_id}/baselines/preview-csv")
+async def preview_baseline_csv(project_id: int, file: UploadFile = File(...)):
+    """Return CSV headers and first 5 rows so the frontend can show column mapping."""
     conn = db.init.get_db()
-    project = conn.execute(
-        "SELECT id FROM projects WHERE id = ?", (project_id,)
-    ).fetchone()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -132,60 +147,100 @@ async def upload_baseline_csv(project_id: int, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
     content = await file.read()
-    if len(content) > MAX_BASELINE_CSV_SIZE:
-        raise HTTPException(status_code=400, detail="File too large. Maximum 10MB.")
+    text, reader = _parse_csv_text(content)
 
-    try:
-        text = content.decode("utf-8", errors="replace")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not decode file as UTF-8")
+    headers = list(reader.fieldnames)
+    preview_rows = []
+    for i, row in enumerate(reader):
+        if i >= 5:
+            break
+        preview_rows.append({h: row.get(h, "") for h in headers})
 
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None:
-        raise HTTPException(
-            status_code=400, detail="CSV file is empty or has no headers"
-        )
+    return {"headers": headers, "rows": preview_rows}
 
-    lower_fields = [f.strip().lower() for f in reader.fieldnames]
-    if "question" not in lower_fields or "answer" not in lower_fields:
-        raise HTTPException(
-            status_code=400,
-            detail=f"CSV must have 'question' and 'answer' columns. Found: {', '.join(reader.fieldnames)}",
-        )
 
-    col_map = {}
-    for orig, low in zip(reader.fieldnames, lower_fields):
-        if low == "question":
-            col_map["question"] = orig
-        elif low == "answer":
-            col_map["answer"] = orig
-        elif low in ("sources", "source", "context", "contexts"):
-            col_map["sources"] = orig
+@router.post("/projects/{project_id}/baselines/upload-csv", status_code=201)
+async def upload_baseline_csv(
+    project_id: int,
+    file: UploadFile = File(...),
+    question_col: str = Form(...),
+    answer_col: str = Form(...),
+    context_col: str = Form(""),
+    config_name: str = Form(""),
+):
+    """Upload CSV with user-specified column mapping. Creates a bot_config (type=csv)."""
+    conn = db.init.get_db()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
 
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are accepted")
+
+    content = await file.read()
+    text, reader = _parse_csv_text(content)
+
+    headers = list(reader.fieldnames)
+    if question_col not in headers:
+        raise HTTPException(status_code=400, detail=f"Question column '{question_col}' not found in CSV headers")
+    if answer_col not in headers:
+        raise HTTPException(status_code=400, detail=f"Answer column '{answer_col}' not found in CSV headers")
+    if context_col and context_col not in headers:
+        raise HTTPException(status_code=400, detail=f"Context column '{context_col}' not found in CSV headers")
+
+    has_contexts = bool(context_col)
+
+    # Create bot_config entry
+    bot_name = config_name.strip() if config_name.strip() else (file.filename or "CSV Upload")
+    config_json_data = {
+        "bot_config_id": 0,  # placeholder, updated after insert
+        "has_contexts": has_contexts,
+        "source_file": file.filename,
+    }
+    cursor = conn.execute(
+        """INSERT INTO bot_configs (project_id, name, connector_type, config_json, prompt_for_sources)
+           VALUES (?, ?, 'csv', ?, FALSE)""",
+        (project_id, bot_name, json.dumps(config_json_data)),
+    )
+    bot_config_id = cursor.lastrowid
+
+    # Update config_json with the actual bot_config_id
+    config_json_data["bot_config_id"] = bot_config_id
+    conn.execute(
+        "UPDATE bot_configs SET config_json = ? WHERE id = ?",
+        (json.dumps(config_json_data), bot_config_id),
+    )
+    conn.commit()
+
+    # Parse and insert rows
     rows = []
     for i, row in enumerate(reader):
         if i >= MAX_BASELINE_ROWS:
             break
-        q = _sanitize_csv_value(row.get(col_map["question"], ""))
-        a = _sanitize_csv_value(row.get(col_map["answer"], ""))
+        q = _sanitize_csv_value(row.get(question_col, ""))
+        a = _sanitize_csv_value(row.get(answer_col, ""))
         if not q or not a:
             continue
-        s = _sanitize_csv_value(row.get(col_map.get("sources", ""), "") or "")
-        rows.append((project_id, q, a, s, "csv"))
+        s = _sanitize_csv_value(row.get(context_col, "") or "") if context_col else ""
+        rows.append((project_id, bot_config_id, q, a, s, "csv"))
 
     if not rows:
+        # Clean up the bot_config if no valid rows
+        conn.execute("DELETE FROM bot_configs WHERE id = ?", (bot_config_id,))
+        conn.commit()
         raise HTTPException(status_code=400, detail="No valid rows found in CSV")
 
     conn.executemany(
-        "INSERT INTO external_baselines (project_id, question, answer, sources, source_type) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO external_baselines (project_id, bot_config_id, question, answer, sources, source_type) VALUES (?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
 
     return {
         "imported": len(rows),
+        "bot_config_id": bot_config_id,
         "preview": [
-            {"question": r[1], "answer": r[2], "sources": r[3]} for r in rows[:5]
+            {"question": r[2], "answer": r[3], "sources": r[4]} for r in rows[:5]
         ],
     }
 
