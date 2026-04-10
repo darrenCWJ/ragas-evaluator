@@ -1,15 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { useProject } from "../contexts/ProjectContext";
-import { fetchExperiments, resetExperiment } from "../lib/api";
+import { fetchExperiments } from "../lib/api";
 import type { Experiment } from "../lib/api";
 import ExperimentCreate from "../components/experiment/ExperimentCreate";
 import ExperimentList from "../components/experiment/ExperimentList";
-import ExperimentRunner from "../components/experiment/ExperimentRunner";
-import ExperimentResults from "../components/experiment/ExperimentResults";
 import ExperimentCompare from "../components/experiment/ExperimentCompare";
 import ExperimentHistory from "../components/experiment/ExperimentHistory";
-import SourceVerificationPanel from "../components/experiment/SourceVerificationPanel";
-import HumanAnnotationPanel from "../components/experiment/HumanAnnotationPanel";
 import Card from "../components/ui/Card";
 
 const MIN_COMPARE = 2;
@@ -80,7 +76,7 @@ export default function ExperimentPage() {
 
   return (
     <div className="mx-auto max-w-3xl pt-6 xl:max-w-5xl">
-      {/* Header — larger for primary workflow page */}
+      {/* Header */}
       <div className="mb-10 flex items-center gap-4">
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/15">
           <svg
@@ -148,7 +144,7 @@ export default function ExperimentPage() {
             </div>
           )}
 
-          {/* Experiment list */}
+          {/* Experiment list — with inline expand/tabs for Runner, Results, etc. */}
           <section>
             <ExperimentList
               projectId={project.id}
@@ -172,100 +168,6 @@ export default function ExperimentPage() {
               />
             </Card>
           )}
-
-          {/* Runner — for pending, failed, or running experiments, and not during comparison */}
-          {comparingIds.length === 0 &&
-            selected &&
-            (selected.status === "pending" || selected.status === "failed" || selected.status === "running") && (
-              <section className="rounded-xl border border-accent/30 bg-accent/5 p-5">
-                {selected.status === "failed" && (
-                  <div className="mb-4 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5">
-                    <span className="text-xs text-red-300">
-                      This experiment failed. Reset to re-run with new metrics.
-                    </span>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await resetExperiment(project.id, selected.id);
-                          await loadExperiments();
-                        } catch (err) {
-                          setError((err as Error).message || "Failed to reset experiment");
-                        }
-                      }}
-                      className="rounded-lg bg-red-500/15 px-3 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/25"
-                    >
-                      Reset & Re-run
-                    </button>
-                  </div>
-                )}
-                {(selected.status === "pending" || selected.status === "running") && (
-                  <ExperimentRunner
-                    projectId={project.id}
-                    experiment={selected}
-                    onComplete={loadExperiments}
-                  />
-                )}
-              </section>
-            )}
-
-          {/* Retest — for completed experiments, not during comparison */}
-          {comparingIds.length === 0 &&
-            selected &&
-            selected.status === "completed" && (
-              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-elevated/50 px-4 py-2.5">
-                <span className="text-xs text-text-secondary">
-                  Re-run this experiment with different metrics or settings.
-                </span>
-                <button
-                  onClick={async () => {
-                    try {
-                      await resetExperiment(project.id, selected.id);
-                      await loadExperiments();
-                    } catch (err) {
-                      setError((err as Error).message || "Failed to reset experiment");
-                    }
-                  }}
-                  className="rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/25"
-                >
-                  Retest
-                </button>
-              </div>
-            )}
-
-          {/* Results — only for completed experiments, and not during comparison */}
-          {comparingIds.length === 0 &&
-            selected &&
-            selected.status === "completed" && (
-              <>
-                <Card padding="lg" className="border-accent/20 p-5">
-                  <ExperimentResults
-                    key={selected.id}
-                    projectId={project.id}
-                    experimentId={selected.id}
-                  />
-                </Card>
-
-                {/* Source verification — only for bot-connector experiments */}
-                {selected.bot_config_id != null && (
-                  <Card padding="lg" className="p-5">
-                    <SourceVerificationPanel
-                      key={`sv-${selected.id}`}
-                      projectId={project.id}
-                      experimentId={selected.id}
-                    />
-                  </Card>
-                )}
-
-                {/* Human annotation */}
-                <Card padding="lg" className="p-5">
-                  <HumanAnnotationPanel
-                    key={`ann-${selected.id}`}
-                    projectId={project.id}
-                    experimentId={selected.id}
-                  />
-                </Card>
-              </>
-            )}
 
           {/* History — collapsible section at bottom */}
           <ExperimentHistory projectId={project.id} />

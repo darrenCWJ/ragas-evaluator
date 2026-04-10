@@ -1,7 +1,6 @@
 import sqlite3
-from pathlib import Path
 
-DATABASE_PATH = Path("data/ragas.db")
+from config import DATABASE_PATH
 
 _connection: sqlite3.Connection | None = None
 
@@ -92,6 +91,7 @@ CREATE TABLE IF NOT EXISTS test_questions (
     persona TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     user_edited_answer TEXT,
+    user_edited_contexts TEXT,
     user_notes TEXT,
     reviewed_at TIMESTAMP
 );
@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS suggestions (
 CREATE TABLE IF NOT EXISTS external_baselines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    bot_config_id INTEGER REFERENCES bot_configs(id) ON DELETE CASCADE,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     sources TEXT,
@@ -214,12 +215,14 @@ CREATE TABLE IF NOT EXISTS knowledge_graphs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     chunks_hash TEXT NOT NULL,
+    chunk_config_id INTEGER REFERENCES chunk_configs(id),
     kg_json TEXT NOT NULL,
     num_nodes INTEGER NOT NULL DEFAULT 0,
     num_chunks INTEGER NOT NULL DEFAULT 0,
     is_complete BOOLEAN NOT NULL DEFAULT TRUE,
     completed_steps INTEGER NOT NULL DEFAULT 0,
     total_steps INTEGER NOT NULL DEFAULT 4,
+    last_heartbeat TIMESTAMP,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
     UNIQUE(project_id, chunks_hash)
 );
@@ -310,6 +313,81 @@ def init_db() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Migration: add status and error_message to test_sets (async generation)
+    try:
+        conn.execute("ALTER TABLE test_sets ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE test_sets ADD COLUMN error_message TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add last_heartbeat to knowledge_graphs (stale build detection)
+    try:
+        conn.execute("ALTER TABLE knowledge_graphs ADD COLUMN last_heartbeat TIMESTAMP")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add chunk_config_id to knowledge_graphs (resume from KG explorer)
+    try:
+        conn.execute("ALTER TABLE knowledge_graphs ADD COLUMN chunk_config_id INTEGER REFERENCES chunk_configs(id)")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add user_edited_contexts to test_questions
+    try:
+        conn.execute("ALTER TABLE test_questions ADD COLUMN user_edited_contexts TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add metadata_json to test_questions (domain-specific metric data)
+    try:
+        conn.execute("ALTER TABLE test_questions ADD COLUMN metadata_json TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add bot_config_id to external_baselines (CSV-as-connector)
+    try:
+        conn.execute("ALTER TABLE external_baselines ADD COLUMN bot_config_id INTEGER REFERENCES bot_configs(id) ON DELETE CASCADE")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: backfill NULL chunk_config_id by matching chunks_hash
+    orphan_kgs = conn.execute(
+        "SELECT id, project_id, chunks_hash FROM knowledge_graphs WHERE chunk_config_id IS NULL"
+    ).fetchall()
+    if orphan_kgs:
+        import hashlib
+
+        for kg_row in orphan_kgs:
+            cc_rows = conn.execute(
+                "SELECT id FROM chunk_configs WHERE project_id = ?",
+                (kg_row["project_id"],),
+            ).fetchall()
+            for cc in cc_rows:
+                chunks = conn.execute(
+                    "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                    (cc["id"],),
+                ).fetchall()
+                h = hashlib.sha256()
+                for c in chunks:
+                    h.update(c["content"].encode("utf-8"))
+                if h.hexdigest()[:16] == kg_row["chunks_hash"]:
+                    conn.execute(
+                        "UPDATE knowledge_graphs SET chunk_config_id = ? WHERE id = ?",
+                        (cc["id"], kg_row["id"]),
+                    )
+                    break
+        conn.commit()
+
     _connection = conn
     return conn
 
@@ -319,3 +397,17 @@ def get_db() -> sqlite3.Connection:
     if _connection is None:
         _connection = init_db()
     return _connection
+
+
+def get_thread_db() -> sqlite3.Connection:
+    """Create a new DB connection for use in background threads.
+
+    Unlike get_db(), this returns a fresh connection each call.
+    The caller is responsible for closing it when done.
+    """
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DATABASE_PATH), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn

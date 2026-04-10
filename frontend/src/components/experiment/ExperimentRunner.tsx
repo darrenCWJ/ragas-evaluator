@@ -42,6 +42,7 @@ const LLM_METRICS = [
   "summarization_score",
   "aspect_critic",
   "rubrics_score",
+  "instance_rubrics",
 ];
 
 const NVIDIA_METRICS = [
@@ -75,10 +76,21 @@ const CONTEXT_REQUIRED_METRICS = new Set([
   "response_groundedness",
   "aspect_critic",
   "rubrics_score",
+  "instance_rubrics",
 ]);
 
-/** Bot connector types that natively return retrieved contexts (citations with snippets). */
-const CONNECTORS_WITH_CONTEXTS = new Set(["glean", "custom"]);
+const DOMAIN_METRICS = [
+  "sql_semantic_equivalence",
+  "datacompy_score",
+];
+
+/** Specialized metrics that need infrastructure not yet available (multi-turn, tool calls, etc.) */
+const COMING_SOON_METRICS = [
+  { name: "agent_goal_accuracy", reason: "Requires multi-turn agentic conversation history" },
+  { name: "topic_adherence", reason: "Requires multi-turn conversation and predefined topic list" },
+  { name: "tool_call_accuracy", reason: "Requires tool/function call data from agent interactions" },
+  { name: "tool_call_f1", reason: "Requires tool/function call data from agent interactions" },
+];
 
 const METRIC_DESCRIPTIONS: Record<string, string> = {
   // LLM Metrics
@@ -102,6 +114,8 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
     "Binary LLM judge that evaluates a specific aspect (e.g. harmfulness, correctness) and returns yes/no.",
   rubrics_score:
     "LLM judge that scores the response against user-defined rubric criteria with detailed reasoning.",
+  instance_rubrics:
+    "Per-instance rubric evaluation using SingleTurnSample. Scores response against rubric criteria on a 1-5 scale, normalised to 0-1.",
   // NVIDIA Metrics
   answer_accuracy:
     "Dual LLM-as-a-Judge that measures agreement between the response and a reference answer. Scores from two perspectives then averages.",
@@ -125,6 +139,11 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
     "Returns 1 if the response exactly matches the reference (after normalisation), 0 otherwise.",
   string_presence:
     "Checks whether the reference string appears anywhere in the response. Simple substring match.",
+  // Domain-Specific Metrics
+  sql_semantic_equivalence:
+    "Compares a generated SQL query against a reference SQL for semantic equivalence, optionally using schema context.",
+  datacompy_score:
+    "Compares structured/tabular data between response and reference using row-level or column-level matching.",
 };
 
 interface MetricGroupProps {
@@ -136,9 +155,10 @@ interface MetricGroupProps {
   activeClass: string;
   inactiveClass: string;
   disabledMetrics?: Set<string>;
+  disabledReasons?: Record<string, string>;
 }
 
-function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeClass, inactiveClass, disabledMetrics }: MetricGroupProps) {
+function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeClass, inactiveClass, disabledMetrics, disabledReasons }: MetricGroupProps) {
   return (
     <div>
       <label className={`mb-2 block text-xs font-medium ${labelClass}`}>
@@ -148,6 +168,9 @@ function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeCla
         {metrics.map((metric) => {
           const checked = selected.has(metric);
           const disabled = disabledMetrics?.has(metric) ?? false;
+          const disabledReason = disabled
+            ? (disabledReasons?.[metric] ?? "requires retrieved contexts (not available for this connector)")
+            : null;
           return (
             <button
               key={metric}
@@ -155,7 +178,7 @@ function MetricGroup({ label, labelClass, metrics, selected, onToggle, activeCla
               onClick={() => !disabled && onToggle(metric)}
               title={
                 disabled
-                  ? `${metric.replace(/_/g, " ")} — requires retrieved contexts (not available for this connector)`
+                  ? `${metric.replace(/_/g, " ")} — ${disabledReason}`
                   : METRIC_DESCRIPTIONS[metric]
               }
               disabled={disabled}
@@ -190,9 +213,17 @@ export default function ExperimentRunner({
 }: Props) {
   const isBotExperiment = experiment.bot_config_id != null;
   const connectorType = experiment.connector_type ?? null;
-  const botReturnsContexts = connectorType != null && CONNECTORS_WITH_CONTEXTS.has(connectorType);
+  const botReturnsContexts = experiment.bot_returns_contexts ?? false;
   const hasContexts = !isBotExperiment || botReturnsContexts || (experiment.has_reference_contexts ?? false);
-  const disabledMetrics = hasContexts ? new Set<string>() : CONTEXT_REQUIRED_METRICS;
+  const hasRefSql = experiment.has_reference_sql ?? false;
+  const hasRefData = experiment.has_reference_data ?? false;
+
+  const disabledMetrics = (() => {
+    const disabled = hasContexts ? new Set<string>() : new Set(CONTEXT_REQUIRED_METRICS);
+    if (!hasRefSql) disabled.add("sql_semantic_equivalence");
+    if (!hasRefData) disabled.add("datacompy_score");
+    return disabled;
+  })();
 
   const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(
@@ -503,6 +534,42 @@ export default function ExperimentRunner({
               disabledMetrics={disabledMetrics}
             />
 
+            {/* Domain-Specific Metrics */}
+            <MetricGroup
+              label="Domain-Specific Metrics"
+              labelClass="text-teal-400"
+              metrics={DOMAIN_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-teal-500/50 bg-teal-500/15 text-teal-400"
+              inactiveClass="border-border bg-card text-text-muted hover:border-teal-500/30 hover:text-text-secondary"
+              disabledMetrics={disabledMetrics}
+              disabledReasons={{
+                sql_semantic_equivalence: "no questions in this test set have reference_sql metadata",
+                datacompy_score: "no questions in this test set have reference_data metadata",
+              }}
+            />
+
+            {/* Coming Soon — specialized metrics */}
+            <div>
+              <label className="mb-2 block text-xs font-medium text-text-muted">
+                Specialized Metrics <span className="font-normal">(coming soon)</span>
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {COMING_SOON_METRICS.map((m) => (
+                  <button
+                    key={m.name}
+                    type="button"
+                    disabled
+                    title={m.reason}
+                    className="cursor-not-allowed rounded-lg border border-border/30 bg-card/20 px-3 py-1.5 text-xs font-medium text-text-muted/40 line-through"
+                  >
+                    {m.name.replace(/_/g, " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Custom metrics */}
             {customMetrics.length > 0 && (
               <div>
@@ -658,6 +725,14 @@ export default function ExperimentRunner({
             )}
           </div>
 
+          {/* Initializing status — shown before any question completes */}
+          {runState.current === 0 && runState.inFlightDetails.length === 0 && (
+            <div className="flex items-center gap-2 text-xs text-text-muted">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent" />
+              {runState.currentQuestion || "Initializing..."}
+            </div>
+          )}
+
           {/* In-flight questions with per-question pipeline */}
           {runState.inFlightDetails.length > 0 && (
             <div className="space-y-1.5">
@@ -693,7 +768,7 @@ export default function ExperimentRunner({
                             </svg>
                           )}
                           <span className={`text-xs ${detail.phase === "querying" ? "text-blue-300" : "text-text-muted"}`}>
-                            {isBotExperiment ? "Querying bot" : "Running RAG pipeline"}
+                            {connectorType === "csv" ? "Using pre-loaded data" : isBotExperiment ? "Querying bot" : "Running RAG pipeline"}
                           </span>
                         </div>
 

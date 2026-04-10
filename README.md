@@ -18,7 +18,7 @@ This project addresses that gap. It provides an **LLM-as-a-judge evaluation plat
 Rather than treating evaluation as a one-off check, the system enables an **iterative improvement loop**:
 
 1. **Configure** a RAG pipeline (chunking strategy, embedding model, retrieval mode, LLM)
-2. **Generate** synthetic test questions from your documents using diverse personas
+2. **Generate** synthetic test questions from your documents using auto-generated or custom personas
 3. **Run experiments** that evaluate every question against 20+ metrics
 4. **Analyze results** with an AI-powered suggestion engine that pinpoints weak spots
 5. **Apply suggestions** to create a new configuration and re-run — comparing before and after
@@ -42,6 +42,8 @@ Rather than treating evaluation as a one-off check, the system enables an **iter
   | embedding     |  | scoring     |  | projects       |
   | retrieval     |  | suggestions |  | configs        |
   | generation    |  | test gen    |  | experiments    |
+  | bot connectors|  | custom      |  | personas       |
+  | multi-LLM     |  | annotations |  | annotations    |
   +---------------+  +-------------+  +----------------+
 ```
 
@@ -109,6 +111,15 @@ Each suggestion maps to a specific config field and can be applied directly from
 | `datacompy_score` | SQL query result comparison |
 | `sql_semantic_equivalence` | Semantic SQL query comparison |
 
+## Key Features
+
+- **Persona-based test generation** — auto-generate diverse personas with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
+- **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP) with a unified evaluation framework.
+- **Source verification** — automatically check bot-cited URLs for reachability and content alignment.
+- **Human annotation** — sample experiment results for human review and compute evaluator accuracy against ground truth.
+- **Custom metrics** — define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics) without code changes.
+- **Experiment comparison & reporting** — per-metric deltas, experiment lineage tracking, project-level reports by bot type, CSV export.
+
 ## Setup
 
 ### Prerequisites
@@ -153,27 +164,33 @@ docker compose up --build
 ├── app/                     # FastAPI application
 │   ├── __init__.py          # App factory, middleware, lifespan
 │   ├── models.py            # Pydantic request/response models
-│   └── routes/              # Route modules
+│   └── routes/              # Route modules (16 modules)
 │       ├── projects.py      # Project CRUD
 │       ├── documents.py     # Document upload (PDF/TXT)
 │       ├── chunks.py        # Chunking configuration
 │       ├── embeddings.py    # Embedding configuration
 │       ├── rag.py           # RAG config and single-query testing
 │       ├── testsets.py      # Test set generation and curation
+│       ├── personas.py      # Persona CRUD and auto-generation
 │       ├── experiments.py   # Experiment runner (SSE streaming)
-│       └── analyze.py       # Suggestions and config changes
+│       ├── analyze.py       # Suggestions and config changes
+│       ├── bot_configs.py   # External bot connector configs
+│       ├── annotations.py   # Human annotation and evaluator accuracy
+│       ├── reports.py       # Project-level reporting and trends
+│       ├── custom_metrics.py # User-defined evaluation metrics
+│       └── health.py        # Health check endpoint
 ├── pipeline/                # RAG engine
-│   ├── chunking.py          # 4 chunking strategies
+│   ├── chunking.py          # 6 chunking strategies
 │   ├── embedding.py         # OpenAI + SentenceTransformers
 │   ├── vectorstore.py       # ChromaDB integration
 │   ├── bm25.py              # BM25 sparse search
 │   ├── rag.py               # Retrieval + generation (dense/sparse/hybrid)
-│   └── llm.py               # LLM provider routing
+│   └── llm.py               # Multi-provider LLM routing (OpenAI, Anthropic, Google)
 ├── evaluation/              # Metrics and analysis
 │   ├── metrics/             # 20+ metric modules
 │   ├── scoring.py           # Metric orchestration
 │   ├── suggestions.py       # Rule-based suggestion engine
-│   └── testgen.py           # Synthetic test generation (Ragas)
+│   └── testgen.py           # Synthetic test generation (persona-based)
 ├── db/                      # SQLite database layer
 │   └── init.py              # Schema, migrations, queries
 ├── frontend/                # React + TypeScript + Tailwind SPA
@@ -193,7 +210,7 @@ docker compose up --build
 |-------|-----------|
 | Backend | FastAPI, Uvicorn |
 | Database | SQLite (WAL mode) |
-| LLM | OpenAI API (GPT-4o / GPT-4o Mini) |
+| LLM | OpenAI, Anthropic, Google GenAI (multi-provider) |
 | Evaluation | Ragas 0.4+ |
 | Embeddings | OpenAI text-embedding-3-small, SentenceTransformers |
 | Vector store | ChromaDB |

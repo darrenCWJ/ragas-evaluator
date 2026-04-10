@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from ragas.llms import llm_factory
 from ragas.embeddings import embedding_factory
 from ragas.testset import TestsetGenerator
@@ -30,17 +30,31 @@ from ragas.testset.persona import Persona, generate_personas_from_kg
 from ragas.testset.graph import KnowledgeGraph, Node, NodeType
 from ragas.testset.transforms import (
     apply_transforms,
+    CosineSimilarityBuilder,
+    EmbeddingExtractor,
     HeadlinesExtractor,
     HeadlineSplitter,
     KeyphrasesExtractor,
     OverlapScoreBuilder,
+    SummaryExtractor,
 )
+from ragas.testset.transforms.default import CustomNodeFilter, NERExtractor, ThemesExtractor
 from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
 from ragas.testset.synthesizers.multi_hop import (
     MultiHopAbstractQuerySynthesizer,
     MultiHopSpecificQuerySynthesizer,
 )
 
+from config import (
+    DEFAULT_EVAL_EMBEDDING,
+    DEFAULT_EVAL_MAX_TOKENS,
+    DEFAULT_EVAL_MODEL,
+    KG_BATCH_SIZE,
+    PERSONA_MAX_CHARS_PER_BATCH,
+    TESTGEN_PERSONA_TEMPERATURE,
+    TESTGEN_QUESTION_TEMPERATURE,
+    TESTGEN_TOPIC_TEMPERATURE,
+)
 from db.init import get_db
 
 
@@ -109,7 +123,7 @@ def increment_questions(project_id: int, count: int = 1) -> None:
 
 
 # Over-generate per worker, then deduplicate and trim to requested size.
-OVERGENERATE_FACTOR = 1.3
+OVERGENERATE_FACTOR = 1.5
 # Two questions are considered duplicates if similarity exceeds this threshold.
 SIMILARITY_THRESHOLD = 0.75
 # Minimum chunks per worker — below this, fewer workers are used.
@@ -197,13 +211,43 @@ def build_query_distribution(dist_config: dict[str, float], llm=None):
     return distribution
 
 
+_async_openai_client: AsyncOpenAI | None = None
+_sync_openai_client: OpenAI | None = None
+
+
+def _get_async_openai() -> AsyncOpenAI:
+    global _async_openai_client
+    if _async_openai_client is None:
+        _async_openai_client = AsyncOpenAI()
+    return _async_openai_client
+
+
+def _get_sync_openai() -> OpenAI:
+    global _sync_openai_client
+    if _sync_openai_client is None:
+        _sync_openai_client = OpenAI()
+    return _sync_openai_client
+
+
+async def close_openai_clients() -> None:
+    """Close module-level OpenAI clients. Call during app shutdown."""
+    global _async_openai_client, _sync_openai_client
+    if _async_openai_client is not None:
+        await _async_openai_client.close()
+        _async_openai_client = None
+    if _sync_openai_client is not None:
+        _sync_openai_client.close()
+        _sync_openai_client = None
+
+
 def _build_llm_and_embeddings():
-    client = OpenAI()
-    llm = llm_factory("gpt-4o-mini", client=client, max_tokens=16384)
+    async_client = _get_async_openai()
+    llm = llm_factory(DEFAULT_EVAL_MODEL, client=async_client, max_tokens=DEFAULT_EVAL_MAX_TOKENS)
+    sync_client = _get_sync_openai()
     embeddings = embedding_factory(
-        "openai", model="text-embedding-3-small", client=client
+        "openai", model=DEFAULT_EVAL_EMBEDDING, client=sync_client
     )
-    return llm, embeddings, client
+    return llm, embeddings, sync_client
 
 
 # ---------------------------------------------------------------------------
@@ -218,29 +262,64 @@ def _chunks_hash(chunks: list[str]) -> str:
     return h.hexdigest()[:16]
 
 
-def load_cached_kg(project_id: int, chunks: list[str]) -> KnowledgeGraph | None:
-    """Return a cached *complete* KG from the database if one exists.
+def load_cached_kg(
+    project_id: int,
+    chunks: list[str],
+    *,
+    allow_partial: bool = False,
+) -> tuple[KnowledgeGraph, int] | KnowledgeGraph | None:
+    """Return a cached KG from the database if one exists.
 
-    Partial KGs (from interrupted builds) are ignored — they will be
-    replaced by a fresh build.
+    When *allow_partial* is False (default), only complete KGs are returned
+    (as a plain ``KnowledgeGraph``).  Partial KGs are ignored.
+
+    When *allow_partial* is True, returns a ``(KnowledgeGraph, completed_steps)``
+    tuple for both complete and partial KGs so the caller can resume from the
+    checkpoint.  Returns ``None`` if nothing is cached at all.
     """
     h = _chunks_hash(chunks)
     db = get_db()
     row = db.execute(
-        "SELECT kg_json, is_complete FROM knowledge_graphs "
+        "SELECT kg_json, is_complete, completed_steps, chunks_hash FROM knowledge_graphs "
         "WHERE project_id = ? AND chunks_hash = ?",
         (project_id, h),
     ).fetchone()
+    if row is None and allow_partial:
+        # Chunks hash may differ (e.g. row ordering without ORDER BY, or
+        # sampling differences).  For resume we only need project_id since
+        # save_kg_to_db keeps at most one row per project.
+        # Also match KGs that are marked complete but have fewer steps than
+        # the current pipeline (e.g. 6-step KG in a 7-step pipeline).
+        row = db.execute(
+            "SELECT kg_json, is_complete, completed_steps, chunks_hash FROM knowledge_graphs "
+            "WHERE project_id = ? AND (is_complete = 0 OR completed_steps < 11)",
+            (project_id,),
+        ).fetchone()
+        if row is not None:
+            logger.warning(
+                "Chunks hash mismatch for project %d (expected %s, got %s) "
+                "— resuming partial KG anyway",
+                project_id, h, row["chunks_hash"],
+            )
     if row is None:
         return None
-    if not row["is_complete"]:
+
+    if not row["is_complete"] and not allow_partial:
         logger.info(
-            "Found partial KG cache for project %d — will rebuild", project_id
+            "Found partial KG checkpoint for project %d (step %d) — will resume",
+            project_id,
+            row["completed_steps"],
         )
+        # Fall through to return partial when allow_partial would be set by caller
+        # For backwards compat, return None here — callers that want resume
+        # should pass allow_partial=True.
         return None
 
-    logger.info("Loading cached knowledge graph for project %d from DB", project_id)
-    # KnowledgeGraph.load expects a file path — write to a temp file.
+    logger.info(
+        "Loading %s knowledge graph for project %d from DB",
+        "complete" if row["is_complete"] else f"partial (step {row['completed_steps']})",
+        project_id,
+    )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write(row["kg_json"])
         tmp_path = f.name
@@ -248,6 +327,9 @@ def load_cached_kg(project_id: int, chunks: list[str]) -> KnowledgeGraph | None:
         kg = KnowledgeGraph.load(tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+    if allow_partial:
+        return kg, row["completed_steps"]
     return kg
 
 
@@ -257,8 +339,9 @@ def save_kg_to_db(
     chunks: list[str],
     *,
     is_complete: bool = True,
-    completed_steps: int = 4,
-    total_steps: int = 4,
+    completed_steps: int = 11,
+    total_steps: int = 11,
+    chunk_config_id: int | None = None,
 ) -> None:
     """Persist a KG to the database, replacing any stale entry for this project."""
     h = _chunks_hash(chunks)
@@ -276,9 +359,9 @@ def save_kg_to_db(
     db.execute("DELETE FROM knowledge_graphs WHERE project_id = ?", (project_id,))
     db.execute(
         "INSERT INTO knowledge_graphs "
-        "(project_id, chunks_hash, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (project_id, h, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps),
+        "(project_id, chunks_hash, chunk_config_id, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps, last_heartbeat) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))",
+        (project_id, h, chunk_config_id, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps),
     )
     db.commit()
     status = "complete" if is_complete else f"partial ({completed_steps}/{total_steps})"
@@ -293,18 +376,147 @@ def delete_kg_from_db(project_id: int) -> bool:
     return cursor.rowcount > 0
 
 
+def update_heartbeat(project_id: int) -> None:
+    """Touch the heartbeat timestamp for the KG build of a project."""
+    db = get_db()
+    db.execute(
+        "UPDATE knowledge_graphs SET last_heartbeat = datetime('now', 'localtime') "
+        "WHERE project_id = ?",
+        (project_id,),
+    )
+    db.commit()
+
+
+_HEARTBEAT_STALE_MINUTES = 5
+
+
 def get_kg_info(project_id: int) -> dict | None:
-    """Return metadata about the cached KG for a project (without the full JSON)."""
+    """Return metadata about the cached KG for a project (without the full JSON).
+
+    Includes a ``heartbeat_stale`` flag: True when the KG is partial and the
+    last heartbeat is older than 5 minutes (likely a dead build).
+    """
     db = get_db()
     row = db.execute(
-        "SELECT id, project_id, chunks_hash, num_nodes, num_chunks, "
-        "is_complete, completed_steps, total_steps, created_at "
+        "SELECT id, project_id, chunks_hash, chunk_config_id, num_nodes, num_chunks, "
+        "is_complete, completed_steps, total_steps, last_heartbeat, created_at "
         "FROM knowledge_graphs WHERE project_id = ?",
         (project_id,),
     ).fetchone()
     if row is None:
         return None
-    return dict(row)
+    info = dict(row)
+    # Normalize old KGs to the new 7-step pipeline
+    info["total_steps"] = 11
+    if info["completed_steps"] < 7:
+        info["is_complete"] = False
+    # Determine if the build looks stale (partial + heartbeat too old)
+    if not info["is_complete"] and info.get("last_heartbeat"):
+        from datetime import datetime, timedelta
+        try:
+            hb = datetime.strptime(info["last_heartbeat"], "%Y-%m-%d %H:%M:%S")
+            info["heartbeat_stale"] = datetime.now() - hb > timedelta(minutes=_HEARTBEAT_STALE_MINUTES)
+        except (ValueError, TypeError):
+            info["heartbeat_stale"] = True
+    else:
+        info["heartbeat_stale"] = not info["is_complete"]  # no heartbeat at all = stale
+    return info
+
+
+_KG_BATCH_SIZE = KG_BATCH_SIZE  # max chunks per apply_transforms call to avoid Ragas deadlock
+
+
+def _apply_transform_batched(
+    kg: KnowledgeGraph,
+    transform,
+    batch_size: int = _KG_BATCH_SIZE,
+    project_id: int | None = None,
+    stage_name: str | None = None,
+    overlap_max_nodes: int | None = 500,
+) -> None:
+    """Apply a transform to a KG in batches to work around Ragas hanging
+    when the number of nodes is large (>~100).
+
+    For transforms that operate per-node (HeadlinesExtractor,
+    KeyphrasesExtractor) we split the KG nodes into batches, apply the
+    transform to each mini-KG, then merge the results back.
+
+    For global transforms (HeadlineSplitter, OverlapScoreBuilder) we run
+    on the full KG since they don't make LLM calls.
+    """
+    from ragas.run_config import RunConfig
+
+    needs_llm = isinstance(transform, (HeadlinesExtractor, KeyphrasesExtractor, SummaryExtractor, CustomNodeFilter, ThemesExtractor, NERExtractor))
+
+    # OverlapScoreBuilder is O(n² × k²) — cap node count to avoid multi-hour runs.
+    # With k=10 keyphrases per node, approximate time estimates:
+    #   250 nodes  → ~3M comparisons  → ~1 min
+    #   500 nodes  → ~12M comparisons → ~3-5 min
+    #   750 nodes  → ~28M comparisons → ~8-12 min
+    #  1000 nodes  → ~50M comparisons → ~15-20 min
+    #  1500 nodes  → ~112M comparisons → ~35-45 min
+    #  2000 nodes  → ~200M comparisons → ~60-90 min
+    if isinstance(transform, OverlapScoreBuilder) and overlap_max_nodes and len(kg.nodes) > overlap_max_nodes:
+        import random
+        logger.warning(
+            "OverlapScoreBuilder: %d nodes exceeds cap of %d — sampling down",
+            len(kg.nodes), overlap_max_nodes,
+        )
+        sampled = random.sample(list(kg.nodes), overlap_max_nodes)
+        mini_kg = KnowledgeGraph()
+        mini_kg.nodes = sampled
+        apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+        # Copy relationships back to the main KG and restore all nodes
+        for rel in mini_kg.relationships:
+            kg.relationships.append(rel)
+        return
+
+    if not needs_llm or len(kg.nodes) <= batch_size:
+        apply_transforms(kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+        return
+
+    # Process in batches — build a mini KG per batch, apply, collect nodes.
+    all_nodes = list(kg.nodes)
+    total_nodes = len(all_nodes)
+    total_batches = (total_nodes + batch_size - 1) // batch_size
+    result_nodes = []
+    for batch_idx, start in enumerate(range(0, total_nodes, batch_size)):
+        batch_nodes = all_nodes[start : start + batch_size]
+        mini_kg = KnowledgeGraph()
+        mini_kg.nodes = batch_nodes
+        logger.info(
+            "  Batch %d/%d (%d–%d of %d nodes)",
+            batch_idx + 1,
+            total_batches,
+            start,
+            min(start + batch_size, total_nodes),
+            total_nodes,
+        )
+        if project_id is not None and stage_name:
+            update_progress(
+                project_id,
+                stage=stage_name,
+                batch_current=batch_idx + 1,
+                batch_total=total_batches,
+                nodes_processed=start,
+                nodes_total=total_nodes,
+            )
+            update_heartbeat(project_id)
+        apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+        result_nodes.extend(mini_kg.nodes)
+
+    # Final update showing all nodes processed
+    if project_id is not None and stage_name:
+        update_progress(
+            project_id,
+            stage=stage_name,
+            batch_current=total_batches,
+            batch_total=total_batches,
+            nodes_processed=total_nodes,
+            nodes_total=total_nodes,
+        )
+
+    kg.nodes = result_nodes
 
 
 def build_knowledge_graph(
@@ -312,6 +524,8 @@ def build_knowledge_graph(
     llm=None,
     embeddings=None,
     project_id: int | None = None,
+    overlap_max_nodes: int | None = 500,
+    chunk_config_id: int | None = None,
 ) -> KnowledgeGraph:
     """Build a KnowledgeGraph from text chunks and apply transforms.
 
@@ -319,30 +533,42 @@ def build_knowledge_graph(
     calls with the same project and chunk content return the cached version
     instantly.
     """
+    # Check for complete or partial cached KG
+    resume_from_step = 0
     if project_id is not None:
-        cached = load_cached_kg(project_id, chunks)
+        cached = load_cached_kg(project_id, chunks, allow_partial=True)
         if cached is not None:
-            update_progress(project_id, stage="kg_loaded_from_cache")
-            return cached
+            kg, cached_steps = cached
+            if cached_steps >= 11:
+                # Fully complete — return immediately
+                update_progress(project_id, stage="kg_loaded_from_cache")
+                return kg
+            # Partial checkpoint — resume from where we left off
+            resume_from_step = cached_steps
+            logger.info(
+                "Resuming KG build for project %d from step %d/11 (%d nodes)",
+                project_id, resume_from_step, len(kg.nodes),
+            )
+            update_progress(project_id, stage="kg_resuming_from_checkpoint")
 
     if llm is None or embeddings is None:
         llm, embeddings, _ = _build_llm_and_embeddings()
 
-    kg = KnowledgeGraph()
-    for i, chunk in enumerate(chunks):
-        kg.nodes.append(
-            Node(
-                type=NodeType.DOCUMENT,
-                properties={
-                    "page_content": chunk,
-                    "document_metadata": {"chunk_id": i},
-                },
+    if resume_from_step == 0:
+        kg = KnowledgeGraph()
+        for i, chunk in enumerate(chunks):
+            kg.nodes.append(
+                Node(
+                    type=NodeType.DOCUMENT,
+                    properties={
+                        "page_content": chunk,
+                        "document_metadata": {"chunk_id": i},
+                    },
+                )
             )
-        )
 
     # Run transforms one-by-one so we can report progress per step.
-    # If a transform fails (e.g. rate limit), save the partial KG so
-    # progress isn't lost — later calls can resume from the cache.
+    # After each step, save a checkpoint so interrupted builds can resume.
     transform_steps = [
         ("kg_extracting_headlines", HeadlinesExtractor(llm=llm)),
         ("kg_splitting_headlines", HeadlineSplitter(min_tokens=100, max_tokens=500)),
@@ -350,18 +576,57 @@ def build_knowledge_graph(
         ("kg_building_overlap", OverlapScoreBuilder(
             property_name="keyphrases",
             new_property_name="overlap_score",
-            threshold=0.01,
+            threshold=0.1,
             distance_threshold=0.9,
         )),
+        ("kg_extracting_summaries", SummaryExtractor(llm=llm)),
+        ("kg_filtering_nodes", CustomNodeFilter(llm=llm)),
+        ("kg_embedding_summaries", EmbeddingExtractor(
+            embedding_model=embeddings,
+            property_name="summary_embedding",
+            embed_property_name="summary",
+        )),
+        ("kg_extracting_themes", ThemesExtractor(llm=llm)),
+        ("kg_extracting_entities", NERExtractor(llm=llm)),
+        ("kg_building_summary_similarity", CosineSimilarityBuilder(
+            property_name="summary_embedding",
+            new_property_name="summary_similarity",
+            threshold=0.7,
+        )),
+        ("kg_building_entity_overlap", OverlapScoreBuilder(
+            property_name="entities",
+            new_property_name="entity_overlap",
+            threshold=0.01,
+        )),
     ]
-    completed_steps = 0
-    for stage_name, transform in transform_steps:
+    completed_steps = resume_from_step
+    for idx, (stage_name, transform) in enumerate(transform_steps):
+        if idx < resume_from_step:
+            logger.info("Skipping already-completed step %d: %s", idx + 1, stage_name)
+            continue
         if project_id is not None:
             update_progress(project_id, stage=stage_name)
+            update_heartbeat(project_id)
         logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
         try:
-            apply_transforms(kg, transforms=[transform])
+            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes)
             completed_steps += 1
+            # Save checkpoint after each step so we can resume on crash
+            if project_id is not None:
+                save_kg_to_db(
+                    kg,
+                    project_id,
+                    chunks,
+                    is_complete=(completed_steps == len(transform_steps)),
+                    completed_steps=completed_steps,
+                    total_steps=len(transform_steps),
+                    chunk_config_id=chunk_config_id,
+                )
+                if completed_steps < len(transform_steps):
+                    logger.info(
+                        "Saved checkpoint after step %d/%d for project %d",
+                        completed_steps, len(transform_steps), project_id,
+                    )
         except Exception:
             logger.exception(
                 "KG transform '%s' failed after %d/%d steps — saving partial KG",
@@ -377,13 +642,443 @@ def build_knowledge_graph(
                     is_complete=False,
                     completed_steps=completed_steps,
                     total_steps=len(transform_steps),
+                    chunk_config_id=chunk_config_id,
                 )
             raise
 
-    if project_id is not None:
-        save_kg_to_db(kg, project_id, chunks)
-
     return kg
+
+
+def build_kg_standalone(
+    chunk_config_id: int,
+    project_id: int,
+    overlap_max_nodes: int | None = 500,
+) -> dict:
+    """Build a KG from chunks in the DB and cache it.
+
+    Designed to run in a background thread.  Uses the in-memory progress
+    store so the frontend can poll for status.
+    """
+    import db.init as _db
+
+    conn = _db.get_thread_db()
+    rows = conn.execute(
+        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+        (chunk_config_id,),
+    ).fetchall()
+    chunks = [r["content"] for r in rows]
+    if not chunks:
+        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+
+    set_progress(project_id, {
+        "stage": "building_knowledge_graph",
+        "kg_building": True,
+        "total_chunks": len(chunks),
+    })
+
+    try:
+        kg = build_knowledge_graph(chunks, project_id=project_id, overlap_max_nodes=overlap_max_nodes, chunk_config_id=chunk_config_id)
+        clear_progress(project_id)
+        return {
+            "num_nodes": len(kg.nodes),
+            "num_chunks": len(chunks),
+        }
+    except Exception:
+        clear_progress(project_id)
+        raise
+
+
+def rebuild_kg_links(
+    project_id: int,
+    overlap_max_nodes: int | None = 500,
+) -> dict:
+    """Reload a complete/partial KG, strip existing relationships, and re-run
+    only the OverlapScoreBuilder with new parameters.
+
+    Much faster than a full rebuild since it skips headline and keyphrase
+    extraction (the expensive LLM steps).
+    """
+    from ragas.run_config import RunConfig
+
+    db = get_db()
+    row = db.execute(
+        "SELECT kg_json, chunks_hash, chunk_config_id, completed_steps "
+        "FROM knowledge_graphs WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"No knowledge graph found for project {project_id}")
+    if (row["completed_steps"] or 0) < 3:
+        raise ValueError(
+            f"KG only has {row['completed_steps']}/11 steps — keyphrases must be "
+            "extracted before links can be built"
+        )
+
+    set_progress(project_id, {
+        "stage": "kg_building_overlap",
+        "kg_building": True,
+    })
+
+    try:
+        # Load KG from DB
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(row["kg_json"])
+            tmp_path = f.name
+        try:
+            kg = KnowledgeGraph.load(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        # Strip all existing relationships
+        old_count = len(kg.relationships)
+        kg.relationships.clear()
+        logger.info(
+            "Rebuilding links for project %d: removed %d old relationships, "
+            "%d nodes, overlap_max_nodes=%s",
+            project_id, old_count, len(kg.nodes), overlap_max_nodes,
+        )
+
+        update_progress(project_id, stage="kg_building_overlap")
+        update_heartbeat(project_id)
+
+        transform = OverlapScoreBuilder(
+            property_name="keyphrases",
+            new_property_name="overlap_score",
+            threshold=0.1,
+            distance_threshold=0.9,
+        )
+        _apply_transform_batched(
+            kg, transform,
+            project_id=project_id,
+            stage_name="kg_building_overlap",
+            overlap_max_nodes=overlap_max_nodes,
+        )
+
+        # Get chunks for hash (needed by save_kg_to_db)
+        chunk_config_id = row["chunk_config_id"]
+        if chunk_config_id:
+            import db.init as _db
+            conn = _db.get_db()
+            chunk_rows = conn.execute(
+                "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                (chunk_config_id,),
+            ).fetchall()
+            chunks = [r["content"] for r in chunk_rows]
+        else:
+            # Fallback: use existing hash, save with empty chunks list
+            chunks = []
+
+        # Overlap is step 4; later steps (5-9) may or may not have been run
+        # previously.  Preserve the higher step count if present.
+        prev_steps = row["completed_steps"] or 4
+        new_steps = max(4, prev_steps)
+        save_kg_to_db(
+            kg, project_id, chunks,
+            is_complete=(new_steps >= 11),
+            completed_steps=new_steps,
+            total_steps=11,
+            chunk_config_id=chunk_config_id,
+        )
+
+        logger.info(
+            "Rebuilt links for project %d: %d relationships",
+            project_id, len(kg.relationships),
+        )
+        return {
+            "num_nodes": len(kg.nodes),
+            "num_relationships": len(kg.relationships),
+        }
+    finally:
+        clear_progress(project_id)
+
+
+# ---------------------------------------------------------------------------
+# Incremental KG update helpers
+# ---------------------------------------------------------------------------
+
+
+def _diff_chunks(
+    old_chunks: list[str],
+    new_chunks: list[str],
+) -> tuple[list[str], list[int], dict[int, int]]:
+    """Compare old and new chunk lists to identify additions and removals.
+
+    Returns:
+        added_chunks: list of chunk contents that are new
+        removed_old_indices: indices into *old_chunks* that no longer exist
+        old_to_new_map: mapping from old index → new index for surviving chunks
+    """
+    old_hashes: dict[str, list[int]] = {}
+    for i, c in enumerate(old_chunks):
+        h = hashlib.sha256(c.encode("utf-8")).hexdigest()[:16]
+        old_hashes.setdefault(h, []).append(i)
+
+    new_hashes: dict[str, list[int]] = {}
+    for i, c in enumerate(new_chunks):
+        h = hashlib.sha256(c.encode("utf-8")).hexdigest()[:16]
+        new_hashes.setdefault(h, []).append(i)
+
+    # Determine which old indices survive and map to new indices
+    old_to_new_map: dict[int, int] = {}
+    matched_old: set[int] = set()
+    for h, new_indices in new_hashes.items():
+        old_indices = list(old_hashes.get(h, []))
+        for ni in new_indices:
+            if old_indices:
+                oi = old_indices.pop(0)
+                old_to_new_map[oi] = ni
+                matched_old.add(oi)
+
+    removed_old_indices = [i for i in range(len(old_chunks)) if i not in matched_old]
+
+    # Added chunks = new chunks whose hash had no remaining old match
+    matched_new = set(old_to_new_map.values())
+    added_chunks = [new_chunks[i] for i in range(len(new_chunks)) if i not in matched_new]
+
+    return added_chunks, removed_old_indices, old_to_new_map
+
+
+def incremental_update_kg(
+    project_id: int,
+    chunk_config_id: int,
+    overlap_max_nodes: int | None = 500,
+) -> dict:
+    """Incrementally update a cached KG when documents are added or removed.
+
+    Instead of rebuilding all 11 transform steps from scratch, this:
+    1. Loads the existing KG
+    2. Removes nodes for deleted chunks
+    3. Runs per-node transforms only on new chunks
+    4. Merges new nodes into the existing KG
+    5. Re-runs cross-node link transforms on the full graph
+    6. Saves with the updated chunks hash
+
+    Designed to run in a background thread.
+    """
+    import db.init as _db
+    from ragas.run_config import RunConfig
+
+    conn = _db.get_thread_db()
+
+    # Load current chunks from DB
+    chunk_rows = conn.execute(
+        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+        (chunk_config_id,),
+    ).fetchall()
+    new_chunks = [r["content"] for r in chunk_rows]
+    if not new_chunks:
+        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+
+    # Load existing KG
+    row = conn.execute(
+        "SELECT kg_json, chunks_hash, completed_steps FROM knowledge_graphs WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(
+            f"No existing knowledge graph for project {project_id} — use full build instead"
+        )
+
+    set_progress(project_id, {
+        "stage": "kg_diffing_chunks",
+        "kg_building": True,
+    })
+
+    # Reconstruct old chunks from the stored hash by loading from the DB
+    # We need the actual old chunks to diff. The KG stores chunk content in node properties.
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(row["kg_json"])
+        tmp_path = f.name
+    try:
+        kg = KnowledgeGraph.load(tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    # Extract old chunks from KG node properties (preserving order by chunk_id)
+    old_chunk_nodes = []
+    for node in kg.nodes:
+        props = node.properties if hasattr(node, "properties") else {}
+        meta = props.get("document_metadata", {})
+        chunk_id = meta.get("chunk_id")
+        content = props.get("page_content", "")
+        if chunk_id is not None and content:
+            old_chunk_nodes.append((chunk_id, content, node))
+
+    old_chunk_nodes.sort(key=lambda x: x[0])
+    old_chunks = [content for _, content, _ in old_chunk_nodes]
+
+    # Check if chunks actually changed
+    new_hash = _chunks_hash(new_chunks)
+    if new_hash == row["chunks_hash"]:
+        logger.info("Chunks unchanged for project %d — no update needed", project_id)
+        clear_progress(project_id)
+        return {"status": "unchanged", "num_nodes": len(kg.nodes)}
+
+    added_chunks, removed_old_indices, old_to_new_map = _diff_chunks(old_chunks, new_chunks)
+    logger.info(
+        "Incremental KG update for project %d: %d added, %d removed, %d kept",
+        project_id, len(added_chunks), len(removed_old_indices),
+        len(old_to_new_map),
+    )
+
+    if not added_chunks and not removed_old_indices:
+        logger.info("No effective changes detected for project %d", project_id)
+        clear_progress(project_id)
+        return {"status": "unchanged", "num_nodes": len(kg.nodes)}
+
+    try:
+        # --- Step 1: Remove nodes for deleted chunks ---
+        if removed_old_indices:
+            update_progress(project_id, stage="kg_removing_old_nodes")
+            removed_set = set(removed_old_indices)
+            # Find nodes to remove by their chunk_id
+            nodes_to_remove = set()
+            for chunk_id, _, node in old_chunk_nodes:
+                if chunk_id in removed_set:
+                    nodes_to_remove.add(node.id)
+
+            # Also remove any child nodes (e.g. headline-split nodes) that
+            # reference a removed parent.  Walk the node list looking for
+            # nodes whose page_content is a substring of removed content.
+            # (Ragas HeadlineSplitter creates child nodes but doesn't track
+            # parent references in metadata, so we use id membership.)
+            original_count = len(kg.nodes)
+            kg.nodes = [n for n in kg.nodes if n.id not in nodes_to_remove]
+
+            # Remove relationships that reference removed nodes
+            kg.relationships = [
+                r for r in kg.relationships
+                if r.source.id not in nodes_to_remove and r.target.id not in nodes_to_remove
+            ]
+            logger.info(
+                "Removed %d nodes (%d → %d), cleaned relationships",
+                original_count - len(kg.nodes), original_count, len(kg.nodes),
+            )
+
+        # --- Step 2: Re-index chunk_ids on surviving nodes ---
+        update_progress(project_id, stage="kg_reindexing_nodes")
+        for chunk_id, _, node in old_chunk_nodes:
+            if chunk_id in old_to_new_map:
+                props = node.properties if hasattr(node, "properties") else {}
+                meta = props.get("document_metadata", {})
+                meta["chunk_id"] = old_to_new_map[chunk_id]
+                props["document_metadata"] = meta
+
+        # --- Step 3: Process new chunks through per-node transforms ---
+        if added_chunks:
+            update_progress(project_id, stage="kg_processing_new_chunks")
+            llm, embeddings, _ = _build_llm_and_embeddings()
+
+            # Create nodes for new chunks
+            # Assign chunk_ids based on their position in new_chunks
+            matched_new_indices = set(old_to_new_map.values())
+            new_chunk_indices = [i for i in range(len(new_chunks)) if i not in matched_new_indices]
+
+            new_kg = KnowledgeGraph()
+            for idx, chunk in zip(new_chunk_indices, added_chunks):
+                new_kg.nodes.append(
+                    Node(
+                        type=NodeType.DOCUMENT,
+                        properties={
+                            "page_content": chunk,
+                            "document_metadata": {"chunk_id": idx},
+                        },
+                    )
+                )
+
+            # Run per-node transforms on new nodes only
+            per_node_transforms = [
+                ("kg_extracting_headlines", HeadlinesExtractor(llm=llm)),
+                ("kg_splitting_headlines", HeadlineSplitter(min_tokens=100, max_tokens=500)),
+                ("kg_extracting_keyphrases", KeyphrasesExtractor(llm=llm, property_name="keyphrases", max_num=10)),
+                ("kg_extracting_summaries", SummaryExtractor(llm=llm)),
+                ("kg_filtering_nodes", CustomNodeFilter(llm=llm)),
+                ("kg_embedding_summaries", EmbeddingExtractor(
+                    embedding_model=embeddings,
+                    property_name="summary_embedding",
+                    embed_property_name="summary",
+                )),
+                ("kg_extracting_themes", ThemesExtractor(llm=llm)),
+                ("kg_extracting_entities", NERExtractor(llm=llm)),
+            ]
+
+            for stage_name, transform in per_node_transforms:
+                update_progress(project_id, stage=f"incremental_{stage_name}")
+                update_heartbeat(project_id)
+                logger.info("Incremental transform on new nodes: %s (%d nodes)", stage_name, len(new_kg.nodes))
+                _apply_transform_batched(
+                    new_kg, transform,
+                    project_id=project_id,
+                    stage_name=stage_name,
+                    overlap_max_nodes=overlap_max_nodes,
+                )
+
+            # Merge new nodes into existing KG
+            logger.info("Merging %d new nodes into existing KG (%d nodes)", len(new_kg.nodes), len(kg.nodes))
+            kg.nodes.extend(new_kg.nodes)
+
+        # --- Step 4: Re-run cross-node link transforms ---
+        update_progress(project_id, stage="kg_rebuilding_links")
+        update_heartbeat(project_id)
+
+        # Strip all existing relationships — they need to be rebuilt
+        # since the node set changed
+        old_rel_count = len(kg.relationships)
+        kg.relationships.clear()
+        logger.info("Cleared %d old relationships, rebuilding links for %d nodes", old_rel_count, len(kg.nodes))
+
+        link_transforms = [
+            ("kg_building_overlap", OverlapScoreBuilder(
+                property_name="keyphrases",
+                new_property_name="overlap_score",
+                threshold=0.1,
+                distance_threshold=0.9,
+            )),
+            ("kg_building_summary_similarity", CosineSimilarityBuilder(
+                property_name="summary_embedding",
+                new_property_name="summary_similarity",
+                threshold=0.5,
+            )),
+            ("kg_building_entity_overlap", OverlapScoreBuilder(
+                property_name="entities",
+                new_property_name="entity_overlap",
+                threshold=0.01,
+            )),
+        ]
+
+        for stage_name, transform in link_transforms:
+            update_progress(project_id, stage=stage_name)
+            update_heartbeat(project_id)
+            logger.info("Rebuilding links: %s", stage_name)
+            _apply_transform_batched(
+                kg, transform,
+                project_id=project_id,
+                stage_name=stage_name,
+                overlap_max_nodes=overlap_max_nodes,
+            )
+
+        # --- Step 5: Save ---
+        save_kg_to_db(
+            kg, project_id, new_chunks,
+            is_complete=True,
+            completed_steps=11,
+            total_steps=11,
+            chunk_config_id=chunk_config_id,
+        )
+
+        logger.info(
+            "Incremental KG update complete for project %d: %d nodes, %d relationships",
+            project_id, len(kg.nodes), len(kg.relationships),
+        )
+        return {
+            "status": "updated",
+            "num_nodes": len(kg.nodes),
+            "num_relationships": len(kg.relationships),
+            "chunks_added": len(added_chunks),
+            "chunks_removed": len(removed_old_indices),
+        }
+    finally:
+        clear_progress(project_id)
 
 
 def generate_personas_fast(
@@ -402,7 +1097,7 @@ def generate_personas_fast(
 
     # --- Step 1: Extract topics from all chunks in batches ---
     # gpt-4o-mini has a 128k context window; stay well under with ~80k chars per batch
-    MAX_CHARS_PER_BATCH = 80_000
+    MAX_CHARS_PER_BATCH = PERSONA_MAX_CHARS_PER_BATCH
     batches: list[str] = []
     current_batch: list[str] = []
     current_len = 0
@@ -420,8 +1115,8 @@ def generate_personas_fast(
     topic_summaries: list[str] = []
     for batch_text in batches:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0,
+            model=DEFAULT_EVAL_MODEL,
+            temperature=TESTGEN_TOPIC_TEMPERATURE,
             messages=[
                 {
                     "role": "system",
@@ -445,8 +1140,8 @@ def generate_personas_fast(
 
     # --- Step 2: Generate personas from the combined topic overview ---
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.7,
+        model=DEFAULT_EVAL_MODEL,
+        temperature=TESTGEN_PERSONA_TEMPERATURE,
         messages=[
             {
                 "role": "system",
@@ -505,6 +1200,57 @@ def generate_personas_fast(
     return results
 
 
+def _enrich_with_question_styles(personas: list[Persona]) -> list[dict]:
+    """Add question_style to Ragas personas via a single LLM call."""
+    client = OpenAI()
+    persona_list = _json.dumps([
+        {"name": p.name, "role_description": p.role_description}
+        for p in personas
+    ])
+    response = client.chat.completions.create(
+        model=DEFAULT_EVAL_MODEL,
+        temperature=TESTGEN_PERSONA_TEMPERATURE,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Given a list of test personas, add a 'question_style' to each "
+                    "that describes HOW they phrase questions (e.g. formal "
+                    "technical queries, casual how-do-I questions, detailed "
+                    "scenario-based questions, brief keyword searches, etc.). "
+                    "Return ONLY a JSON array with 'name', 'role_description', "
+                    "and 'question_style' keys. No markdown, no explanation."
+                ),
+            },
+            {"role": "user", "content": persona_list},
+        ],
+    )
+    text = response.choices[0].message.content.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    try:
+        parsed = _json.loads(text)
+        if isinstance(parsed, list):
+            return [
+                {
+                    "name": p.get("name", ""),
+                    "role_description": p.get("role_description", ""),
+                    "question_style": p.get("question_style", ""),
+                }
+                for p in parsed
+            ]
+    except _json.JSONDecodeError:
+        logger.error("Failed to parse question styles from LLM: %s", text[:200])
+    # Fallback: return without styles
+    return [
+        {"name": p.name, "role_description": p.role_description, "question_style": ""}
+        for p in personas
+    ]
+
+
 def _merge_persona_fields(p: dict) -> Persona:
     """Build a ragas Persona, folding question_style into role_description."""
     desc = p["role_description"]
@@ -519,6 +1265,7 @@ def generate_personas(
     num_personas: int = 3,
     custom_personas: list[dict] | None = None,
     fast: bool = False,
+    project_id: int | None = None,
 ) -> list[Persona]:
     """Generate personas from document chunks, or use custom-defined ones."""
     if custom_personas:
@@ -529,8 +1276,21 @@ def generate_personas(
         return [_merge_persona_fields(p) for p in raw]
 
     llm, embeddings, _ = _build_llm_and_embeddings()
-    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings)
-    personas = generate_personas_from_kg(kg=kg, llm=llm, num_personas=num_personas)
+    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id)
+
+    # Ragas generate_personas_from_kg requires summary + summary_embedding
+    # properties that our 4-step KG pipeline doesn't produce.  Check if the
+    # KG has them; if not, fall back to the fast LLM-based approach.
+    has_summaries = any(
+        n.properties.get("summary_embedding") is not None
+        for n in kg.nodes
+    )
+    if has_summaries:
+        personas = generate_personas_from_kg(kg=kg, llm=llm, num_personas=num_personas)
+    else:
+        logger.info("KG nodes lack summary_embedding — using fast persona generation")
+        raw = generate_personas_fast(chunks, num_personas=num_personas)
+        return [_merge_persona_fields(p) for p in raw]
     return personas
 
 
@@ -569,11 +1329,12 @@ def _worker_generate_from_kg(
     project_id: int | None = None,
 ) -> list[dict]:
     """Worker: generate questions from a shared KnowledgeGraph."""
-    llm, _, _ = _build_llm_and_embeddings()
+    llm, embedding_model, _ = _build_llm_and_embeddings()
     generator = TestsetGenerator(
         knowledge_graph=kg,
         persona_list=personas,
         llm=llm,
+        embedding_model=embedding_model,
     )
     qd = build_query_distribution(query_distribution, llm=llm) if query_distribution else None
 
@@ -689,7 +1450,16 @@ def generate_testset_with_personas(
     if custom_personas:
         personas = [_merge_persona_fields(p) for p in custom_personas]
     else:
-        personas = generate_personas_from_kg(kg=kg, llm=llm, num_personas=num_personas)
+        has_summaries = any(
+            n.properties.get("summary_embedding") is not None
+            for n in kg.nodes
+        )
+        if has_summaries:
+            personas = generate_personas_from_kg(kg=kg, llm=llm, num_personas=num_personas)
+        else:
+            logger.info("KG nodes lack summary_embedding — using fast persona generation")
+            raw = generate_personas_fast(chunks, num_personas=num_personas)
+            personas = [_merge_persona_fields(p) for p in raw]
 
     if project_id is not None:
         update_progress(project_id, stage="generating_questions")
@@ -808,12 +1578,12 @@ def _generate_category_questions_via_llm(
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=DEFAULT_EVAL_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.8,
+            temperature=TESTGEN_QUESTION_TEMPERATURE,
             max_tokens=4096,
             response_format={"type": "json_object"},
         )

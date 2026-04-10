@@ -4,7 +4,7 @@ import ProjectSelector from "../components/ProjectSelector";
 import ExternalBaselineUpload from "../components/setup/ExternalBaselineUpload";
 import BotConnectorConfig from "../components/setup/BotConnectorConfig";
 import CustomMetricBuilder from "../components/setup/CustomMetricBuilder";
-import BaselinePreview from "../components/setup/BaselinePreview";
+import CsvUploadsList from "../components/setup/CsvUploadsList";
 
 export default function SetupPage() {
   const { project } = useProject();
@@ -62,9 +62,9 @@ export default function SetupPage() {
           <CustomMetricBuilder projectId={project.id} />
         </div>
 
-        {/* Right column: Baseline Preview */}
+        {/* Right column: Uploaded CSVs */}
         <div className="lg:col-span-3">
-          <BaselinePreview projectId={project.id} refreshKey={refreshKey} />
+          <CsvUploadsList projectId={project.id} refreshKey={refreshKey} />
         </div>
       </div>
     </div>
