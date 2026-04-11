@@ -1376,7 +1376,7 @@ async def stream_knowledge_graph_data(project_id: int):
     async def _stream():
         from ragas.testset.graph import KnowledgeGraph
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
             f.write(kg_json_text)
             tmp_path = f.name
         try:

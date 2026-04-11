@@ -94,25 +94,48 @@ class GleanBotConnector:
 
 
 def _extract_answer(data: dict[str, Any]) -> str:
-    """Pull the answer text from Glean's response fragments."""
-    fragments = (
-        data.get("response", {}).get("fragments")
-        or data.get("messages", [{}])[-1:][0].get("fragments")
-        or []
-    )
-    parts = [f.get("text", "") for f in fragments if f.get("text")]
-    if parts:
-        return "\n".join(parts)
+    """Pull the answer text from Glean's response fragments.
 
-    # Fallback: some Glean deployments nest under chat_result
+    Handles both standard chat responses (response.fragments) and
+    agent responses (messages[] with messageType=CONTENT).
+    """
+    # 1. Standard chat: response.fragments
+    fragments = data.get("response", {}).get("fragments")
+    if fragments:
+        parts = [f.get("text", "") for f in fragments if f.get("text")]
+        if parts:
+            return "\n".join(parts)
+
+    # 2. Agent response: find CONTENT message(s)
+    messages = data.get("messages", [])
+    if messages:
+        content_parts = []
+        for msg in messages:
+            if msg.get("messageType") == "CONTENT":
+                for frag in msg.get("fragments", []):
+                    text = frag.get("text", "")
+                    if text:
+                        content_parts.append(text)
+        if content_parts:
+            return "\n".join(content_parts)
+
+        # Fallback: last message's text fragments
+        last_frags = messages[-1].get("fragments", [])
+        parts = [f.get("text", "") for f in last_frags if f.get("text")]
+        if parts:
+            return "\n".join(parts)
+
+    # 3. Fallback: chat_result.answer
     return data.get("chat_result", {}).get("answer", "")
 
 
 def _extract_citations(data: dict[str, Any]) -> list[Citation]:
     """Extract citations from Glean response.
 
-    Glean can return sources in several locations depending on the
-    deployment version; we check the most common ones.
+    Handles multiple response formats:
+    1. chat_result.sources (newer standard deployments)
+    2. response.fragments with inline citations (standard chat)
+    3. messages[].fragments with structuredResults (agent responses)
     """
     citations: list[Citation] = []
 
@@ -128,7 +151,7 @@ def _extract_citations(data: dict[str, Any]) -> list[Citation]:
             )
         )
 
-    # 2. Inline fragment citations
+    # 2. Inline fragment citations (standard chat)
     fragments = data.get("response", {}).get("fragments", [])
     for frag in fragments:
         cit = frag.get("citation")
@@ -145,7 +168,28 @@ def _extract_citations(data: dict[str, Any]) -> list[Citation]:
             )
         )
 
-    # 3. Deduplicate by URL (keep first occurrence)
+    # 3. Agent response: structuredResults in messages
+    for msg in data.get("messages", []):
+        for frag in msg.get("fragments", []):
+            for sr in frag.get("structuredResults", []):
+                doc = sr.get("document", {})
+                # Extract snippet from snippets array or document body
+                snippets = sr.get("snippets", [])
+                snippet_text = snippets[0].get("snippet", "") if snippets else ""
+                # If no snippet, use document title as context
+                if not snippet_text:
+                    snippet_text = doc.get("title", "")
+                citations.append(
+                    Citation(
+                        title=doc.get("title"),
+                        url=doc.get("url"),
+                        snippet=snippet_text,
+                        datasource=doc.get("datasource"),
+                        container=doc.get("container"),
+                    )
+                )
+
+    # 4. Deduplicate by URL (keep first occurrence)
     seen_urls: set[str | None] = set()
     unique: list[Citation] = []
     for c in citations:
