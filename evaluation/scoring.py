@@ -138,6 +138,11 @@ def setup_scorers(
     embeddings = embedding_factory(
         "openai", model=DEFAULT_EVAL_EMBEDDING, client=sync_client
     )
+    # Some metrics (answer_relevancy) call aembed_text() which needs an async
+    # embedding wrapper.  Build one so those metrics can use it.
+    async_embeddings = embedding_factory(
+        "openai", model=DEFAULT_EVAL_EMBEDDING, client=async_client
+    )
 
     scorers = {}
     for m in selected:
@@ -146,7 +151,7 @@ def setup_scorers(
         elif m in _LLM_ONLY:
             scorers[m] = _METRIC_MODULES[m].create_scorer(llm)
         elif m in _LLM_AND_EMBED:
-            scorers[m] = _METRIC_MODULES[m].create_scorer(llm, embeddings)
+            scorers[m] = _METRIC_MODULES[m].create_scorer(llm, async_embeddings)
         elif m in _EMBED_ONLY:
             scorers[m] = _METRIC_MODULES[m].create_scorer(embeddings)
         elif m in _NO_DEPS:

@@ -241,9 +241,8 @@ async def close_openai_clients() -> None:
 
 
 def _build_llm_and_embeddings():
-    async_client = _get_async_openai()
-    llm = llm_factory(DEFAULT_EVAL_MODEL, client=async_client, max_tokens=DEFAULT_EVAL_MAX_TOKENS)
     sync_client = _get_sync_openai()
+    llm = llm_factory(DEFAULT_EVAL_MODEL, client=sync_client, max_tokens=DEFAULT_EVAL_MAX_TOKENS)
     embeddings = embedding_factory(
         "openai", model=DEFAULT_EVAL_EMBEDDING, client=sync_client
     )
@@ -320,7 +319,7 @@ def load_cached_kg(
         "complete" if row["is_complete"] else f"partial (step {row['completed_steps']})",
         project_id,
     )
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
         f.write(row["kg_json"])
         tmp_path = f.name
     try:
@@ -886,7 +885,7 @@ def incremental_update_kg(
 
     # Reconstruct old chunks from the stored hash by loading from the DB
     # We need the actual old chunks to diff. The KG stores chunk content in node properties.
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
         f.write(row["kg_json"])
         tmp_path = f.name
     try:
