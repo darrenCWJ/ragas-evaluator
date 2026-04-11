@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import logging
+import math
 import sqlite3
 from datetime import datetime
 
@@ -114,6 +115,8 @@ def _build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
         "system_prompt": retrieval_config.get("system_prompt"),
         "response_mode": retrieval_config.get("response_mode", "single_shot"),
         "max_steps": retrieval_config.get("max_steps", 3),
+        "reranker_model": retrieval_config.get("reranker_model"),
+        "reranker_top_k": retrieval_config.get("reranker_top_k"),
     }
 
 
@@ -122,6 +125,17 @@ def _sanitize_csv_value(val: str) -> str:
     if val and isinstance(val, str) and len(val) > 0 and val[0] in ("=", "+", "-", "@"):
         return "'" + val
     return val
+
+
+def _sanitize_nan(obj):
+    """Replace NaN/Inf floats with None so JSON serialization produces valid output."""
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
 
 
 def _compute_aggregates(conn, exp_id: int) -> dict:
@@ -133,7 +147,7 @@ def _compute_aggregates(conn, exp_id: int) -> dict:
     totals: dict[str, float] = {}
     counts: dict[str, int] = {}
     for rr in result_rows:
-        metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
         for metric_name, value in metrics.items():
             if value is not None:
                 totals[metric_name] = totals.get(metric_name, 0.0) + value
@@ -199,7 +213,7 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
         # CSV connectors: auto-create a test set from external_baselines
         if bot_config["connector_type"] == "csv" and test_set_id is None:
             baselines = conn.execute(
-                "SELECT question, answer, sources FROM external_baselines WHERE bot_config_id = ?",
+                "SELECT question, answer, reference_answer, sources FROM external_baselines WHERE bot_config_id = ?",
                 (req.bot_config_id,),
             ).fetchall()
             if not baselines:
@@ -220,12 +234,14 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
             test_set_id = ts_cursor.lastrowid
 
             for bl in baselines:
+                # reference_answer = ground truth; falls back to bot answer for backward compat
+                ref_ans = bl["reference_answer"] if bl["reference_answer"] else bl["answer"]
                 ref_ctx = json.dumps([bl["sources"]]) if bl["sources"] else "[]"
                 conn.execute(
                     """INSERT INTO test_questions
                        (test_set_id, question, reference_answer, reference_contexts, question_type, status)
                        VALUES (?, ?, ?, ?, 'csv_auto', 'approved')""",
-                    (test_set_id, bl["question"], bl["answer"], ref_ctx),
+                    (test_set_id, bl["question"], ref_ans, ref_ctx),
                 )
             conn.commit()
         elif test_set_id is None:
@@ -532,7 +548,7 @@ async def compare_experiments(
 
         questions_map[qid]["experiments"][r["experiment_id"]] = {
             "response": r["response"],
-            "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else {},
+            "metrics": _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {},
             "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
             "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
         }
@@ -583,7 +599,7 @@ async def get_experiment_history(project_id: int):
             metric_totals: dict[str, float] = {}
             metric_counts: dict[str, int] = {}
             for rr in result_rows:
-                metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+                metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
                 for metric_name, value in metrics.items():
                     if value is not None:
                         metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
@@ -710,7 +726,7 @@ async def get_experiment_results(project_id: int, experiment_id: int):
             "persona": r["persona"],
             "response": r["response"],
             "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
-            "metrics": json.loads(r["metrics_json"]) if r["metrics_json"] else {},
+            "metrics": _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {},
             "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
             "created_at": r["created_at"],
         })
@@ -878,12 +894,10 @@ async def run_experiment(
             # Filter selected_metrics to only built-in ones for setup_scorers
             builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
 
-            # Setup scorers — run in executor to avoid blocking the event loop
+            # Setup scorers — must run on the main event loop (not in executor)
+            # because AsyncOpenAI client binds to the current loop
             logger.info("Experiment %d: setting up scorers for %s", experiment_id, builtin_selected)
-            loop = asyncio.get_event_loop()
-            scorers, custom_scorers, llm = await loop.run_in_executor(
-                None, lambda: setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
-            )
+            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
             logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
 
             # Transition from setup → running
@@ -900,6 +914,7 @@ async def run_experiment(
             is_csv = False
             connector = None
             virtual_config = None
+            csv_answer_lookup: dict[str, dict] = {}
 
             if use_bot:
                 bot_cfg = run_conn.execute(
@@ -913,7 +928,18 @@ async def run_experiment(
                     }
                     return
                 is_csv = bot_cfg["connector_type"] == "csv"
-                if not is_csv:
+                if is_csv:
+                    # Pre-load bot answers from external_baselines for direct lookup
+                    bl_rows = run_conn.execute(
+                        "SELECT question, answer, sources FROM external_baselines WHERE bot_config_id = ?",
+                        (experiment["bot_config_id"],),
+                    ).fetchall()
+                    for bl in bl_rows:
+                        csv_answer_lookup[bl["question"].strip().lower()] = {
+                            "answer": bl["answer"],
+                            "sources": bl["sources"] or "",
+                        }
+                else:
                     bot_config_dict = json.loads(bot_cfg["config_json"]) if bot_cfg["config_json"] else {}
                     connector = create_connector(
                         bot_cfg["connector_type"],
@@ -951,14 +977,20 @@ async def run_experiment(
 
                     try:
                         if is_csv:
-                            # CSV data is already in the test question row —
-                            # skip querying and use pre-loaded answers/sources.
+                            # Look up the bot's actual answer from external_baselines;
+                            # reference_answer (ground truth) comes from test_questions.
                             logger.info("CSV experiment %d: processing q%d '%s'", experiment_id, qid, question_text[:60])
-                            generated_answer = (
-                                q_row["user_edited_answer"]
-                                if q_row["user_edited_answer"]
-                                else q_row["reference_answer"]
-                            ) or ""
+                            csv_match = csv_answer_lookup.get(question_text.strip().lower())
+                            if csv_match:
+                                generated_answer = csv_match["answer"]
+                                source_text = csv_match["sources"]
+                            else:
+                                generated_answer = (
+                                    q_row["user_edited_answer"]
+                                    if q_row["user_edited_answer"]
+                                    else q_row["reference_answer"]
+                                ) or ""
+                                source_text = ""
                             raw_contexts = json.loads(q_row["reference_contexts"]) if q_row["reference_contexts"] else []
                             full_context_dicts = [
                                 {"content": c, "source": "csv_upload"} if isinstance(c, str)
@@ -1117,7 +1149,7 @@ async def run_experiment(
                             experiment_id, qid,
                             result["generated_answer"],
                             json.dumps(result["full_context_dicts"]),
-                            json.dumps(result["metrics_result"]),
+                            json.dumps(_sanitize_nan(result["metrics_result"])),
                             json.dumps(result["usage_info"]),
                         ),
                     )
@@ -1189,7 +1221,8 @@ async def run_experiment(
                 }
 
         except Exception as e:
-            logger.error("Experiment %d fatal error: %s", experiment_id, e)
+            import traceback
+            logger.error("Experiment %d fatal error: %s\n%s", experiment_id, e, traceback.format_exc())
             _experiment_progress[experiment_id] = {
                 "phase": "error", "current": 0, "total": 0,
                 "question": "", "error": str(e), "result_count": 0,
@@ -1223,73 +1256,12 @@ async def run_experiment(
     task = asyncio.create_task(_run_background())
     _background_tasks[experiment_id] = task
 
-    # Return SSE stream that observes the background task's progress
-    # Fetch experiment name and test set name for the started event
-    exp_meta_conn = db.init.get_db()
-    exp_meta_row = exp_meta_conn.execute(
-        "SELECT e.name as exp_name, e.model, ts.name as test_set_name "
-        "FROM experiments e JOIN test_sets ts ON e.test_set_id = ts.id WHERE e.id = ?",
-        (experiment_id,),
-    ).fetchone()
-    exp_name = exp_meta_row["exp_name"] if exp_meta_row else ""
-    exp_model = exp_meta_row["model"] if exp_meta_row else ""
-    exp_test_set = exp_meta_row["test_set_name"] if exp_meta_row else ""
-
-    async def _progress_stream():
-        prev_current = -1
-        prev_items_sent = 0
-        prev_scoring = []
-        sent_started = False
-        while True:
-            progress = _experiment_progress.get(experiment_id)
-            if progress is None:
-                break
-
-            phase = progress["phase"]
-
-            if phase == "starting":
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "setup":
-                if not sent_started and progress["total"] > 0:
-                    sent_started = True
-                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': progress['total'], 'metrics': selected_metrics, 'experiment_name': exp_name, 'model': exp_model, 'test_set_name': exp_test_set})}\n\n"
-                yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': progress['total'], 'question': progress.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "running":
-                if not sent_started and progress["total"] > 0:
-                    sent_started = True
-                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': progress['total'], 'metrics': selected_metrics, 'experiment_name': exp_name, 'model': exp_model, 'test_set_name': exp_test_set})}\n\n"
-
-                completed_items = progress.get("completed_items", [])
-                new_items = completed_items[prev_items_sent:]
-                prev_items_sent = len(completed_items)
-
-                # Convert in_flight_details dict to list for JSON serialisation
-                details_list = list(progress.get("in_flight_details", {}).values())
-
-                yield f"event: progress\ndata: {json.dumps({'current': progress['current'], 'total': progress['total'], 'question': progress['question'], 'error': progress.get('error'), 'in_flight': progress.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': progress.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "completed":
-                yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': progress['result_count']})}\n\n"
-                break
-
-            if phase == "cancelled":
-                yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': progress['result_count']})}\n\n"
-                break
-
-            if phase == "error":
-                yield f"event: error\ndata: {json.dumps({'message': progress.get('error', 'Unknown error')})}\n\n"
-                break
-
-            await asyncio.sleep(0.5)
-
-    return StreamingResponse(_progress_stream(), media_type="text/event-stream")
+    # Return JSON immediately — the frontend should use GET /progress to observe
+    return {
+        "experiment_id": experiment_id,
+        "status": "started",
+        "metrics": selected_metrics,
+    }
 
 
 # --- Progress observer (reconnectable SSE) ---
@@ -1316,10 +1288,22 @@ async def experiment_progress(project_id: int, experiment_id: int):
             raise HTTPException(status_code=409, detail=f"Experiment is {exp['status']}, not running")
         raise HTTPException(status_code=409, detail="No active task found for this experiment")
 
+    # Fetch experiment metadata for the started event
+    obs_conn = db.init.get_db()
+    obs_meta = obs_conn.execute(
+        "SELECT e.name as exp_name, e.model, ts.name as test_set_name "
+        "FROM experiments e JOIN test_sets ts ON e.test_set_id = ts.id WHERE e.id = ?",
+        (experiment_id,),
+    ).fetchone()
+    obs_exp_name = obs_meta["exp_name"] if obs_meta else ""
+    obs_model = obs_meta["model"] if obs_meta else ""
+    obs_test_set = obs_meta["test_set_name"] if obs_meta else ""
+
     async def _observe():
         prev_current = -1
         prev_items_sent = 0
         prev_scoring = []
+        sent_started = False
         while True:
             prog = _experiment_progress.get(experiment_id)
             if prog is None:
@@ -1331,7 +1315,19 @@ async def experiment_progress(project_id: int, experiment_id: int):
                 await asyncio.sleep(0.5)
                 continue
 
+            if phase == "setup":
+                if not sent_started and prog["total"] > 0:
+                    sent_started = True
+                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+                yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog['total'], 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
+                await asyncio.sleep(0.5)
+                continue
+
             if phase == "running":
+                if not sent_started and prog["total"] > 0:
+                    sent_started = True
+                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+
                 completed_items = prog.get("completed_items", [])
                 new_items = completed_items[prev_items_sent:]
                 prev_items_sent = len(completed_items)
@@ -1568,8 +1564,8 @@ async def get_experiment_delta(project_id: int, experiment_id: int):
     for qid in all_q_ids:
         b_row = baseline_by_q.get(qid)
         i_row = iteration_by_q.get(qid)
-        b_metrics = json.loads(b_row["metrics_json"]) if b_row and b_row["metrics_json"] else {}
-        i_metrics = json.loads(i_row["metrics_json"]) if i_row and i_row["metrics_json"] else {}
+        b_metrics = _sanitize_nan(json.loads(b_row["metrics_json"])) if b_row and b_row["metrics_json"] else {}
+        i_metrics = _sanitize_nan(json.loads(i_row["metrics_json"])) if i_row and i_row["metrics_json"] else {}
         question_text = b_row["question"] if b_row else None
 
         q_metrics: dict[str, dict] = {}
@@ -1659,7 +1655,7 @@ async def export_experiment(
     parsed_rows: list[dict] = []
     for r in rows:
         ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
-        metrics = json.loads(r["metrics_json"]) if r["metrics_json"] else {}
+        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
         all_metric_names.update(metrics.keys())
         parsed_rows.append({
             "question": r["question"],

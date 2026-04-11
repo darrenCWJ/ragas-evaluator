@@ -132,6 +132,7 @@ export interface ExternalBaseline {
   project_id: number;
   question: string;
   answer: string;
+  reference_answer: string;
   sources: string;
   source_type: string;
   created_at: string;
@@ -270,6 +271,7 @@ export async function uploadBaselineCsv(
   columnMapping: {
     questionCol: string;
     answerCol: string;
+    referenceAnswerCol?: string;
     contextCol?: string;
     configName?: string;
   },
@@ -278,6 +280,7 @@ export async function uploadBaselineCsv(
   form.append("file", file);
   form.append("question_col", columnMapping.questionCol);
   form.append("answer_col", columnMapping.answerCol);
+  if (columnMapping.referenceAnswerCol) form.append("reference_answer_col", columnMapping.referenceAnswerCol);
   if (columnMapping.contextCol) form.append("context_col", columnMapping.contextCol);
   if (columnMapping.configName) form.append("config_name", columnMapping.configName);
   return formRequest<CsvUploadResult>(`/api/projects/${projectId}/baselines/upload-csv`, form);
@@ -1019,11 +1022,11 @@ export function runExperimentSSE(
   concurrency?: number,
 ): ExperimentSSEHandle {
   const controller = new AbortController();
-  let lastProgress: SSEProgressEvent | null = null;
 
   (async () => {
     try {
-      const res = await fetch(
+      // Fire the run endpoint (returns JSON immediately, starts background task)
+      const runRes = await fetch(
         `/api/projects/${projectId}/experiments/${experimentId}/run`,
         {
           method: "POST",
@@ -1033,74 +1036,31 @@ export function runExperimentSSE(
         },
       );
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "Unknown error");
-        callbacks.onError?.({ message: `${res.status}: ${body}` });
+      if (!runRes.ok) {
+        const body = await runRes.text().catch(() => "Unknown error");
+        callbacks.onError?.({ message: `${runRes.status}: ${body}` });
         return;
       }
 
-      const reader = res.body?.getReader();
-      if (!reader) {
-        callbacks.onError?.({ message: "No response stream" });
-        return;
-      }
+      const runData = await runRes.json();
 
-      const decoder = new TextDecoder();
-      let buffer = "";
+      // Emit a synthetic "started" event from the run response
+      callbacks.onStarted?.({
+        experiment_id: runData.experiment_id,
+        total_questions: 0,
+        metrics: runData.metrics ?? [],
+        experiment_name: "",
+        model: "",
+        test_set_name: "",
+      });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Split on double newline (SSE event boundary)
-        const parts = buffer.split("\n\n");
-        // Keep the last part (may be incomplete)
-        buffer = parts.pop() ?? "";
-
-        for (const part of parts) {
-          if (!part.trim()) continue;
-
-          let eventType = "message";
-          let dataStr = "";
-
-          for (const line of part.split("\n")) {
-            if (line.startsWith("event:")) {
-              eventType = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              dataStr = line.slice(5).trim();
-            }
-          }
-
-          if (!dataStr) continue;
-
-          try {
-            const data = JSON.parse(dataStr);
-
-            switch (eventType) {
-              case "started":
-                callbacks.onStarted?.(data as SSEStartedEvent);
-                break;
-              case "progress":
-                lastProgress = data as SSEProgressEvent;
-                callbacks.onProgress?.(lastProgress);
-                break;
-              case "completed":
-                callbacks.onCompleted?.(data as SSECompletedEvent);
-                break;
-              case "error":
-                callbacks.onError?.(data as SSEErrorEvent);
-                break;
-            }
-          } catch {
-            // Skip malformed JSON chunks
-          }
-        }
-      }
+      // Now observe progress via the SSE progress endpoint
+      const handle = observeExperimentProgress(projectId, experimentId, callbacks);
+      // Wire abort through to the progress observer
+      controller.signal.addEventListener("abort", () => handle.abort());
     } catch (err) {
       if ((err as DOMException).name === "AbortError") return;
-      callbacks.onConnectionError?.(err as Error, lastProgress);
+      callbacks.onConnectionError?.(err as Error, null);
     }
   })();
 
@@ -1121,14 +1081,21 @@ export function observeExperimentProgress(
 
   (async () => {
     try {
-      const res = await fetch(
-        `/api/projects/${projectId}/experiments/${experimentId}/progress`,
-        { signal: controller.signal },
-      );
+      // Retry connection for up to 5s — the background task may not have
+      // registered in the progress dict yet when called right after /run
+      let res: Response | null = null;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        res = await fetch(
+          `/api/projects/${projectId}/experiments/${experimentId}/progress`,
+          { signal: controller.signal },
+        );
+        if (res.ok || res.status !== 409) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "Unknown error");
-        callbacks.onError?.({ message: `${res.status}: ${body}` });
+      if (!res || !res.ok) {
+        const body = await res?.text().catch(() => "Unknown error") ?? "No response";
+        callbacks.onError?.({ message: `${res?.status}: ${body}` });
         return;
       }
 
@@ -1450,6 +1417,7 @@ export interface BotConfigBaselinesResult {
     id: number;
     question: string;
     answer: string;
+    reference_answer: string;
     sources: string;
     created_at: string;
   }[];

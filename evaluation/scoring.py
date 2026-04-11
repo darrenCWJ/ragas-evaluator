@@ -7,7 +7,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 # Ensure .env is loaded even when the app entry point is not main.py
 if not os.environ.get("OPENAI_API_KEY"):
@@ -132,10 +132,11 @@ def setup_scorers(
     selected = metrics or ALL_METRICS
     from config import DEFAULT_EVAL_MODEL, DEFAULT_EVAL_EMBEDDING, DEFAULT_EVAL_MAX_TOKENS
 
-    client = AsyncOpenAI()
-    llm = llm_factory(DEFAULT_EVAL_MODEL, client=client, max_tokens=DEFAULT_EVAL_MAX_TOKENS)
+    async_client = AsyncOpenAI()
+    sync_client = OpenAI()
+    llm = llm_factory(DEFAULT_EVAL_MODEL, client=async_client, max_tokens=DEFAULT_EVAL_MAX_TOKENS)
     embeddings = embedding_factory(
-        "openai", model=DEFAULT_EVAL_EMBEDDING, client=client
+        "openai", model=DEFAULT_EVAL_EMBEDDING, client=sync_client
     )
 
     scorers = {}
@@ -263,14 +264,19 @@ async def _score_builtin(
             coro = None
 
         if coro is not None:
-            val = await asyncio.wait_for(coro, timeout=120.0)
+            from config import METRIC_SCORING_TIMEOUT
+            # Yield to the event loop so SSE progress and health checks
+            # remain responsive while metrics are being scored.
+            await asyncio.sleep(0)
+            val = await asyncio.wait_for(coro, timeout=METRIC_SCORING_TIMEOUT)
         else:
             val = None
         if on_done:
             on_done(name)
         return name, val
     except asyncio.TimeoutError:
-        logger.warning("Metric %s timed out after 120s", name)
+        from config import METRIC_SCORING_TIMEOUT
+        logger.warning("Metric %s timed out after %.0fs", name, METRIC_SCORING_TIMEOUT)
         if on_done:
             on_done(name)
         return name, None

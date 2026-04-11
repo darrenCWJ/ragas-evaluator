@@ -165,10 +165,18 @@ async def upload_baseline_csv(
     file: UploadFile = File(...),
     question_col: str = Form(...),
     answer_col: str = Form(...),
+    reference_answer_col: str = Form(""),
     context_col: str = Form(""),
     config_name: str = Form(""),
 ):
-    """Upload CSV with user-specified column mapping. Creates a bot_config (type=csv)."""
+    """Upload CSV with user-specified column mapping. Creates a bot_config (type=csv).
+
+    Columns:
+      - question_col: the test question (required)
+      - answer_col: the bot's actual answer (required)
+      - reference_answer_col: the expected/ground-truth answer (optional — defaults to answer_col)
+      - context_col: source data / context (optional)
+    """
     conn = db.init.get_db()
     project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
@@ -185,16 +193,20 @@ async def upload_baseline_csv(
         raise HTTPException(status_code=400, detail=f"Question column '{question_col}' not found in CSV headers")
     if answer_col not in headers:
         raise HTTPException(status_code=400, detail=f"Answer column '{answer_col}' not found in CSV headers")
+    if reference_answer_col and reference_answer_col not in headers:
+        raise HTTPException(status_code=400, detail=f"Reference answer column '{reference_answer_col}' not found in CSV headers")
     if context_col and context_col not in headers:
         raise HTTPException(status_code=400, detail=f"Context column '{context_col}' not found in CSV headers")
 
     has_contexts = bool(context_col)
+    has_reference = bool(reference_answer_col)
 
     # Create bot_config entry
     bot_name = config_name.strip() if config_name.strip() else (file.filename or "CSV Upload")
     config_json_data = {
         "bot_config_id": 0,  # placeholder, updated after insert
         "has_contexts": has_contexts,
+        "has_reference_answer": has_reference,
         "source_file": file.filename,
     }
     cursor = conn.execute(
@@ -221,8 +233,9 @@ async def upload_baseline_csv(
         a = _sanitize_csv_value(row.get(answer_col, ""))
         if not q or not a:
             continue
+        ref = _sanitize_csv_value(row.get(reference_answer_col, "") or "") if reference_answer_col else ""
         s = _sanitize_csv_value(row.get(context_col, "") or "") if context_col else ""
-        rows.append((project_id, bot_config_id, q, a, s, "csv"))
+        rows.append((project_id, bot_config_id, q, a, ref, s, "csv"))
 
     if not rows:
         # Clean up the bot_config if no valid rows
@@ -231,7 +244,7 @@ async def upload_baseline_csv(
         raise HTTPException(status_code=400, detail="No valid rows found in CSV")
 
     conn.executemany(
-        "INSERT INTO external_baselines (project_id, bot_config_id, question, answer, sources, source_type) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO external_baselines (project_id, bot_config_id, question, answer, reference_answer, sources, source_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
@@ -240,7 +253,7 @@ async def upload_baseline_csv(
         "imported": len(rows),
         "bot_config_id": bot_config_id,
         "preview": [
-            {"question": r[2], "answer": r[3], "sources": r[4]} for r in rows[:5]
+            {"question": r[2], "answer": r[3], "reference_answer": r[4], "sources": r[5]} for r in rows[:5]
         ],
     }
 
@@ -255,20 +268,21 @@ async def list_baselines(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     rows = conn.execute(
-        "SELECT id, project_id, question, answer, sources, source_type, created_at "
+        "SELECT id, project_id, question, answer, reference_answer, sources, source_type, created_at "
         "FROM external_baselines WHERE project_id = ? ORDER BY id",
         (project_id,),
     ).fetchall()
 
     return [
         {
-            "id": r[0],
-            "project_id": r[1],
-            "question": r[2],
-            "answer": r[3],
-            "sources": r[4],
-            "source_type": r[5],
-            "created_at": r[6],
+            "id": r["id"],
+            "project_id": r["project_id"],
+            "question": r["question"],
+            "answer": r["answer"],
+            "reference_answer": r["reference_answer"] or "",
+            "sources": r["sources"] or "",
+            "source_type": r["source_type"],
+            "created_at": r["created_at"],
         }
         for r in rows
     ]

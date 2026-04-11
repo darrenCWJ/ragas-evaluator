@@ -4,6 +4,8 @@ import json
 
 from fastapi import APIRouter, HTTPException
 
+from app.routes.experiments import _sanitize_nan
+
 from app.models import (
     ApplySuggestionRequest,
     BatchApplyRequest,
@@ -60,7 +62,7 @@ async def generate_suggestions_route(project_id: int, experiment_id: int):
     metric_counts: dict[str, int] = {}
     per_question_results: list[dict] = []
     for rr in result_rows:
-        metrics = json.loads(rr["metrics_json"]) if rr["metrics_json"] else {}
+        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
         per_question_results.append({"metrics": metrics})
         for metric_name, value in metrics.items():
             if value is not None:
