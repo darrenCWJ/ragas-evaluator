@@ -170,7 +170,7 @@ async def list_bot_config_baselines(project_id: int, config_id: int, limit: int 
     ).fetchone()[0]
 
     rows = conn.execute(
-        "SELECT id, question, answer, sources, created_at "
+        "SELECT id, question, answer, reference_answer, sources, created_at "
         "FROM external_baselines WHERE bot_config_id = ? ORDER BY id LIMIT ?",
         (config_id, min(limit, 50)),
     ).fetchall()
@@ -182,6 +182,7 @@ async def list_bot_config_baselines(project_id: int, config_id: int, limit: int 
                 "id": r["id"],
                 "question": r["question"],
                 "answer": r["answer"],
+                "reference_answer": r["reference_answer"] or "",
                 "sources": r["sources"] or "",
                 "created_at": r["created_at"],
             }

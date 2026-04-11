@@ -1,7 +1,7 @@
 from ragas.metrics.collections import DataCompyScore
 
 
-def create_scorer(mode="row", metric="f1"):
+def create_scorer(mode="rows", metric="f1"):
     return DataCompyScore(mode=mode, metric=metric)
 
 

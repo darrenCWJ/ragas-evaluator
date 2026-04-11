@@ -255,7 +255,8 @@ export default function ExperimentRunner({
     score5_description: "The response is excellent, accurate, and comprehensive.",
   };
 
-  const [concurrency, setConcurrency] = useState(isBotExperiment ? 2 : 5);
+  const isCsvExperiment = connectorType === "csv";
+  const [concurrency, setConcurrency] = useState(isCsvExperiment ? 10 : isBotExperiment ? 2 : 5);
   const [rubrics, setRubrics] = useState<Record<string, string>>({ ...DEFAULT_RUBRICS });
 
   const updateRubric = (key: string, value: string) => {

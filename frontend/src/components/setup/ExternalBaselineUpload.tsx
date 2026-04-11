@@ -29,6 +29,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
   // Column mapping state
   const [questionCol, setQuestionCol] = useState("");
   const [answerCol, setAnswerCol] = useState("");
+  const [referenceAnswerCol, setReferenceAnswerCol] = useState("");
   const [contextCol, setContextCol] = useState("");
   const [configName, setConfigName] = useState("");
 
@@ -45,6 +46,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
     setPreview(null);
     setQuestionCol("");
     setAnswerCol("");
+    setReferenceAnswerCol("");
     setContextCol("");
     setConfigName("");
     setError(null);
@@ -77,13 +79,17 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
         ["question", "query", "q", "input", "prompt"].includes(headers[i]!)
       );
       const aMatch = previewData.headers.find((_, i) =>
-        ["answer", "response", "reply", "output", "a"].includes(headers[i]!)
+        ["answer", "response", "reply", "output", "a", "bot_answer", "bot_response"].includes(headers[i]!)
+      );
+      const refMatch = previewData.headers.find((_, i) =>
+        ["reference_answer", "reference", "expected", "expected_answer", "ground_truth", "groundtruth", "golden_answer", "correct_answer"].includes(headers[i]!)
       );
       const cMatch = previewData.headers.find((_, i) =>
-        ["context", "contexts", "sources", "source", "references", "reference"].includes(headers[i]!)
+        ["context", "contexts", "sources", "source"].includes(headers[i]!)
       );
       if (qMatch) setQuestionCol(qMatch);
       if (aMatch) setAnswerCol(aMatch);
+      if (refMatch) setReferenceAnswerCol(refMatch);
       if (cMatch) setContextCol(cMatch);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to preview CSV");
@@ -102,6 +108,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
       const res = await uploadBaselineCsv(projectId, file, {
         questionCol,
         answerCol,
+        referenceAnswerCol: referenceAnswerCol || undefined,
         contextCol: contextCol || undefined,
         configName: configName.trim() || undefined,
       });
@@ -137,8 +144,8 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
         Import Bot Responses (CSV)
       </h3>
       <p className="mb-4 text-xs text-text-secondary">
-        Upload a CSV with pre-collected bot responses. This creates a virtual bot connector
-        for evaluation — no live API needed.
+        Upload a CSV with questions, bot answers, and reference answers. The experiment
+        compares the bot's response against the expected answer. No live API needed.
       </p>
 
       {/* Step 1: File picker */}
@@ -215,7 +222,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
           </div>
 
           {/* Column mapping dropdowns */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
                 Question Column <span className="text-score-low">*</span>
@@ -233,7 +240,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
-                Answer Column <span className="text-score-low">*</span>
+                Bot Answer Column <span className="text-score-low">*</span>
               </label>
               <select
                 value={answerCol}
@@ -248,7 +255,25 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
-                Context Column <span className="text-text-muted">(optional)</span>
+                Reference Answer Column <span className="text-text-muted">(optional)</span>
+              </label>
+              <select
+                value={referenceAnswerCol}
+                onChange={(e) => setReferenceAnswerCol(e.target.value)}
+                className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+              >
+                <option value="">None (same as Bot Answer)</option>
+                {preview.headers.map((h) => (
+                  <option key={h} value={h}>{h}</option>
+                ))}
+              </select>
+              <p className="mt-0.5 text-[10px] text-text-muted">
+                Expected/ground-truth answer to compare against
+              </p>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-text-secondary">
+                Source Data Column <span className="text-text-muted">(optional)</span>
               </label>
               <select
                 value={contextCol}
@@ -270,7 +295,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
                 <thead>
                   <tr className="bg-surface">
                     {preview.headers.map((h) => {
-                      const isSelected = h === questionCol || h === answerCol || h === contextCol;
+                      const isSelected = h === questionCol || h === answerCol || h === referenceAnswerCol || h === contextCol;
                       return (
                         <th
                           key={h}
@@ -283,10 +308,13 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
                             <span className="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] text-accent">Q</span>
                           )}
                           {h === answerCol && (
-                            <span className="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] text-accent">A</span>
+                            <span className="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] text-accent">Bot</span>
+                          )}
+                          {h === referenceAnswerCol && (
+                            <span className="ml-1 rounded bg-score-high/15 px-1 py-0.5 text-[10px] text-score-high">Ref</span>
                           )}
                           {h === contextCol && (
-                            <span className="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] text-accent">C</span>
+                            <span className="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] text-accent">Src</span>
                           )}
                         </th>
                       );
@@ -297,7 +325,7 @@ export default function ExternalBaselineUpload({ projectId, onUploaded }: Props)
                   {preview.rows.map((row, i) => (
                     <tr key={i} className="border-b border-border/50 last:border-0">
                       {preview.headers.map((h) => {
-                        const isSelected = h === questionCol || h === answerCol || h === contextCol;
+                        const isSelected = h === questionCol || h === answerCol || h === referenceAnswerCol || h === contextCol;
                         const val = row[h] ?? "";
                         return (
                           <td

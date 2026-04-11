@@ -47,6 +47,7 @@ SUGGESTION_MEDIUM_THRESHOLD = float(os.environ.get("SUGGESTION_MEDIUM_THRESHOLD"
 # Timeouts (seconds)
 # ---------------------------------------------------------------------------
 BOT_QUERY_TIMEOUT = float(os.environ.get("BOT_QUERY_TIMEOUT", "120.0"))
+METRIC_SCORING_TIMEOUT = float(os.environ.get("METRIC_SCORING_TIMEOUT", "300.0"))
 TESTGEN_SUBPROCESS_TIMEOUT = int(os.environ.get("TESTGEN_SUBPROCESS_TIMEOUT", "7200"))
 PERSONA_SUBPROCESS_TIMEOUT = int(os.environ.get("PERSONA_SUBPROCESS_TIMEOUT", "3600"))
 SOURCE_VERIFY_FETCH_TIMEOUT = int(os.environ.get("SOURCE_VERIFY_FETCH_TIMEOUT", "15"))
