@@ -1,4 +1,5 @@
 """ChromaDB vector store for persistent embedding storage and similarity search."""
+from __future__ import annotations
 
 import chromadb
 from pathlib import Path

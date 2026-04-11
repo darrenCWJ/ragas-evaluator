@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS external_baselines (
     bot_config_id INTEGER REFERENCES bot_configs(id) ON DELETE CASCADE,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
+    reference_answer TEXT,
     sources TEXT,
     source_type TEXT NOT NULL DEFAULT 'csv',
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
@@ -356,6 +357,13 @@ def init_db() -> sqlite3.Connection:
     # Migration: add bot_config_id to external_baselines (CSV-as-connector)
     try:
         conn.execute("ALTER TABLE external_baselines ADD COLUMN bot_config_id INTEGER REFERENCES bot_configs(id) ON DELETE CASCADE")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add reference_answer to external_baselines (separate bot answer vs ground truth)
+    try:
+        conn.execute("ALTER TABLE external_baselines ADD COLUMN reference_answer TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists

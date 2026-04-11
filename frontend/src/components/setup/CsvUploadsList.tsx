@@ -114,7 +114,7 @@ export default function CsvUploadsList({ projectId, refreshKey }: Props) {
           </svg>
           <p className="text-sm text-text-muted">No CSVs uploaded yet.</p>
           <p className="mt-1 text-xs text-text-muted">
-            Upload a CSV with question, answer, and sources columns.
+            Upload a CSV with question, bot answer, reference answer, and sources columns.
           </p>
         </div>
       )}
@@ -223,7 +223,10 @@ export default function CsvUploadsList({ projectId, refreshKey }: Props) {
                                   Question
                                 </th>
                                 <th className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium text-text-secondary">
-                                  Answer
+                                  Bot Answer
+                                </th>
+                                <th className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium text-text-secondary">
+                                  Reference Answer
                                 </th>
                                 <th className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium text-text-secondary">
                                   Sources
@@ -237,19 +240,25 @@ export default function CsvUploadsList({ projectId, refreshKey }: Props) {
                                   className="border-b border-border/50 last:border-0"
                                 >
                                   <td
-                                    className="max-w-[200px] truncate px-3 py-1.5 text-text-primary"
+                                    className="max-w-[180px] truncate px-3 py-1.5 text-text-primary"
                                     title={row.question}
                                   >
                                     {row.question}
                                   </td>
                                   <td
-                                    className="max-w-[200px] truncate px-3 py-1.5 text-text-secondary"
+                                    className="max-w-[180px] truncate px-3 py-1.5 text-text-secondary"
                                     title={row.answer}
                                   >
                                     {row.answer}
                                   </td>
                                   <td
-                                    className="max-w-[150px] truncate px-3 py-1.5 text-text-muted"
+                                    className="max-w-[180px] truncate px-3 py-1.5 text-text-secondary"
+                                    title={row.reference_answer || "—"}
+                                  >
+                                    {row.reference_answer || "—"}
+                                  </td>
+                                  <td
+                                    className="max-w-[120px] truncate px-3 py-1.5 text-text-muted"
                                     title={row.sources || "—"}
                                   >
                                     {row.sources || "—"}

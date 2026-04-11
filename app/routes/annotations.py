@@ -2,11 +2,13 @@
 
 import json
 import logging
+import math
 import random
 
 from fastapi import APIRouter, HTTPException
 
 from app.models import HumanAnnotationBatch
+from app.routes.experiments import _sanitize_nan
 import db.init
 
 logger = logging.getLogger(__name__)
@@ -94,7 +96,7 @@ async def get_annotation_sample(project_id: int, experiment_id: int):
     sample = []
     for r in sampled_rows:
         ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
-        metrics = json.loads(r["metrics_json"]) if r["metrics_json"] else {}
+        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
 
         annotation = annotation_map.get(r["id"])
         sample.append({
@@ -202,7 +204,7 @@ async def get_evaluator_accuracy(project_id: int, experiment_id: int):
     agreements = 0
 
     for r in rows:
-        metrics = json.loads(r["metrics_json"]) if r["metrics_json"] else {}
+        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
         human_score = _RATING_SCORES[r["rating"]]
 
         # Compute evaluator score: average of available correctness metrics
