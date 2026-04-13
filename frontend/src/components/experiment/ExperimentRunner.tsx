@@ -84,6 +84,8 @@ const DOMAIN_METRICS = [
   "datacompy_score",
 ];
 
+const JUDGE_METRICS = ["multi_llm_judge"];
+
 /** Specialized metrics that need infrastructure not yet available (multi-turn, tool calls, etc.) */
 const COMING_SOON_METRICS = [
   { name: "agent_goal_accuracy", reason: "Requires multi-turn agentic conversation history" },
@@ -258,6 +260,7 @@ export default function ExperimentRunner({
   const isCsvExperiment = connectorType === "csv";
   const [concurrency, setConcurrency] = useState(isCsvExperiment ? 10 : isBotExperiment ? 2 : 5);
   const [rubrics, setRubrics] = useState<Record<string, string>>({ ...DEFAULT_RUBRICS });
+  const [judgeEvaluators, setJudgeEvaluators] = useState(5);
 
   const updateRubric = (key: string, value: string) => {
     setRubrics((prev) => ({ ...prev, [key]: value }));
@@ -434,6 +437,7 @@ export default function ExperimentRunner({
       },
       selectedMetrics.has("rubrics_score") ? rubrics : null,
       concurrency,
+      selectedMetrics.has("multi_llm_judge") ? judgeEvaluators : undefined,
     );
 
     handleRef.current = handle;
@@ -550,6 +554,41 @@ export default function ExperimentRunner({
                 datacompy_score: "no questions in this test set have reference_data metadata",
               }}
             />
+
+            {/* Judge Metrics */}
+            <MetricGroup
+              label="Judge Metrics"
+              labelClass="text-violet-400"
+              metrics={JUDGE_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-violet-500/50 bg-violet-500/15 text-violet-400"
+              inactiveClass="border-border bg-card text-text-muted hover:border-violet-500/30 hover:text-text-secondary"
+            />
+
+            {/* Evaluator count — shown when multi_llm_judge is selected */}
+            {selectedMetrics.has("multi_llm_judge") && (
+              <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-4 py-3 space-y-2">
+                <p className="text-xs font-medium text-violet-400">Multi-LLM Judge Settings</p>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-text-secondary">Evaluators</label>
+                  <input
+                    type="range"
+                    min={3}
+                    max={6}
+                    value={judgeEvaluators}
+                    onChange={(e) => setJudgeEvaluators(Number(e.target.value))}
+                    className="h-1.5 w-32 cursor-pointer accent-violet-500"
+                  />
+                  <span className="w-4 text-center font-mono text-xs text-text-primary">{judgeEvaluators}</span>
+                  <span className="text-xs text-text-muted">independent LLM reviewers per response</span>
+                </div>
+                <p className="text-2xs text-text-muted">
+                  Each evaluator independently critiques the response for accuracy and helpfulness.
+                  Human annotations on the 20% sample drive evaluator reliability scoring.
+                </p>
+              </div>
+            )}
 
             {/* Coming Soon — specialized metrics */}
             <div>

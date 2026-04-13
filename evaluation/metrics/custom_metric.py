@@ -68,7 +68,7 @@ async def score_integer_range(
         retrieved_contexts="\n".join(contexts) if contexts else "",
     )
     raw = float(result.value)
-    return (raw - min_score) / (max_score - min_score)
+    return max(0.0, min(1.0, (raw - min_score) / (max_score - min_score)))
 
 
 async def score_similarity(
@@ -86,7 +86,7 @@ async def score_similarity(
         reference=reference,
     )
     raw = float(result.value)
-    return (raw - min_score) / (max_score - min_score)
+    return max(0.0, min(1.0, (raw - min_score) / (max_score - min_score)))
 
 
 async def score_rubrics(
@@ -104,7 +104,7 @@ async def score_rubrics(
         retrieved_contexts=contexts or [],
     )
     result = await scorer.single_turn_ascore(sample)
-    return (result - 1) / 4
+    return max(0.0, min(1.0, (result - 1) / 4))
 
 
 async def score_instance_rubrics(
@@ -126,4 +126,4 @@ async def score_instance_rubrics(
         rubrics=rubrics,
     )
     result = await scorer.single_turn_ascore(sample)
-    return (result - 1) / 4
+    return max(0.0, min(1.0, (result - 1) / 4))
