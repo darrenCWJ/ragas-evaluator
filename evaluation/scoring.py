@@ -70,6 +70,9 @@ ALL_METRICS = [
     "response_groundedness",
     "sql_semantic_equivalence",
     "datacompy_score",
+    # multi_llm_judge is listed here for UI discovery but executed separately
+    # in experiments.py — it is NOT wired into _METRIC_MODULES or setup_scorers.
+    "multi_llm_judge",
 ]
 
 # Maps metric name → module for dynamic dispatch

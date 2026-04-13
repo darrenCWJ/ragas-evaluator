@@ -7,6 +7,7 @@ import {
 } from "../../lib/api";
 import type { Experiment, ExperimentResult } from "../../lib/api";
 import QuestionResultRow from "./QuestionResultRow";
+import MultiLLMJudgeDashboard from "./MultiLLMJudgeDashboard";
 import {
   humanizeMetric,
   scoreBarColor,
@@ -108,6 +109,9 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }
 
   const { experiment, results } = state;
+  const hasJudge = results.some((r) => "multi_llm_judge" in r.metrics);
+  const [activeTab, setActiveTab] = useState<"results" | "judge">("results");
+
   const agg = experiment.aggregate_metrics;
 
   /* Compute overall score from aggregate metrics */
@@ -129,9 +133,30 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
     <div className="space-y-6">
       {/* ── Header ── */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-text-primary tracking-wide uppercase">
-          Results
-        </h3>
+        <div className="flex items-center gap-1 border-b border-border">
+          <button
+            onClick={() => setActiveTab("results")}
+            className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+              activeTab === "results"
+                ? "border-accent text-accent"
+                : "border-transparent text-text-muted hover:text-text-secondary"
+            }`}
+          >
+            Results
+          </button>
+          {hasJudge && (
+            <button
+              onClick={() => setActiveTab("judge")}
+              className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+                activeTab === "judge"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              Judge Reliability
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-text-muted">
             {results.length} question{results.length !== 1 ? "s" : ""} evaluated
@@ -231,20 +256,33 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
         </div>
       )}
 
-      {/* ── Empty results ── */}
-      {results.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
-          <p className="text-sm text-text-muted">
-            No per-question results available.
-          </p>
-        </div>
-      ) : (
-        /* ── Per-question results ── */
-        <div className="space-y-1.5">
-          {results.map((r) => (
-            <QuestionResultRow key={r.id} result={r} />
-          ))}
-        </div>
+      {activeTab === "results" && (
+        <>
+          {/* ── Empty results ── */}
+          {results.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
+              <p className="text-sm text-text-muted">
+                No per-question results available.
+              </p>
+            </div>
+          ) : (
+            /* ── Per-question results ── */
+            <div className="space-y-1.5">
+              {results.map((r) => (
+                <QuestionResultRow
+                  key={r.id}
+                  result={r}
+                  projectId={projectId}
+                  experimentId={experimentId}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {activeTab === "judge" && hasJudge && (
+        <MultiLLMJudgeDashboard projectId={projectId} experimentId={experimentId} />
       )}
     </div>
   );

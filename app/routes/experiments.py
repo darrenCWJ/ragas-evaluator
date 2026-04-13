@@ -21,6 +21,7 @@ from dataclasses import asdict
 
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
 from evaluation.metrics.custom_metric import CustomMetricConfig
+from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
 from evaluation.source_verification import verify_all_citations
 import db.init
 from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
@@ -892,7 +893,22 @@ async def run_experiment(
                     ))
 
             # Filter selected_metrics to only built-in ones for setup_scorers
-            builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
+            # multi_llm_judge is excluded from setup_scorers — handled separately below.
+            builtin_selected = [
+                m for m in selected_metrics
+                if m in ALL_METRICS and m != "multi_llm_judge"
+            ]
+
+            # Setup multi-llm-judge config if selected
+            judge_config = None
+            if "multi_llm_judge" in selected_metrics:
+                judge_config = _multi_llm_judge_module.MultiLLMJudgeConfig(
+                    num_evaluators=req.multi_llm_judge_evaluators,
+                )
+                logger.info(
+                    "Experiment %d: multi_llm_judge enabled with %d evaluators",
+                    experiment_id, req.multi_llm_judge_evaluators,
+                )
 
             # Setup scorers — must run on the main event loop (not in executor)
             # because AsyncOpenAI client binds to the current loop
@@ -1141,7 +1157,7 @@ async def run_experiment(
                 question_text = result["question_text"]
 
                 if result["error"] is None:
-                    run_conn.execute(
+                    cur = run_conn.execute(
                         """INSERT INTO experiment_results
                            (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
                            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -1153,6 +1169,43 @@ async def run_experiment(
                             json.dumps(result["usage_info"]),
                         ),
                     )
+                    result_row_id = cur.lastrowid
+
+                    # --- Multi-LLM Judge (isolated block — no impact on normal metrics) ---
+                    if judge_config is not None:
+                        try:
+                            judge_evals = await _multi_llm_judge_module.run_judge(
+                                judge_config,
+                                result["question_text"],
+                                result["generated_answer"] or "",
+                                result["full_context_dicts"],
+                            )
+                            if judge_evals:
+                                for ev in judge_evals:
+                                    run_conn.execute(
+                                        """INSERT INTO multi_llm_evaluations
+                                           (experiment_result_id, evaluator_index, verdict, score, claims_json)
+                                           VALUES (?, ?, ?, ?, ?)""",
+                                        (
+                                            result_row_id,
+                                            ev["evaluator_index"],
+                                            ev["verdict"],
+                                            ev["score"],
+                                            json.dumps(ev["claims"]),
+                                        ),
+                                    )
+                                agg = _multi_llm_judge_module.aggregate_score(judge_evals)
+                                result["metrics_result"]["multi_llm_judge"] = agg
+                                run_conn.execute(
+                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
+                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
+                                )
+                        except Exception as _judge_err:
+                            logger.warning(
+                                "Experiment %d: multi_llm_judge failed for result %d: %s",
+                                experiment_id, result_row_id, _judge_err,
+                            )
+                    # --- End Multi-LLM Judge block ---
                 else:
                     run_conn.execute(
                         """INSERT INTO experiment_results

@@ -26,6 +26,7 @@ from app.routes import (
     reports,
     custom_metrics,
     personas,
+    multi_llm_judge,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     application.include_router(reports.router)
     application.include_router(custom_metrics.router)
     application.include_router(personas.router)
+    application.include_router(multi_llm_judge.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")
