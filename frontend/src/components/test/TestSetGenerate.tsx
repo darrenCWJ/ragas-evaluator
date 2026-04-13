@@ -35,6 +35,18 @@ const DEFAULT_CATEGORIES: Record<string, number> = {
   out_of_knowledge_base: 20,
 };
 
+const GRAPH_RAG_CATEGORIES = [
+  { key: "bridge", label: "Bridge", description: "Questions connecting distant concepts through multi-hop reasoning (requires KG)" },
+  { key: "comparative", label: "Comparative", description: "Compare and contrast related entities or concepts (requires KG)" },
+  { key: "community", label: "Community", description: "High-level thematic questions about topic clusters (requires KG)" },
+] as const;
+
+const DEFAULT_GRAPH_RAG_DIST: Record<string, number> = {
+  bridge: 34,
+  comparative: 33,
+  community: 33,
+};
+
 /**
  * Redistribute percentages when one slider changes.
  * Spreads the delta evenly across the other keys, round-robin,
@@ -135,6 +147,16 @@ export default function TestSetGenerate({
     out_of_knowledge_base: true,
   });
   const [categoryDistribution, setCategoryDistribution] = useState<Record<string, number>>({ ...DEFAULT_CATEGORIES });
+  const [useGraphRag, setUseGraphRag] = useState(false);
+  const [graphRagKgSource, setGraphRagKgSource] = useState<"chunks" | "documents">("chunks");
+  const [docKgInfo, setDocKgInfo] = useState<KnowledgeGraphInfo | null>(null);
+  const [docKgBuilding, setDocKgBuilding] = useState(false);
+  const [enabledGraphRag, setEnabledGraphRag] = useState<Record<string, boolean>>({
+    bridge: true,
+    comparative: true,
+    community: true,
+  });
+  const [graphRagDistribution, setGraphRagDistribution] = useState<Record<string, number>>({ ...DEFAULT_GRAPH_RAG_DIST });
   const [generating, setGenerating] = useState(false);
   const [generatingPersonas, setGeneratingPersonas] = useState(false);
   const [personaGenMode, setPersonaGenMode] = useState<"fast" | "full">("fast");
@@ -160,6 +182,15 @@ export default function TestSetGenerate({
     }
   }, [projectId]);
 
+  const loadDocKgInfo = useCallback(async () => {
+    try {
+      const info = await fetchKnowledgeGraphInfo(projectId, "documents");
+      setDocKgInfo(info);
+    } catch {
+      // silent
+    }
+  }, [projectId]);
+
   const loadKgInfo = useCallback(async () => {
     try {
       const info = await fetchKnowledgeGraphInfo(projectId);
@@ -178,7 +209,8 @@ export default function TestSetGenerate({
   useEffect(() => {
     loadSavedPersonas();
     loadKgInfo();
-  }, [loadSavedPersonas, loadKgInfo]);
+    loadDocKgInfo();
+  }, [loadSavedPersonas, loadKgInfo, loadDocKgInfo]);
 
   // Poll KG build progress
   useEffect(() => {
@@ -363,16 +395,27 @@ export default function TestSetGenerate({
       if (name.trim()) config.name = name.trim();
 
       // Include question categories if enabled
+      const activeCats: Record<string, number> = {};
       if (useCategories) {
-        const activeCats: Record<string, number> = {};
         for (const cat of QUESTION_CATEGORIES) {
           if (enabledCategories[cat.key]) {
             activeCats[cat.key] = categoryDistribution[cat.key] ?? 0;
           }
         }
-        if (Object.keys(activeCats).length > 0) {
-          config.question_categories = activeCats;
+      }
+      // Merge Graph RAG categories if enabled
+      if (useGraphRag) {
+        for (const cat of GRAPH_RAG_CATEGORIES) {
+          if (enabledGraphRag[cat.key]) {
+            activeCats[cat.key] = graphRagDistribution[cat.key] ?? 0;
+          }
         }
+      }
+      if (Object.keys(activeCats).length > 0) {
+        config.question_categories = activeCats;
+      }
+      if (useGraphRag) {
+        config.graph_rag_kg_source = graphRagKgSource;
       }
 
       // Include custom personas only if valid entries exist (both name and role_description required)
@@ -406,6 +449,11 @@ export default function TestSetGenerate({
       setUseCategories(false);
       setEnabledCategories({ typical: true, in_knowledge_base: true, edge: true, out_of_knowledge_base: true });
       setCategoryDistribution({ ...DEFAULT_CATEGORIES });
+      setUseGraphRag(false);
+      setGraphRagKgSource("chunks");
+      setDocKgInfo(null);
+      setEnabledGraphRag({ bridge: true, comparative: true, community: true });
+      setGraphRagDistribution({ ...DEFAULT_GRAPH_RAG_DIST });
 
       // Enter generating state — polling effect will detect completion
       setGenerating(true);
@@ -459,6 +507,9 @@ export default function TestSetGenerate({
       generating_personas: "Generating personas",
       generating_questions: "Synthesizing questions",
       generating_special_categories: "Generating edge & out-of-KB questions",
+      generating_bridge_questions: "Generating bridge questions",
+      generating_comparative_questions: "Generating comparative questions",
+      generating_community_questions: "Generating community questions",
     };
     // When KG is loaded from cache, show a single "loaded from cache" step
     // instead of the individual KG build sub-steps.
@@ -472,6 +523,9 @@ export default function TestSetGenerate({
           "generating_personas",
           "generating_questions",
           "generating_special_categories",
+          "generating_bridge_questions",
+          "generating_comparative_questions",
+          "generating_community_questions",
         ]
       : [
           "building_knowledge_graph",
@@ -489,6 +543,9 @@ export default function TestSetGenerate({
           "generating_personas",
           "generating_questions",
           "generating_special_categories",
+          "generating_bridge_questions",
+          "generating_comparative_questions",
+          "generating_community_questions",
         ];
 
     const currentStageIdx = STAGE_ORDER.indexOf(currentStage);
@@ -1289,6 +1346,203 @@ export default function TestSetGenerate({
                     className="w-full accent-accent"
                     disabled={generating}
                   />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Graph RAG question types toggle */}
+        <div className="sm:col-span-2 flex items-end gap-3 pb-1">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={useGraphRag}
+              onChange={(e) => setUseGraphRag(e.target.checked)}
+              className="h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+              disabled={generating}
+            />
+            Graph RAG Question Types
+          </label>
+        </div>
+
+        {/* Graph RAG config */}
+        {useGraphRag && (
+          <div className="sm:col-span-2 space-y-3 rounded-lg border border-border bg-elevated/50 p-3">
+            <p className="text-xs text-text-muted">
+              Generate relationship-aware questions using the knowledge graph. All types require a built KG.
+            </p>
+
+            {/* KG Source selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-muted">KG Source:</span>
+              <div className="flex rounded-md border border-border overflow-hidden text-xs">
+                {(["chunks", "documents"] as const).map((src) => (
+                  <button
+                    key={src}
+                    type="button"
+                    onClick={() => {
+                      setGraphRagKgSource(src);
+                      if (src === "documents") loadDocKgInfo();
+                    }}
+                    disabled={generating}
+                    className={`px-3 py-1 capitalize transition ${
+                      graphRagKgSource === src
+                        ? "bg-accent text-white"
+                        : "bg-elevated text-text-secondary hover:bg-elevated/80"
+                    }`}
+                  >
+                    {src}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Document KG status (shown only when Documents source selected) */}
+            {graphRagKgSource === "documents" && (
+              <div className="flex items-center justify-between rounded-md border border-border/60 bg-deep px-3 py-2 text-xs">
+                {docKgBuilding ? (
+                  <span className="flex items-center gap-1.5 text-text-muted">
+                    <svg className="h-3 w-3 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Building document KG…
+                  </span>
+                ) : docKgInfo?.exists ? (
+                  <span className={docKgInfo.chunks_stale ? "text-amber-400" : "text-green-400"}>
+                    {docKgInfo.chunks_stale
+                      ? `Document KG stale (${docKgInfo.num_nodes ?? 0} nodes)`
+                      : `Document KG ready (${docKgInfo.num_nodes ?? 0} nodes)`}
+                  </span>
+                ) : (
+                  <span className="text-text-muted">Document KG not built</span>
+                )}
+                <button
+                  type="button"
+                  disabled={generating || docKgBuilding}
+                  onClick={async () => {
+                    setDocKgBuilding(true);
+                    try {
+                      await buildKnowledgeGraph(projectId, null, overlapMaxNodes, "documents");
+                      // Poll until complete
+                      const poll = setInterval(async () => {
+                        try {
+                          const prog = await fetchKGBuildProgress(projectId, "documents");
+                          if (!prog.active) {
+                            clearInterval(poll);
+                            setDocKgBuilding(false);
+                            loadDocKgInfo();
+                          }
+                        } catch {
+                          clearInterval(poll);
+                          setDocKgBuilding(false);
+                        }
+                      }, 3000);
+                    } catch {
+                      setDocKgBuilding(false);
+                    }
+                  }}
+                  className="ml-3 rounded border border-accent/40 px-2 py-0.5 text-accent transition hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {docKgInfo?.exists ? (docKgInfo.chunks_stale ? "Rebuild" : "Rebuild") : "Build"}
+                </button>
+              </div>
+            )}
+
+            {/* Chunk KG warning when chunks source and no KG */}
+            {graphRagKgSource === "chunks" && kgInfo && !kgInfo.exists && (
+              <p className="text-xs text-amber-400">
+                No knowledge graph found — build one in the KG section above before using Graph RAG types.
+              </p>
+            )}
+            {GRAPH_RAG_CATEGORIES.map((cat) => {
+              const enabled = enabledGraphRag[cat.key] ?? false;
+              const pct = graphRagDistribution[cat.key] ?? 0;
+              return (
+                <div key={cat.key} className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(e) => {
+                          const next = { ...enabledGraphRag, [cat.key]: e.target.checked };
+                          setEnabledGraphRag(next);
+                          const enabledKeys = GRAPH_RAG_CATEGORIES
+                            .map((c) => c.key)
+                            .filter((k) => next[k]);
+                          if (enabledKeys.length > 0) {
+                            const share = Math.round(100 / enabledKeys.length);
+                            const newDist: Record<string, number> = {};
+                            enabledKeys.forEach((k, i) => {
+                              newDist[k] = i === enabledKeys.length - 1
+                                ? 100 - share * (enabledKeys.length - 1)
+                                : share;
+                            });
+                            GRAPH_RAG_CATEGORIES.forEach((c) => {
+                              if (!next[c.key]) newDist[c.key] = 0;
+                            });
+                            setGraphRagDistribution(newDist);
+                          }
+                        }}
+                        className="h-3.5 w-3.5 rounded border-border bg-input text-accent accent-accent"
+                        disabled={generating}
+                      />
+                      <div>
+                        <label className="text-xs font-medium text-text-secondary">
+                          {cat.label}
+                        </label>
+                        <p className="text-[11px] leading-tight text-text-muted">{cat.description}</p>
+                      </div>
+                    </div>
+                    {enabled && (
+                      <div className="flex shrink-0 items-baseline gap-0.5">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={pct}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => {
+                            const raw = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                            setGraphRagDistribution((prev) => {
+                              const enabledKeys = GRAPH_RAG_CATEGORIES
+                                .map((c) => c.key)
+                                .filter((k) => enabledGraphRag[k] && k !== cat.key);
+                              const remaining = 100 - raw;
+                              const distributed = redistributeEvenly(enabledKeys, remaining, prev);
+                              return { ...prev, [cat.key]: raw, ...distributed };
+                            });
+                          }}
+                          disabled={generating}
+                          className="w-10 rounded border border-border bg-input px-1 py-0.5 text-right text-xs tabular-nums text-text-primary focus:border-accent focus:outline-none"
+                        />
+                        <span className="text-xs text-text-muted">%</span>
+                      </div>
+                    )}
+                  </div>
+                  {enabled && (
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={pct}
+                      onChange={(e) => {
+                        const raw = Number(e.target.value);
+                        setGraphRagDistribution((prev) => {
+                          const enabledKeys = GRAPH_RAG_CATEGORIES
+                            .map((c) => c.key)
+                            .filter((k) => enabledGraphRag[k] && k !== cat.key);
+                          const remaining = 100 - raw;
+                          const distributed = redistributeEvenly(enabledKeys, remaining, prev);
+                          return { ...prev, [cat.key]: raw, ...distributed };
+                        });
+                      }}
+                      className="w-full accent-accent"
+                      disabled={generating}
+                    />
+                  )}
                 </div>
               );
             })}

@@ -266,6 +266,7 @@ def load_cached_kg(
     chunks: list[str],
     *,
     allow_partial: bool = False,
+    kg_source: str = "chunks",
 ) -> tuple[KnowledgeGraph, int] | KnowledgeGraph | None:
     """Return a cached KG from the database if one exists.
 
@@ -280,19 +281,19 @@ def load_cached_kg(
     db = get_db()
     row = db.execute(
         "SELECT kg_json, is_complete, completed_steps, chunks_hash FROM knowledge_graphs "
-        "WHERE project_id = ? AND chunks_hash = ?",
-        (project_id, h),
+        "WHERE project_id = ? AND chunks_hash = ? AND kg_source = ?",
+        (project_id, h, kg_source),
     ).fetchone()
     if row is None and allow_partial:
         # Chunks hash may differ (e.g. row ordering without ORDER BY, or
         # sampling differences).  For resume we only need project_id since
-        # save_kg_to_db keeps at most one row per project.
+        # save_kg_to_db keeps at most one row per project+source.
         # Also match KGs that are marked complete but have fewer steps than
         # the current pipeline (e.g. 6-step KG in a 7-step pipeline).
         row = db.execute(
             "SELECT kg_json, is_complete, completed_steps, chunks_hash FROM knowledge_graphs "
-            "WHERE project_id = ? AND (is_complete = 0 OR completed_steps < 11)",
-            (project_id,),
+            "WHERE project_id = ? AND kg_source = ? AND (is_complete = 0 OR completed_steps < 11)",
+            (project_id, kg_source),
         ).fetchone()
         if row is not None:
             logger.warning(
@@ -315,8 +316,9 @@ def load_cached_kg(
         return None
 
     logger.info(
-        "Loading %s knowledge graph for project %d from DB",
+        "Loading %s knowledge graph (source=%s) for project %d from DB",
         "complete" if row["is_complete"] else f"partial (step {row['completed_steps']})",
+        kg_source,
         project_id,
     )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
@@ -341,8 +343,9 @@ def save_kg_to_db(
     completed_steps: int = 11,
     total_steps: int = 11,
     chunk_config_id: int | None = None,
+    kg_source: str = "chunks",
 ) -> None:
-    """Persist a KG to the database, replacing any stale entry for this project."""
+    """Persist a KG to the database, replacing any stale entry for this project+source."""
     h = _chunks_hash(chunks)
     # Serialize KG via its save method to get the JSON string.
     with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as f:
@@ -354,34 +357,37 @@ def save_kg_to_db(
         Path(tmp_path).unlink(missing_ok=True)
 
     db = get_db()
-    # Remove old entries for this project (documents may have changed).
-    db.execute("DELETE FROM knowledge_graphs WHERE project_id = ?", (project_id,))
+    # Remove old entry for this project+source (content may have changed).
+    db.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
     db.execute(
         "INSERT INTO knowledge_graphs "
-        "(project_id, chunks_hash, chunk_config_id, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps, last_heartbeat) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))",
-        (project_id, h, chunk_config_id, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps),
+        "(project_id, chunks_hash, chunk_config_id, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps, last_heartbeat, kg_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'), ?)",
+        (project_id, h, chunk_config_id, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps, kg_source),
     )
     db.commit()
     status = "complete" if is_complete else f"partial ({completed_steps}/{total_steps})"
-    logger.info("Saved %s KG for project %d to DB (%d nodes)", status, project_id, len(kg.nodes))
+    logger.info("Saved %s KG (source=%s) for project %d to DB (%d nodes)", status, kg_source, project_id, len(kg.nodes))
 
 
-def delete_kg_from_db(project_id: int) -> bool:
-    """Delete the cached KG for a project. Returns True if a row was deleted."""
+def delete_kg_from_db(project_id: int, kg_source: str = "chunks") -> bool:
+    """Delete the cached KG for a project+source. Returns True if a row was deleted."""
     db = get_db()
-    cursor = db.execute("DELETE FROM knowledge_graphs WHERE project_id = ?", (project_id,))
+    cursor = db.execute(
+        "DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?",
+        (project_id, kg_source),
+    )
     db.commit()
     return cursor.rowcount > 0
 
 
-def update_heartbeat(project_id: int) -> None:
-    """Touch the heartbeat timestamp for the KG build of a project."""
+def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
+    """Touch the heartbeat timestamp for the KG build of a project+source."""
     db = get_db()
     db.execute(
         "UPDATE knowledge_graphs SET last_heartbeat = datetime('now', 'localtime') "
-        "WHERE project_id = ?",
-        (project_id,),
+        "WHERE project_id = ? AND kg_source = ?",
+        (project_id, kg_source),
     )
     db.commit()
 
@@ -389,8 +395,8 @@ def update_heartbeat(project_id: int) -> None:
 _HEARTBEAT_STALE_MINUTES = 5
 
 
-def get_kg_info(project_id: int) -> dict | None:
-    """Return metadata about the cached KG for a project (without the full JSON).
+def get_kg_info(project_id: int, kg_source: str = "chunks") -> dict | None:
+    """Return metadata about the cached KG for a project+source (without the full JSON).
 
     Includes a ``heartbeat_stale`` flag: True when the KG is partial and the
     last heartbeat is older than 5 minutes (likely a dead build).
@@ -399,8 +405,8 @@ def get_kg_info(project_id: int) -> dict | None:
     row = db.execute(
         "SELECT id, project_id, chunks_hash, chunk_config_id, num_nodes, num_chunks, "
         "is_complete, completed_steps, total_steps, last_heartbeat, created_at "
-        "FROM knowledge_graphs WHERE project_id = ?",
-        (project_id,),
+        "FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?",
+        (project_id, kg_source),
     ).fetchone()
     if row is None:
         return None
@@ -525,6 +531,7 @@ def build_knowledge_graph(
     project_id: int | None = None,
     overlap_max_nodes: int | None = 500,
     chunk_config_id: int | None = None,
+    kg_source: str = "chunks",
 ) -> KnowledgeGraph:
     """Build a KnowledgeGraph from text chunks and apply transforms.
 
@@ -535,7 +542,7 @@ def build_knowledge_graph(
     # Check for complete or partial cached KG
     resume_from_step = 0
     if project_id is not None:
-        cached = load_cached_kg(project_id, chunks, allow_partial=True)
+        cached = load_cached_kg(project_id, chunks, allow_partial=True, kg_source=kg_source)
         if cached is not None:
             kg, cached_steps = cached
             if cached_steps >= 11:
@@ -605,7 +612,7 @@ def build_knowledge_graph(
             continue
         if project_id is not None:
             update_progress(project_id, stage=stage_name)
-            update_heartbeat(project_id)
+            update_heartbeat(project_id, kg_source=kg_source)
         logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
         try:
             _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes)
@@ -620,6 +627,7 @@ def build_knowledge_graph(
                     completed_steps=completed_steps,
                     total_steps=len(transform_steps),
                     chunk_config_id=chunk_config_id,
+                    kg_source=kg_source,
                 )
                 if completed_steps < len(transform_steps):
                     logger.info(
@@ -642,6 +650,7 @@ def build_knowledge_graph(
                     completed_steps=completed_steps,
                     total_steps=len(transform_steps),
                     chunk_config_id=chunk_config_id,
+                    kg_source=kg_source,
                 )
             raise
 
@@ -687,9 +696,61 @@ def build_kg_standalone(
         raise
 
 
+def _fetch_document_texts(project_id: int) -> list[str]:
+    """Fetch full document texts for a project from the DB."""
+    import db.init as _db
+    conn = _db.get_thread_db()
+    rows = conn.execute(
+        "SELECT content FROM documents WHERE project_id = ? ORDER BY id",
+        (project_id,),
+    ).fetchall()
+    return [r["content"] for r in rows]
+
+
+def build_kg_standalone_from_documents(
+    project_id: int,
+    overlap_max_nodes: int | None = 500,
+) -> dict:
+    """Build a document-level KG from full document texts in the DB.
+
+    Uses each document's full text as a KG input node. The HeadlineSplitter
+    step will further divide documents by section headings. Better suited for
+    Graph RAG question generation than chunk-based KGs since it avoids
+    artificial chunk boundary splits.
+
+    Designed to run in a background thread.
+    """
+    doc_texts = _fetch_document_texts(project_id)
+    if not doc_texts:
+        raise ValueError("No documents found for project_id=%d" % project_id)
+
+    set_progress(project_id, {
+        "stage": "building_knowledge_graph",
+        "kg_building": True,
+        "total_chunks": len(doc_texts),
+    })
+
+    try:
+        kg = build_knowledge_graph(
+            doc_texts,
+            project_id=project_id,
+            overlap_max_nodes=overlap_max_nodes,
+            kg_source="documents",
+        )
+        clear_progress(project_id)
+        return {
+            "num_nodes": len(kg.nodes),
+            "num_chunks": len(doc_texts),
+        }
+    except Exception:
+        clear_progress(project_id)
+        raise
+
+
 def rebuild_kg_links(
     project_id: int,
     overlap_max_nodes: int | None = 500,
+    kg_source: str = "chunks",
 ) -> dict:
     """Reload a complete/partial KG, strip existing relationships, and re-run
     only the OverlapScoreBuilder with new parameters.
@@ -702,8 +763,8 @@ def rebuild_kg_links(
     db = get_db()
     row = db.execute(
         "SELECT kg_json, chunks_hash, chunk_config_id, completed_steps "
-        "FROM knowledge_graphs WHERE project_id = ?",
-        (project_id,),
+        "FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?",
+        (project_id, kg_source),
     ).fetchone()
     if row is None:
         raise ValueError(f"No knowledge graph found for project {project_id}")
@@ -738,7 +799,7 @@ def rebuild_kg_links(
         )
 
         update_progress(project_id, stage="kg_building_overlap")
-        update_heartbeat(project_id)
+        update_heartbeat(project_id, kg_source=kg_source)
 
         transform = OverlapScoreBuilder(
             property_name="keyphrases",
@@ -777,6 +838,7 @@ def rebuild_kg_links(
             completed_steps=new_steps,
             total_steps=11,
             chunk_config_id=chunk_config_id,
+            kg_source=kg_source,
         )
 
         logger.info(
@@ -841,6 +903,7 @@ def incremental_update_kg(
     project_id: int,
     chunk_config_id: int,
     overlap_max_nodes: int | None = 500,
+    kg_source: str = "chunks",
 ) -> dict:
     """Incrementally update a cached KG when documents are added or removed.
 
@@ -870,8 +933,9 @@ def incremental_update_kg(
 
     # Load existing KG
     row = conn.execute(
-        "SELECT kg_json, chunks_hash, completed_steps FROM knowledge_graphs WHERE project_id = ?",
-        (project_id,),
+        "SELECT kg_json, chunks_hash, completed_steps FROM knowledge_graphs "
+        "WHERE project_id = ? AND kg_source = ?",
+        (project_id, kg_source),
     ).fetchone()
     if row is None:
         raise ValueError(
@@ -1047,7 +1111,7 @@ def incremental_update_kg(
 
         for stage_name, transform in link_transforms:
             update_progress(project_id, stage=stage_name)
-            update_heartbeat(project_id)
+            update_heartbeat(project_id, kg_source=kg_source)
             logger.info("Rebuilding links: %s", stage_name)
             _apply_transform_batched(
                 kg, transform,
@@ -1063,6 +1127,7 @@ def incremental_update_kg(
             completed_steps=11,
             total_steps=11,
             chunk_config_id=chunk_config_id,
+            kg_source=kg_source,
         )
 
         logger.info(
@@ -1610,6 +1675,359 @@ def _generate_category_questions_via_llm(
         return []
 
 
+# ---------------------------------------------------------------------------
+# Graph RAG question generators
+# ---------------------------------------------------------------------------
+
+def _get_kg_graph(kg: KnowledgeGraph):
+    """Build a NetworkX graph from the KG's entity_overlap and summary_similarity relationships.
+
+    Returns (G, node_lookup) where G is an undirected graph with node IDs as keys
+    and node_lookup maps str(node.id) → node object.
+    """
+    import networkx as nx
+
+    G = nx.Graph()
+    node_lookup: dict[str, object] = {}
+    for node in kg.nodes:
+        nid = str(node.id)
+        G.add_node(nid)
+        node_lookup[nid] = node
+
+    for rel in kg.relationships:
+        if rel.type in ("entity_overlap", "summary_similarity"):
+            src_id = str(rel.source.id)
+            tgt_id = str(rel.target.id)
+            if src_id in node_lookup and tgt_id in node_lookup:
+                score = rel.properties.get(rel.type, 0.5)
+                if isinstance(score, (int, float)):
+                    G.add_edge(src_id, tgt_id, weight=float(score))
+
+    return G, node_lookup
+
+
+def _generate_bridge_questions(
+    kg: KnowledgeGraph,
+    count: int,
+    llm_client,
+) -> list[dict]:
+    """Generate questions that require connecting two distant KG nodes (path distance ≥ 3).
+
+    These test whether the external model can reason across multiple document sections.
+    """
+    if count <= 0:
+        return []
+
+    import networkx as nx
+    import random
+
+    G, node_lookup = _get_kg_graph(kg)
+    if len(G.nodes) < 4:
+        logger.warning("Not enough KG nodes for bridge questions (need ≥ 4, have %d)", len(G.nodes))
+        return []
+
+    # Collect candidate pairs from same connected component with distance ≥ 3
+    candidate_pairs: list[tuple[str, str, list[str]]] = []
+    for component in nx.connected_components(G):
+        if len(component) < 4:
+            continue
+        nodes_list = list(component)
+        # Sample pairs to avoid O(n^2) on large graphs
+        sample_size = min(len(nodes_list), 30)
+        sampled = random.sample(nodes_list, sample_size)
+        for i in range(len(sampled)):
+            for j in range(i + 1, len(sampled)):
+                try:
+                    dist = nx.shortest_path_length(G, sampled[i], sampled[j])
+                    if dist >= 3:
+                        path = nx.shortest_path(G, sampled[i], sampled[j])
+                        candidate_pairs.append((sampled[i], sampled[j], path))
+                except nx.NetworkXNoPath:
+                    pass
+
+    if not candidate_pairs:
+        logger.info("No node pairs with distance ≥ 3 found for bridge questions")
+        return []
+
+    # Shuffle and take what we need (with overgeneration buffer)
+    random.shuffle(candidate_pairs)
+    selected_pairs = candidate_pairs[: count * 2]
+
+    results = []
+    for src_id, tgt_id, path in selected_pairs:
+        if len(results) >= count:
+            break
+        src_node = node_lookup[src_id]
+        tgt_node = node_lookup[tgt_id]
+        src_summary = src_node.properties.get("summary", src_node.properties.get("page_content", ""))[:500]
+        tgt_summary = tgt_node.properties.get("summary", tgt_node.properties.get("page_content", ""))[:500]
+        src_entities = src_node.properties.get("entities", [])
+        tgt_entities = tgt_node.properties.get("entities", [])
+
+        # Build human-readable path label using entities at each hop
+        path_labels: list[str] = []
+        for nid in path:
+            n = node_lookup.get(nid)
+            if n:
+                ents = n.properties.get("entities", [])
+                label = ents[0] if ents else (n.properties.get("summary", "")[:30] + "...")
+                path_labels.append(label)
+
+        system_prompt = (
+            "You are an expert QA test designer specialising in multi-hop reasoning. "
+            "Given two excerpts from different parts of a document that are indirectly related, "
+            "generate ONE question that requires connecting them through intermediate reasoning. "
+            "Also provide a reference answer that clearly explains the connection. "
+            "Return a JSON object with keys: question, reference_answer."
+        )
+        user_prompt = (
+            f"Excerpt A:\n{src_summary}\n\n"
+            f"Excerpt B:\n{tgt_summary}\n\n"
+            f"Key entities in A: {src_entities[:5]}\n"
+            f"Key entities in B: {tgt_entities[:5]}\n\n"
+            "Generate a bridge question connecting these two excerpts. "
+            "Return ONLY the JSON object."
+        )
+        try:
+            response = llm_client.chat.completions.create(
+                model=DEFAULT_EVAL_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=TESTGEN_QUESTION_TEMPERATURE,
+                max_tokens=512,
+                response_format={"type": "json_object"},
+            )
+            raw = _json.loads(response.choices[0].message.content or "{}")
+            question = raw.get("question", "").strip()
+            reference_answer = raw.get("reference_answer", "").strip()
+            if question and reference_answer:
+                results.append({
+                    "user_input": question,
+                    "reference": reference_answer,
+                    "reference_contexts": [src_summary, tgt_summary],
+                    "synthesizer_name": "bridge",
+                    "metadata": {
+                        "graph_path": path_labels,
+                        "difficulty": "hard",
+                    },
+                })
+        except Exception:
+            logger.exception("Failed to generate bridge question for node pair")
+
+    return results
+
+
+def _generate_comparative_questions(
+    kg: KnowledgeGraph,
+    count: int,
+    llm_client,
+) -> list[dict]:
+    """Generate compare-and-contrast questions for directly related node pairs (entity_overlap edges)."""
+    if count <= 0:
+        return []
+
+    import random
+
+    # Find all entity_overlap relationships
+    overlap_pairs: list[tuple[object, object]] = []
+    for rel in kg.relationships:
+        if rel.type == "entity_overlap":
+            overlap_pairs.append((rel.source, rel.target))
+
+    if not overlap_pairs:
+        logger.info("No entity_overlap relationships found for comparative questions")
+        return []
+
+    random.shuffle(overlap_pairs)
+    selected_pairs = overlap_pairs[: count * 2]
+
+    results = []
+    for src_node, tgt_node in selected_pairs:
+        if len(results) >= count:
+            break
+        src_summary = src_node.properties.get("summary", src_node.properties.get("page_content", ""))[:500]
+        tgt_summary = tgt_node.properties.get("summary", tgt_node.properties.get("page_content", ""))[:500]
+        src_entities = src_node.properties.get("entities", [])
+        tgt_entities = tgt_node.properties.get("entities", [])
+        shared = list(set(src_entities) & set(tgt_entities))[:5]
+
+        system_prompt = (
+            "You are an expert QA test designer. "
+            "Given two related excerpts from the same document, generate ONE comparison question "
+            "that asks about the similarities or differences between them. "
+            "The reference answer should highlight key similarities and differences. "
+            "Return a JSON object with keys: question, reference_answer."
+        )
+        user_prompt = (
+            f"Excerpt A:\n{src_summary}\n\n"
+            f"Excerpt B:\n{tgt_summary}\n\n"
+            f"Shared concepts: {shared}\n\n"
+            "Generate a comparison question. Return ONLY the JSON object."
+        )
+        try:
+            response = llm_client.chat.completions.create(
+                model=DEFAULT_EVAL_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=TESTGEN_QUESTION_TEMPERATURE,
+                max_tokens=512,
+                response_format={"type": "json_object"},
+            )
+            raw = _json.loads(response.choices[0].message.content or "{}")
+            question = raw.get("question", "").strip()
+            reference_answer = raw.get("reference_answer", "").strip()
+            if question and reference_answer:
+                a_snippet = src_summary[:40].replace("\n", " ") + "..."
+                b_snippet = tgt_summary[:40].replace("\n", " ") + "..."
+                results.append({
+                    "user_input": question,
+                    "reference": reference_answer,
+                    "reference_contexts": [src_summary, tgt_summary],
+                    "synthesizer_name": "comparative",
+                    "metadata": {
+                        "graph_path": [a_snippet, "↔", b_snippet],
+                        "difficulty": "medium",
+                    },
+                })
+        except Exception:
+            logger.exception("Failed to generate comparative question")
+
+    return results
+
+
+def _generate_community_questions(
+    kg: KnowledgeGraph,
+    count: int,
+    llm_client,
+) -> list[dict]:
+    """Generate high-level thematic questions by grouping KG nodes by theme."""
+    if count <= 0:
+        return []
+
+    import random
+
+    # Group nodes by their first theme (already extracted in KG build step 8)
+    theme_groups: dict[str, list[object]] = {}
+    for node in kg.nodes:
+        themes = node.properties.get("themes", [])
+        if not themes:
+            continue
+        theme = themes[0] if isinstance(themes[0], str) else str(themes[0])
+        theme = theme.strip()
+        if theme:
+            theme_groups.setdefault(theme, []).append(node)
+
+    if not theme_groups:
+        logger.info("No themes found in KG nodes for community questions")
+        return []
+
+    # Sort themes by cluster size descending; take top clusters
+    sorted_themes = sorted(theme_groups.items(), key=lambda kv: len(kv[1]), reverse=True)
+    top_themes = sorted_themes[:max(count, 5)]
+
+    results = []
+    per_theme = max(1, count // len(top_themes))
+    remainder = count - per_theme * len(top_themes)
+
+    for idx, (theme, nodes) in enumerate(top_themes):
+        if len(results) >= count:
+            break
+        theme_count = per_theme + (1 if idx < remainder else 0)
+        # Concatenate summaries from up to 5 representative nodes
+        sample_nodes = random.sample(nodes, min(5, len(nodes)))
+        context_parts = []
+        for n in sample_nodes:
+            s = n.properties.get("summary", n.properties.get("page_content", ""))[:300]
+            if s:
+                context_parts.append(s)
+        context = "\n---\n".join(context_parts)
+
+        system_prompt = (
+            "You are an expert QA test designer. "
+            "Given several excerpts that all relate to a common theme, generate high-level questions "
+            "that test comprehensive understanding of the topic. "
+            "Each question should require synthesising information across the excerpts. "
+            f"Generate exactly {theme_count} questions as a JSON array. "
+            "Each element must have: question, reference_answer. "
+            "Return ONLY the JSON array."
+        )
+        user_prompt = (
+            f"Theme: {theme}\n\n"
+            f"Related excerpts:\n{context}\n\n"
+            f"Generate {theme_count} community-level question(s) about this theme."
+        )
+        try:
+            response = llm_client.chat.completions.create(
+                model=DEFAULT_EVAL_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=TESTGEN_QUESTION_TEMPERATURE,
+                max_tokens=1024,
+                response_format={"type": "json_object"},
+            )
+            raw = _json.loads(response.choices[0].message.content or "[]")
+            if isinstance(raw, dict):
+                items = raw.get("questions", raw.get("items", []))
+            elif isinstance(raw, list):
+                items = raw
+            else:
+                items = []
+            for item in items[:theme_count]:
+                question = item.get("question", "").strip()
+                reference_answer = item.get("reference_answer", "").strip()
+                if question and reference_answer:
+                    results.append({
+                        "user_input": question,
+                        "reference": reference_answer,
+                        "reference_contexts": context_parts,
+                        "synthesizer_name": "community",
+                        "metadata": {
+                            "graph_path": [f"theme:{theme}"],
+                            "difficulty": "easy",
+                        },
+                    })
+        except Exception:
+            logger.exception("Failed to generate community questions for theme '%s'", theme)
+
+    return results[:count]
+
+
+# Difficulty mapping for ALL question types
+_DIFFICULTY_MAP: dict[str, str] = {
+    # Easy
+    "single_hop_specific": "easy",
+    "community": "easy",
+    "out_of_knowledge_base": "easy",
+    # Medium
+    "typical": "medium",
+    "in_knowledge_base": "medium",
+    "multi_hop_specific": "medium",
+    "comparative": "medium",
+    # Hard
+    "multi_hop_abstract": "hard",
+    "bridge": "hard",
+    "edge": "hard",
+}
+
+
+def _assign_difficulty(questions: list[dict]) -> None:
+    """Tag every question in-place with a difficulty level in metadata."""
+    for q in questions:
+        synth = q.get("synthesizer_name") or q.get("category") or ""
+        difficulty = _DIFFICULTY_MAP.get(synth, "medium")
+        meta = q.get("metadata")
+        if meta is None:
+            q["metadata"] = {"difficulty": difficulty}
+        elif "difficulty" not in meta:
+            meta["difficulty"] = difficulty
+
+
 def generate_project_testset(
     chunks: list[str],
     testset_size: int = 10,
@@ -1620,6 +2038,7 @@ def generate_project_testset(
     num_workers: int = 4,
     question_categories: dict[str, int] | None = None,
     project_id: int | None = None,
+    graph_rag_kg_source: str = "chunks",
 ) -> dict:
     """Unified entry point for project-scoped test set generation.
 
@@ -1627,8 +2046,12 @@ def generate_project_testset(
     a normalized dict with 'personas' and 'questions' keys.
 
     question_categories: optional dict mapping category names to percentages.
-    Supported categories: typical, in_knowledge_base, edge, out_of_knowledge_base.
+    Supported categories: typical, in_knowledge_base, edge, out_of_knowledge_base,
+    bridge, comparative, community (last three require a built KG).
     When provided, questions are generated per-category and tagged.
+
+    graph_rag_kg_source: "chunks" (default) or "documents". Controls which KG is
+    used for Graph RAG question types (bridge, comparative, community).
     """
     # Initialize progress tracking
     if project_id is not None:
@@ -1649,6 +2072,7 @@ def generate_project_testset(
             num_workers=num_workers,
             question_categories=question_categories,
             project_id=project_id,
+            graph_rag_kg_source=graph_rag_kg_source,
         )
     finally:
         if project_id is not None:
@@ -1665,6 +2089,7 @@ def _generate_project_testset_inner(
     num_workers: int = 4,
     question_categories: dict[str, int] | None = None,
     project_id: int | None = None,
+    graph_rag_kg_source: str = "chunks",
 ) -> dict:
     # If no categories specified, generate all as "in_knowledge_base" (legacy behavior)
     if not question_categories:
@@ -1691,6 +2116,7 @@ def _generate_project_testset_inner(
         # Tag all questions as in_knowledge_base for consistency
         for q in result.get("questions", []):
             q["category"] = "in_knowledge_base"
+        _assign_difficulty(result.get("questions", []))
         return result
 
     # Category-based generation: split testset_size by category percentages
@@ -1701,9 +2127,10 @@ def _generate_project_testset_inner(
     all_questions: list[dict] = []
     all_personas: list[dict] = []
 
-    # Ragas-based categories (typical + in_knowledge_base) use the existing generators
+    # Bucket categories by generation method
     ragas_categories = {}
     llm_categories = {}
+    graph_rag_categories = {}
     for cat, pct in question_categories.items():
         if pct <= 0:
             continue
@@ -1711,6 +2138,8 @@ def _generate_project_testset_inner(
             ragas_categories[cat] = pct
         elif cat in ("edge", "out_of_knowledge_base"):
             llm_categories[cat] = pct
+        elif cat in ("bridge", "comparative", "community"):
+            graph_rag_categories[cat] = pct
 
     # Generate Ragas-based questions (typical + in_knowledge_base combined)
     ragas_total_pct = sum(ragas_categories.values())
@@ -1763,5 +2192,59 @@ def _generate_project_testset_inner(
         all_questions.extend(cat_questions)
         if project_id is not None:
             increment_questions(project_id, len(cat_questions))
+
+    # Generate Graph RAG questions (bridge, comparative, community)
+    if graph_rag_categories:
+        # Determine source texts and cache key based on selected KG source
+        if graph_rag_kg_source == "documents" and project_id is not None:
+            source_texts = _fetch_document_texts(project_id)
+            kg_source_key = "documents"
+        else:
+            source_texts = chunks
+            kg_source_key = "chunks"
+
+        # Load the KG from cache or build fresh
+        kg_for_graph: KnowledgeGraph | None = None
+        if project_id is not None:
+            cached = load_cached_kg(project_id, source_texts, allow_partial=False, kg_source=kg_source_key)
+            if cached is not None:
+                kg_for_graph = cached  # type: ignore[assignment]
+
+        if kg_for_graph is None:
+            if project_id is not None:
+                update_progress(project_id, stage="building_knowledge_graph")
+            llm, embeddings, _ = _build_llm_and_embeddings()
+            kg_for_graph = build_knowledge_graph(
+                source_texts, llm=llm, embeddings=embeddings,
+                project_id=project_id, kg_source=kg_source_key
+            )
+
+        _, _, llm_client = _build_llm_and_embeddings()
+
+        _graph_generators = {
+            "bridge": _generate_bridge_questions,
+            "comparative": _generate_comparative_questions,
+            "community": _generate_community_questions,
+        }
+        _stage_names = {
+            "bridge": "generating_bridge_questions",
+            "comparative": "generating_comparative_questions",
+            "community": "generating_community_questions",
+        }
+
+        for cat, pct in graph_rag_categories.items():
+            cat_count = max(1, round(testset_size * pct / total_pct))
+            if project_id is not None:
+                update_progress(project_id, stage=_stage_names[cat])
+            generator = _graph_generators[cat]
+            cat_questions = generator(kg_for_graph, cat_count, llm_client)
+            for q in cat_questions:
+                q["category"] = cat
+            all_questions.extend(cat_questions)
+            if project_id is not None:
+                increment_questions(project_id, len(cat_questions))
+
+    # Tag all questions with difficulty (covers all types)
+    _assign_difficulty(all_questions)
 
     return {"personas": all_personas, "questions": all_questions}

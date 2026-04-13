@@ -228,6 +228,7 @@ def _run_generation(
             num_workers=req.num_workers,
             question_categories=req.question_categories,
             project_id=project_id,
+            graph_rag_kg_source=req.graph_rag_kg_source,
         )
 
         # Insert questions
@@ -979,12 +980,11 @@ def _filter_kg_edges(
 
 
 @router.get("/projects/{project_id}/knowledge-graph")
-async def get_knowledge_graph_info(project_id: int):
+async def get_knowledge_graph_info(project_id: int, kg_source: str = "chunks"):
     """Return metadata about the cached knowledge graph for a project.
 
-    Includes a ``chunks_stale`` flag indicating whether the current chunks
-    differ from those used to build the cached KG (i.e. documents were
-    added or removed since the last build).
+    Includes a ``chunks_stale`` flag indicating whether the current source content
+    differs from what was used to build the cached KG.
     """
     from evaluation.metrics.testgen import get_kg_info, _chunks_hash
 
@@ -995,28 +995,38 @@ async def get_knowledge_graph_info(project_id: int):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    info = get_kg_info(project_id)
+    info = get_kg_info(project_id, kg_source=kg_source)
     if info is None:
-        return {"exists": False}
+        return {"exists": False, "kg_source": kg_source}
 
-    # Check if chunks have changed since the KG was built
+    # Check staleness depending on source type
     chunks_stale = False
-    chunk_config_id = info.get("chunk_config_id")
     stored_hash = info.get("chunks_hash")
-    if chunk_config_id and stored_hash:
-        chunk_rows = conn.execute(
-            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
-            (chunk_config_id,),
-        ).fetchall()
-        if chunk_rows:
-            current_hash = _chunks_hash([r["content"] for r in chunk_rows])
-            chunks_stale = current_hash != stored_hash
+    if stored_hash:
+        if kg_source == "documents":
+            doc_rows = conn.execute(
+                "SELECT content FROM documents WHERE project_id = ? ORDER BY id",
+                (project_id,),
+            ).fetchall()
+            if doc_rows:
+                current_hash = _chunks_hash([r["content"] for r in doc_rows])
+                chunks_stale = current_hash != stored_hash
+        else:
+            chunk_config_id = info.get("chunk_config_id")
+            if chunk_config_id:
+                chunk_rows = conn.execute(
+                    "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                    (chunk_config_id,),
+                ).fetchall()
+                if chunk_rows:
+                    current_hash = _chunks_hash([r["content"] for r in chunk_rows])
+                    chunks_stale = current_hash != stored_hash
 
-    return {"exists": True, "chunks_stale": chunks_stale, **info}
+    return {"exists": True, "chunks_stale": chunks_stale, "kg_source": kg_source, **info}
 
 
 @router.delete("/projects/{project_id}/knowledge-graph", status_code=204)
-async def delete_knowledge_graph(project_id: int):
+async def delete_knowledge_graph(project_id: int, kg_source: str = "chunks"):
     """Delete the cached knowledge graph for a project."""
     from evaluation.metrics.testgen import delete_kg_from_db
 
@@ -1027,7 +1037,7 @@ async def delete_knowledge_graph(project_id: int):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    deleted = delete_kg_from_db(project_id)
+    deleted = delete_kg_from_db(project_id, kg_source=kg_source)
     if not deleted:
         raise HTTPException(
             status_code=404, detail="No knowledge graph found for this project"
@@ -1092,8 +1102,9 @@ def _run_kg_subprocess(
 
 
 class BuildKGRequest(BaseModel):
-    chunk_config_id: int
+    chunk_config_id: int | None = None  # required for chunks source, ignored for documents
     overlap_max_nodes: int | None = 500  # cap for OverlapScoreBuilder sampling
+    kg_source: str = "chunks"  # "chunks" or "documents"
 
 
 @router.post("/projects/{project_id}/build-knowledge-graph")
@@ -1106,44 +1117,79 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    cc = conn.execute(
-        "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
-        (req.chunk_config_id, project_id),
-    ).fetchone()
-    if cc is None:
-        raise HTTPException(status_code=404, detail="Chunk config not found")
+    if req.kg_source == "documents":
+        # Document-level KG — no chunk_config_id needed
+        doc_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM documents WHERE project_id = ?", (project_id,)
+        ).fetchone()["cnt"]
+        if doc_count == 0:
+            raise HTTPException(status_code=422, detail="No documents found for this project")
 
-    with _kg_lock:
-        if _active_kg_builds.get(project_id):
-            raise HTTPException(
-                status_code=409,
-                detail="Knowledge graph build already in progress",
-            )
-        _active_kg_builds[project_id] = True
+        with _kg_lock:
+            if _active_kg_builds.get(project_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Knowledge graph build already in progress",
+                )
+            _active_kg_builds[project_id] = True
 
-    overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
-    script = (
-        "import sys, os; "
-        "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
-        "from evaluation.metrics.testgen import build_kg_standalone; "
-        "result = build_kg_standalone("
-        "chunk_config_id=int(sys.argv[2]), project_id=int(sys.argv[3])"
-        f"{overlap_arg}); "
-        "print('KG_BUILD_OK')"
-    )
+        overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
+        script = (
+            "import sys, os; "
+            "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
+            "from evaluation.metrics.testgen import build_kg_standalone_from_documents; "
+            "result = build_kg_standalone_from_documents("
+            "project_id=int(sys.argv[2])"
+            f"{overlap_arg}); "
+            "print('KG_BUILD_OK')"
+        )
+        thread = threading.Thread(
+            target=_run_kg_subprocess,
+            args=(project_id, script, [str(project_id)], "KG_BUILD_OK", "building_knowledge_graph"),
+            daemon=True,
+        )
+        thread.start()
+    else:
+        # Chunk-based KG (default)
+        if req.chunk_config_id is None:
+            raise HTTPException(status_code=422, detail="chunk_config_id required for chunks source")
+        cc = conn.execute(
+            "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+            (req.chunk_config_id, project_id),
+        ).fetchone()
+        if cc is None:
+            raise HTTPException(status_code=404, detail="Chunk config not found")
 
-    thread = threading.Thread(
-        target=_run_kg_subprocess,
-        args=(project_id, script, [str(req.chunk_config_id), str(project_id)], "KG_BUILD_OK", "building_knowledge_graph"),
-        daemon=True,
-    )
-    thread.start()
+        with _kg_lock:
+            if _active_kg_builds.get(project_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Knowledge graph build already in progress",
+                )
+            _active_kg_builds[project_id] = True
 
-    return {"status": "building", "project_id": project_id}
+        overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
+        script = (
+            "import sys, os; "
+            "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
+            "from evaluation.metrics.testgen import build_kg_standalone; "
+            "result = build_kg_standalone("
+            "chunk_config_id=int(sys.argv[2]), project_id=int(sys.argv[3])"
+            f"{overlap_arg}); "
+            "print('KG_BUILD_OK')"
+        )
+        thread = threading.Thread(
+            target=_run_kg_subprocess,
+            args=(project_id, script, [str(req.chunk_config_id), str(project_id)], "KG_BUILD_OK", "building_knowledge_graph"),
+            daemon=True,
+        )
+        thread.start()
+
+    return {"status": "building", "project_id": project_id, "kg_source": req.kg_source}
 
 
 @router.get("/projects/{project_id}/knowledge-graph/progress")
-async def kg_build_progress(project_id: int):
+async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
     """Poll knowledge graph build progress."""
     from evaluation.metrics.testgen import get_progress, get_kg_info
 
@@ -1159,7 +1205,7 @@ async def kg_build_progress(project_id: int):
         return {"active": True, "stage": "building_knowledge_graph"}
 
     # No active thread — check DB for result
-    info = get_kg_info(project_id)
+    info = get_kg_info(project_id, kg_source=kg_source)
     if info:
         if info.get("is_complete"):
             return {"active": False, "status": "completed", **info}
@@ -1177,7 +1223,7 @@ async def kg_build_progress(project_id: int):
 
 
 @router.post("/projects/{project_id}/knowledge-graph/reset")
-async def kg_reset_stale(project_id: int):
+async def kg_reset_stale(project_id: int, kg_source: str = "chunks"):
     """Delete a partial/stale KG checkpoint so a fresh build can start."""
     from evaluation.metrics.testgen import get_kg_info, delete_kg_from_db, clear_progress
 
@@ -1185,11 +1231,11 @@ async def kg_reset_stale(project_id: int):
         if _active_kg_builds.get(project_id):
             raise HTTPException(400, "A build is currently running — cannot reset")
 
-    info = get_kg_info(project_id)
+    info = get_kg_info(project_id, kg_source=kg_source)
     if not info:
         return {"deleted": False, "reason": "no KG found"}
 
-    deleted = delete_kg_from_db(project_id)
+    deleted = delete_kg_from_db(project_id, kg_source=kg_source)
     clear_progress(project_id)
     return {"deleted": deleted, "was_complete": info.get("is_complete", False)}
 
