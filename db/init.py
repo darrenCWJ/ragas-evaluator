@@ -227,6 +227,26 @@ CREATE TABLE IF NOT EXISTS knowledge_graphs (
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
     UNIQUE(project_id, chunks_hash)
 );
+
+CREATE TABLE IF NOT EXISTS multi_llm_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_result_id INTEGER NOT NULL REFERENCES experiment_results(id) ON DELETE CASCADE,
+    evaluator_index INTEGER NOT NULL,
+    verdict TEXT NOT NULL,
+    score REAL NOT NULL,
+    claims_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS evaluator_claim_annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    evaluation_id INTEGER NOT NULL REFERENCES multi_llm_evaluations(id) ON DELETE CASCADE,
+    claim_index INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    comment TEXT,
+    annotated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(evaluation_id, claim_index)
+);
 """
 
 

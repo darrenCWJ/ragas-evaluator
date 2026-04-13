@@ -1707,6 +1707,143 @@ export interface KGBuildProgress {
   total_steps?: number;
 }
 
+// --- Multi-LLM Judge Types ---
+
+export interface JudgeClaim {
+  type: "praise" | "critique";
+  response_quote: string;
+  chunk_reference: string | null;
+  chunk_quote: string | null;
+  explanation: string;
+}
+
+export interface ClaimAnnotation {
+  status: "accurate" | "inaccurate" | "unsure";
+  comment: string | null;
+  annotated_at: string;
+}
+
+export interface JudgeEvaluation {
+  id: number;
+  evaluator_index: number;
+  verdict: "positive" | "mixed" | "critical";
+  score: number;
+  claims: JudgeClaim[];
+  annotations: Record<number, ClaimAnnotation>;
+  created_at: string;
+}
+
+export interface JudgeEvaluationsResponse {
+  result_id: number;
+  evaluations: JudgeEvaluation[];
+}
+
+export interface JudgeAnnotationSampleItem {
+  result_id: number;
+  test_question_id: number;
+  question: string;
+  reference_answer: string;
+  response: string | null;
+  evaluations: JudgeEvaluation[];
+}
+
+export interface JudgeAnnotationSampleResult {
+  experiment_id: number;
+  total_results: number;
+  sample_size: number;
+  annotated_count: number;
+  sample: JudgeAnnotationSampleItem[];
+}
+
+export interface JudgeEvaluatorStats {
+  evaluator_index: number;
+  reliability: number | null;
+  accurate_claims: number;
+  inaccurate_claims: number;
+  unsure_claims: number;
+  total_claims_annotated: number;
+  verdict_counts: Record<string, number>;
+  excluded: boolean;
+}
+
+export interface JudgeReliabilityResult {
+  experiment_id: number;
+  evaluators: JudgeEvaluatorStats[];
+  excluded_indices: number[];
+  overall_reliability: number | null;
+  threshold: number;
+  annotation_progress: { annotated_evaluators: number; total_evaluators: number };
+}
+
+export interface JudgeSummaryResult {
+  result_id: number;
+  question: string;
+  response: string | null;
+  reference_answer: string;
+  evaluator_verdicts: Record<number, string>;
+  adjusted_score: number;
+}
+
+export interface JudgeSummaryResponse {
+  experiment_id: number;
+  excluded_indices: number[];
+  results: JudgeSummaryResult[];
+}
+
+// --- Multi-LLM Judge API ---
+
+export async function fetchJudgeEvaluations(
+  projectId: number,
+  experimentId: number,
+  resultId: number,
+): Promise<JudgeEvaluationsResponse> {
+  return request<JudgeEvaluationsResponse>(
+    `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations`,
+  );
+}
+
+export async function fetchJudgeAnnotationSample(
+  projectId: number,
+  experimentId: number,
+): Promise<JudgeAnnotationSampleResult> {
+  return request<JudgeAnnotationSampleResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/judge-annotation-sample`,
+  );
+}
+
+export async function annotateJudgeClaim(
+  projectId: number,
+  experimentId: number,
+  resultId: number,
+  evaluationId: number,
+  claimIndex: number,
+  status: "accurate" | "inaccurate" | "unsure",
+  comment?: string,
+): Promise<{ evaluation_id: number; claim_index: number; status: string }> {
+  return request(
+    `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations/${evaluationId}/claims/${claimIndex}/annotate`,
+    { method: "POST", body: JSON.stringify({ status, comment: comment ?? null }) },
+  );
+}
+
+export async function fetchJudgeReliability(
+  projectId: number,
+  experimentId: number,
+): Promise<JudgeReliabilityResult> {
+  return request<JudgeReliabilityResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/judge-reliability`,
+  );
+}
+
+export async function fetchJudgeSummary(
+  projectId: number,
+  experimentId: number,
+): Promise<JudgeSummaryResponse> {
+  return request<JudgeSummaryResponse>(
+    `/api/projects/${projectId}/experiments/${experimentId}/judge-summary`,
+  );
+}
+
 export async function fetchKnowledgeGraphInfo(
   projectId: number,
 ): Promise<KnowledgeGraphInfo> {

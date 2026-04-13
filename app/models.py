@@ -394,12 +394,32 @@ class ExperimentRunRequest(BaseModel):
     metrics: list[str] | None = None
     rubrics: dict[str, str] | None = None
     concurrency: int = 5
+    multi_llm_judge_evaluators: int = 5
 
     @field_validator("concurrency")
     @classmethod
     def validate_concurrency(cls, v: int) -> int:
         if v < 1 or v > 20:
             raise ValueError("concurrency must be between 1 and 20")
+        return v
+
+    @field_validator("multi_llm_judge_evaluators")
+    @classmethod
+    def validate_multi_llm_judge_evaluators(cls, v: int) -> int:
+        if v < 3 or v > 6:
+            raise ValueError("multi_llm_judge_evaluators must be between 3 and 6")
+        return v
+
+
+class ClaimAnnotationRequest(BaseModel):
+    status: str  # accurate | inaccurate | unsure
+    comment: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in {"accurate", "inaccurate", "unsure"}:
+            raise ValueError("status must be accurate, inaccurate, or unsure")
         return v
 
 
