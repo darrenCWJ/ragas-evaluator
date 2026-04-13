@@ -360,6 +360,13 @@ def init_db() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Migration: add kg_source to knowledge_graphs (chunks vs documents KG)
+    try:
+        conn.execute("ALTER TABLE knowledge_graphs ADD COLUMN kg_source TEXT NOT NULL DEFAULT 'chunks'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Migration: add user_edited_contexts to test_questions
     try:
         conn.execute("ALTER TABLE test_questions ADD COLUMN user_edited_contexts TEXT")

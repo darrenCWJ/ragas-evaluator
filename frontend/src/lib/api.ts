@@ -568,6 +568,7 @@ export interface TestSetCreate {
   chunk_sample_size?: number;
   num_workers?: number;
   question_categories?: Record<string, number>;
+  graph_rag_kg_source?: string;
 }
 
 export interface TestQuestion {
@@ -1693,6 +1694,7 @@ export interface KnowledgeGraphInfo {
   heartbeat_stale?: boolean;
   chunks_stale?: boolean;
   chunk_config_id?: number;
+  kg_source?: string;
   last_heartbeat?: string;
   created_at?: string;
 }
@@ -1852,16 +1854,18 @@ export async function fetchJudgeSummary(
 
 export async function fetchKnowledgeGraphInfo(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<KnowledgeGraphInfo> {
   return request<KnowledgeGraphInfo>(
-    `/api/projects/${projectId}/knowledge-graph`,
+    `/api/projects/${projectId}/knowledge-graph?kg_source=${encodeURIComponent(kgSource)}`,
   );
 }
 
 export async function buildKnowledgeGraph(
   projectId: number,
-  chunkConfigId: number,
+  chunkConfigId: number | null,
   overlapMaxNodes: number | null = 500,
+  kgSource: string = "chunks",
 ): Promise<{ status: string }> {
   return request<{ status: string }>(
     `/api/projects/${projectId}/build-knowledge-graph`,
@@ -1870,6 +1874,7 @@ export async function buildKnowledgeGraph(
       body: JSON.stringify({
         chunk_config_id: chunkConfigId,
         overlap_max_nodes: overlapMaxNodes,
+        kg_source: kgSource,
       }),
     },
   );
@@ -1877,26 +1882,29 @@ export async function buildKnowledgeGraph(
 
 export async function fetchKGBuildProgress(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<KGBuildProgress> {
   return request<KGBuildProgress>(
-    `/api/projects/${projectId}/knowledge-graph/progress`,
+    `/api/projects/${projectId}/knowledge-graph/progress?kg_source=${encodeURIComponent(kgSource)}`,
   );
 }
 
 export async function deleteKnowledgeGraph(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<void> {
   await request<void>(
-    `/api/projects/${projectId}/knowledge-graph`,
+    `/api/projects/${projectId}/knowledge-graph?kg_source=${encodeURIComponent(kgSource)}`,
     { method: "DELETE" },
   );
 }
 
 export async function resetKnowledgeGraph(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<{ deleted: boolean; was_complete?: boolean }> {
   return request<{ deleted: boolean; was_complete?: boolean }>(
-    `/api/projects/${projectId}/knowledge-graph/reset`,
+    `/api/projects/${projectId}/knowledge-graph/reset?kg_source=${encodeURIComponent(kgSource)}`,
     { method: "POST" },
   );
 }

@@ -61,6 +61,7 @@ class TestSetCreate(BaseModel):
     chunk_sample_size: int = 0
     num_workers: int = 4
     question_categories: dict[str, int] | None = None
+    graph_rag_kg_source: str = "chunks"  # "chunks" or "documents"
 
     @field_validator("testset_size")
     @classmethod
