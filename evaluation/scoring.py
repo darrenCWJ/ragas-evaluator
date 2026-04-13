@@ -132,7 +132,8 @@ def setup_scorers(
     Returns (builtin_scorers, custom_scorers, llm).
     The llm is returned so custom DiscreteMetric scorers can use it at score time.
     """
-    selected = metrics or ALL_METRICS
+    # None means "run all metrics"; [] means "run no built-in metrics" (e.g. judge-only runs)
+    selected = metrics if metrics is not None else ALL_METRICS
     from config import DEFAULT_EVAL_MODEL, DEFAULT_EVAL_EMBEDDING, DEFAULT_EVAL_MAX_TOKENS
 
     async_client = AsyncOpenAI()

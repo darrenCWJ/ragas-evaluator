@@ -92,6 +92,23 @@ def _build_context_section(context_dicts: list[dict]) -> str:
     return _CONTEXT_SECTION_TEMPLATE.format(chunks="\n\n".join(lines))
 
 
+def _extract_json(text: str) -> dict:
+    """Extract the first JSON object from text, handles markdown code fences."""
+    text = text.strip()
+    # Strip ```json ... ``` or ``` ... ``` fences
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    # Find first { ... } block
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1:
+        return json.loads(text[start : end + 1])
+    return json.loads(text)
+
+
 async def _single_evaluator(
     client: AsyncOpenAI,
     model: str,
@@ -113,10 +130,9 @@ async def _single_evaluator(
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
             max_tokens=800,
-            response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content or ""
-        data = json.loads(raw)
+        data = _extract_json(raw)
 
         # Validate and normalise
         verdict = data.get("verdict", "mixed")
@@ -143,7 +159,7 @@ async def _single_evaluator(
             "claims": claims,
         }
     except Exception as e:
-        logger.warning("Evaluator %d failed (temp=%.2f): %s", evaluator_index, temperature, e)
+        logger.warning("Evaluator %d failed (temp=%.2f): %s", evaluator_index, temperature, e, exc_info=True)
         return None
 
 

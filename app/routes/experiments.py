@@ -910,10 +910,16 @@ async def run_experiment(
                     experiment_id, req.multi_llm_judge_evaluators,
                 )
 
-            # Setup scorers — must run on the main event loop (not in executor)
-            # because AsyncOpenAI client binds to the current loop
+            # Setup scorers — skip entirely when no built-in or custom metrics
+            # are selected (e.g. only multi_llm_judge). Calling setup_scorers([])
+            # or setup_scorers(None) falls back to ALL_METRICS inside that
+            # function, so we must guard the call here instead.
             logger.info("Experiment %d: setting up scorers for %s", experiment_id, builtin_selected)
-            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
+            scorers, custom_scorers, llm = setup_scorers(
+                builtin_selected,   # [] → no built-in metrics (fixed in scoring.py)
+                custom_configs,
+                rubrics=req.rubrics,
+            )
             logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
 
             # Transition from setup → running
@@ -1204,6 +1210,7 @@ async def run_experiment(
                             logger.warning(
                                 "Experiment %d: multi_llm_judge failed for result %d: %s",
                                 experiment_id, result_row_id, _judge_err,
+                                exc_info=True,
                             )
                     # --- End Multi-LLM Judge block ---
                 else:

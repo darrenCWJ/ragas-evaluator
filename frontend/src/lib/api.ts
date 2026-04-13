@@ -1020,6 +1020,7 @@ export function runExperimentSSE(
   callbacks: ExperimentSSECallbacks,
   rubrics?: Record<string, string> | null,
   concurrency?: number,
+  multiLlmJudgeEvaluators?: number,
 ): ExperimentSSEHandle {
   const controller = new AbortController();
 
@@ -1031,7 +1032,12 @@ export function runExperimentSSE(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ metrics, rubrics: rubrics ?? null, concurrency: concurrency ?? 5 }),
+          body: JSON.stringify({
+            metrics,
+            rubrics: rubrics ?? null,
+            concurrency: concurrency ?? 5,
+            multi_llm_judge_evaluators: multiLlmJudgeEvaluators ?? 5,
+          }),
           signal: controller.signal,
         },
       );

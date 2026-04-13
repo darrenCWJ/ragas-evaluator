@@ -217,7 +217,6 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId }: Prop
   if (!reliability || !summary) return null;
 
   const excludedSet = new Set(reliability.excluded_indices);
-  const { annotated_evaluators, total_evaluators } = reliability.annotation_progress;
 
   return (
     <div className="space-y-6">

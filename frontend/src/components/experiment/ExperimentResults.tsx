@@ -48,6 +48,9 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
     load();
   }, [load]);
 
+  // Must be at top level — before any conditional returns
+  const [activeTab, setActiveTab] = useState<"results" | "judge">("results");
+
   /* ── Export handler ── */
   const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -110,7 +113,6 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
 
   const { experiment, results } = state;
   const hasJudge = results.some((r) => "multi_llm_judge" in r.metrics);
-  const [activeTab, setActiveTab] = useState<"results" | "judge">("results");
 
   const agg = experiment.aggregate_metrics;
 
