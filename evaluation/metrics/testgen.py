@@ -261,6 +261,36 @@ def _chunks_hash(chunks: list[str]) -> str:
     return h.hexdigest()[:16]
 
 
+def _load_kg_safe(tmp_path: str) -> KnowledgeGraph:
+    """Load a KnowledgeGraph from a JSON file, removing dangling relationships.
+
+    Ragas' CustomNodeFilter removes low-quality nodes but doesn't clean up
+    relationships that reference those removed nodes. On reload, KnowledgeGraph.load
+    raises KeyError when a relationship references a missing node ID.
+    This function patches the JSON to strip dangling relationships before loading.
+    """
+    try:
+        return KnowledgeGraph.load(tmp_path)
+    except KeyError:
+        logger.warning("KG JSON has dangling relationships — patching before load")
+        import json as _json
+        data = _json.loads(Path(tmp_path).read_text(encoding="utf-8"))
+        node_ids = {n["id"] for n in data.get("nodes", [])}
+        original_rel_count = len(data.get("relationships", []))
+        data["relationships"] = [
+            r for r in data.get("relationships", [])
+            if r.get("source") in node_ids and r.get("target") in node_ids
+        ]
+        removed = original_rel_count - len(data["relationships"])
+        logger.info("Removed %d dangling relationships from KG JSON", removed)
+        patched_path = tmp_path + ".patched"
+        Path(patched_path).write_text(_json.dumps(data), encoding="utf-8")
+        try:
+            return KnowledgeGraph.load(patched_path)
+        finally:
+            Path(patched_path).unlink(missing_ok=True)
+
+
 def load_cached_kg(
     project_id: int,
     chunks: list[str],
@@ -325,7 +355,7 @@ def load_cached_kg(
         f.write(row["kg_json"])
         tmp_path = f.name
     try:
-        kg = KnowledgeGraph.load(tmp_path)
+        kg = _load_kg_safe(tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
@@ -616,6 +646,18 @@ def build_knowledge_graph(
         logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
         try:
             _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes)
+            # After CustomNodeFilter removes nodes, clean up any relationships that
+            # now reference missing node IDs to prevent KeyError on KG reload.
+            if stage_name == "kg_filtering_nodes" and kg.relationships:
+                node_ids = {n.id for n in kg.nodes}
+                before = len(kg.relationships)
+                kg.relationships = [
+                    r for r in kg.relationships
+                    if r.source.id in node_ids and r.target.id in node_ids
+                ]
+                removed = before - len(kg.relationships)
+                if removed:
+                    logger.info("Removed %d dangling relationships after node filtering", removed)
             completed_steps += 1
             # Save checkpoint after each step so we can resume on crash
             if project_id is not None:
@@ -785,7 +827,7 @@ def rebuild_kg_links(
             f.write(row["kg_json"])
             tmp_path = f.name
         try:
-            kg = KnowledgeGraph.load(tmp_path)
+            kg = _load_kg_safe(tmp_path)
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
@@ -953,7 +995,7 @@ def incremental_update_kg(
         f.write(row["kg_json"])
         tmp_path = f.name
     try:
-        kg = KnowledgeGraph.load(tmp_path)
+        kg = _load_kg_safe(tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 

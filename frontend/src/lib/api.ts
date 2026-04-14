@@ -558,7 +558,7 @@ export interface TestSet {
 }
 
 export interface TestSetCreate {
-  chunk_config_id: number;
+  chunk_config_id?: number;
   name?: string;
   testset_size?: number;
   num_personas?: number;
