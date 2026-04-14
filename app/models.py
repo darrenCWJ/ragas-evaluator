@@ -51,7 +51,7 @@ class TestGenRequest(BaseModel):
 
 
 class TestSetCreate(BaseModel):
-    chunk_config_id: int
+    chunk_config_id: int | None = None
     name: str | None = None
     testset_size: int = 10
     num_personas: int = 3

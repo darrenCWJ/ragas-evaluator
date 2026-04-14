@@ -368,11 +368,18 @@ export default function TestSetGenerate({
     }
   };
 
+  // Chunk config is optional when ONLY Graph RAG categories are selected with Documents source
+  const chunksRequired = !(
+    useGraphRag &&
+    graphRagKgSource === "documents" &&
+    !useCategories
+  );
+
   const handleGenerate = async () => {
     setError(null);
     const sizeOk = validateSize(testsetSize);
     const personasOk = !usePersonas || validatePersonas(numPersonas);
-    if (!sizeOk || !personasOk || chunkConfigId === "") return;
+    if (!sizeOk || !personasOk || (chunksRequired && chunkConfigId === "")) return;
 
     const parsedSize = Number(testsetSize);
     const parsedPersonas = Number(numPersonas);
@@ -380,7 +387,7 @@ export default function TestSetGenerate({
 
     try {
       const config: TestSetCreate = {
-        chunk_config_id: chunkConfigId as number,
+        chunk_config_id: chunksRequired ? (chunkConfigId as number) : undefined,
         testset_size: parsedSize,
         num_personas: usePersonas ? parsedPersonas : undefined,
         use_personas: usePersonas,
@@ -631,8 +638,11 @@ export default function TestSetGenerate({
       <div className="grid gap-3 sm:grid-cols-2">
         {/* Chunk config selector */}
         <div className="sm:col-span-2">
-          <label className="mb-1 block text-xs font-medium text-text-secondary">
+          <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
             Chunk Config
+            {useGraphRag && graphRagKgSource === "documents" && (
+              <span className="text-[10px] text-text-muted">(optional — not needed for Graph RAG Documents only)</span>
+            )}
           </label>
           <select
             value={chunkConfigId}
@@ -812,7 +822,11 @@ export default function TestSetGenerate({
                       onClick={async () => {
                         try {
                           setKgBuilding(true);
-                          await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes);
+                          await buildKnowledgeGraph(
+                            projectId,
+                            kgInfo.chunk_config_id ?? (chunkConfigId as number) ?? null,
+                            overlapMaxNodes,
+                          );
                         } catch (err) {
                           setKgBuilding(false);
                           setError(
@@ -1088,7 +1102,7 @@ export default function TestSetGenerate({
               <button
                 type="button"
                 onClick={handleAutoGeneratePersonas}
-                disabled={generating || generatingPersonas || chunkConfigId === ""}
+                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "")}
                 className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {generatingPersonas
@@ -1560,7 +1574,7 @@ export default function TestSetGenerate({
       {/* Generate button */}
       <button
         onClick={handleGenerate}
-        disabled={generating || chunkConfigId === ""}
+        disabled={generating || (chunksRequired && chunkConfigId === "")}
         className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {generating ? (

@@ -124,33 +124,47 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 detail="A test set is already being generated for this project",
             )
 
-    # Validate chunk_config_id belongs to project
-    cc = conn.execute(
-        "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
-        (req.chunk_config_id, project_id),
-    ).fetchone()
-    if cc is None:
-        raise HTTPException(status_code=404, detail="Chunk config not found")
+    # Determine whether chunks are needed.
+    # Chunks are NOT needed when all selected categories are graph RAG types
+    # (bridge/comparative/community) AND the KG source is "documents".
+    _GRAPH_RAG_ONLY_CATS = {"bridge", "comparative", "community"}
+    _needs_chunks = True
+    if (
+        req.graph_rag_kg_source == "documents"
+        and req.question_categories
+        and set(req.question_categories.keys()) <= _GRAPH_RAG_ONLY_CATS
+    ):
+        _needs_chunks = False
 
-    # Fetch chunks for this config
-    chunk_rows = conn.execute(
-        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
-        (req.chunk_config_id,),
-    ).fetchall()
-    if not chunk_rows:
-        raise HTTPException(
-            status_code=422,
-            detail="No chunks found for this config. Generate chunks first.",
-        )
+    chunks: list[str] = []
+    if _needs_chunks:
+        if req.chunk_config_id is None:
+            raise HTTPException(status_code=422, detail="chunk_config_id required unless using only Graph RAG (Documents) categories")
 
-    # Guard: chunk count limit (0 = no limit)
-    if MAX_CHUNKS_FOR_GENERATION > 0 and len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Too many chunks ({len(chunk_rows)}). Maximum {MAX_CHUNKS_FOR_GENERATION} supported for test generation.",
-        )
+        cc = conn.execute(
+            "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
+            (req.chunk_config_id, project_id),
+        ).fetchone()
+        if cc is None:
+            raise HTTPException(status_code=404, detail="Chunk config not found")
 
-    chunks = [r["content"] for r in chunk_rows]
+        chunk_rows = conn.execute(
+            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+            (req.chunk_config_id,),
+        ).fetchall()
+        if not chunk_rows:
+            raise HTTPException(
+                status_code=422,
+                detail="No chunks found for this config. Generate chunks first.",
+            )
+
+        if MAX_CHUNKS_FOR_GENERATION > 0 and len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many chunks ({len(chunk_rows)}). Maximum {MAX_CHUNKS_FOR_GENERATION} supported for test generation.",
+            )
+
+        chunks = [r["content"] for r in chunk_rows]
 
     # Sample chunks if requested
     total_chunks = len(chunks)
@@ -1049,6 +1063,16 @@ async def delete_knowledge_graph(project_id: int, kg_source: str = "chunks"):
 _active_kg_builds: dict[int, bool] = {}
 _kg_lock = threading.Lock()
 
+# Prepended to every KG subprocess script to suppress BrokenPipeError noise.
+# When the parent closes stdout after reading KG_BUILD_OK, Python's shutdown
+# would normally print "Exception ignored while flushing sys.stdout: BrokenPipeError".
+# Setting SIGPIPE to SIG_DFL makes the process exit silently on a broken pipe instead.
+_SUBPROCESS_PREAMBLE = (
+    "import signal as _sig; "
+    "_sig.signal(_sig.SIGPIPE, _sig.SIG_DFL) "
+    "if hasattr(_sig, 'SIGPIPE') else None; "
+)
+
 
 def _run_kg_subprocess(
     project_id: int,
@@ -1135,6 +1159,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 
         overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
         script = (
+            _SUBPROCESS_PREAMBLE +
             "import sys, os; "
             "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
             "from evaluation.metrics.testgen import build_kg_standalone_from_documents; "
@@ -1170,6 +1195,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 
         overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
         script = (
+            _SUBPROCESS_PREAMBLE +
             "import sys, os; "
             "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
             "from evaluation.metrics.testgen import build_kg_standalone; "
@@ -1264,6 +1290,7 @@ async def rebuild_kg_links_endpoint(project_id: int, req: RebuildLinksRequest):
 
     overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
     script = (
+        _SUBPROCESS_PREAMBLE +
         "import sys, os; "
         "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
         "from evaluation.metrics.testgen import rebuild_kg_links; "
@@ -1334,6 +1361,7 @@ async def update_knowledge_graph_endpoint(project_id: int, req: UpdateKGRequest)
         else ", overlap_max_nodes=None"
     )
     script = (
+        _SUBPROCESS_PREAMBLE +
         "import sys, os; "
         "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
         "from evaluation.metrics.testgen import incremental_update_kg; "
