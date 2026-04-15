@@ -5,6 +5,14 @@ export interface Project {
   name: string;
   description: string;
   created_at: string;
+  judge_model_assignments: string[] | null;
+}
+
+export interface JudgeModel {
+  id: string;
+  name: string;
+  provider: "openai" | "anthropic" | "gemini";
+  available: boolean;
 }
 
 export interface Document {
@@ -245,12 +253,31 @@ export async function fetchProjects(): Promise<Project[]> {
   return request<Project[]>("/api/projects");
 }
 
+export async function fetchProject(projectId: number): Promise<Project> {
+  return request<Project>(`/api/projects/${projectId}`);
+}
+
 export async function createProject(
   payload: CreateProjectPayload,
 ): Promise<Project> {
   return request<Project>("/api/projects", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchJudgeModels(): Promise<{ models: JudgeModel[] }> {
+  return request<{ models: JudgeModel[] }>("/api/judge-models");
+}
+
+export async function updateProjectJudgeDefaults(
+  projectId: number,
+  assignments: string[] | null,
+): Promise<Project> {
+  return request<Project>(`/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ judge_model_assignments: assignments }),
   });
 }
 
@@ -1022,6 +1049,8 @@ export function runExperimentSSE(
   rubrics?: Record<string, string> | null,
   concurrency?: number,
   multiLlmJudgeEvaluators?: number,
+  judgeModelAssignments?: string[],
+  judgeTemperatureAssignments?: number[],
 ): ExperimentSSEHandle {
   const controller = new AbortController();
 
@@ -1038,14 +1067,23 @@ export function runExperimentSSE(
             rubrics: rubrics ?? null,
             concurrency: concurrency ?? 5,
             multi_llm_judge_evaluators: multiLlmJudgeEvaluators ?? 5,
+            judge_model_assignments: judgeModelAssignments ?? null,
+            judge_temperature_assignments: judgeTemperatureAssignments ?? null,
           }),
           signal: controller.signal,
         },
       );
 
       if (!runRes.ok) {
-        const body = await runRes.text().catch(() => "Unknown error");
-        callbacks.onError?.({ message: `${runRes.status}: ${body}` });
+        const body = await runRes.text().catch(() => "");
+        let message = `HTTP ${runRes.status}`;
+        try {
+          const parsed = JSON.parse(body);
+          message = parsed.detail ?? parsed.message ?? (body || message);
+        } catch {
+          if (body) message = body;
+        }
+        callbacks.onError?.({ message });
         return;
       }
 
@@ -1636,11 +1674,12 @@ export interface CustomMetric {
   id: number;
   project_id: number;
   name: string;
-  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics";
+  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics" | "criteria_judge";
   prompt: string | null;
   rubrics: Record<string, string> | null;
   min_score: number;
   max_score: number;
+  refined_prompt: string | null;
   created_at: string;
 }
 
@@ -1651,6 +1690,7 @@ export interface CustomMetricCreate {
   rubrics?: Record<string, string> | null;
   min_score?: number;
   max_score?: number;
+  refined_prompt?: string | null;
 }
 
 export async function fetchCustomMetrics(
@@ -1668,6 +1708,20 @@ export async function createCustomMetric(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
+}
+
+export async function refineMetricDescription(
+  projectId: number,
+  description: string,
+): Promise<{ refined_prompt: string }> {
+  return request<{ refined_prompt: string }>(
+    `/api/projects/${projectId}/custom-metrics/refine-description`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    },
+  );
 }
 
 export async function deleteCustomMetric(
@@ -1804,19 +1858,23 @@ export async function fetchJudgeEvaluations(
   projectId: number,
   experimentId: number,
   resultId: number,
+  metricName?: string,
 ): Promise<JudgeEvaluationsResponse> {
-  return request<JudgeEvaluationsResponse>(
-    `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations`,
-  );
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations`;
+  return request<JudgeEvaluationsResponse>(url);
 }
 
 export async function fetchJudgeAnnotationSample(
   projectId: number,
   experimentId: number,
+  metricName?: string,
 ): Promise<JudgeAnnotationSampleResult> {
-  return request<JudgeAnnotationSampleResult>(
-    `/api/projects/${projectId}/experiments/${experimentId}/judge-annotation-sample`,
-  );
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/judge-annotation-sample?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/judge-annotation-sample`;
+  return request<JudgeAnnotationSampleResult>(url);
 }
 
 export async function annotateJudgeClaim(
@@ -1837,19 +1895,23 @@ export async function annotateJudgeClaim(
 export async function fetchJudgeReliability(
   projectId: number,
   experimentId: number,
+  metricName?: string,
 ): Promise<JudgeReliabilityResult> {
-  return request<JudgeReliabilityResult>(
-    `/api/projects/${projectId}/experiments/${experimentId}/judge-reliability`,
-  );
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/judge-reliability?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/judge-reliability`;
+  return request<JudgeReliabilityResult>(url);
 }
 
 export async function fetchJudgeSummary(
   projectId: number,
   experimentId: number,
+  metricName?: string,
 ): Promise<JudgeSummaryResponse> {
-  return request<JudgeSummaryResponse>(
-    `/api/projects/${projectId}/experiments/${experimentId}/judge-summary`,
-  );
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/judge-summary?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/judge-summary`;
+  return request<JudgeSummaryResponse>(url);
 }
 
 export async function fetchKnowledgeGraphInfo(

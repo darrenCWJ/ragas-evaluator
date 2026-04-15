@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   fetchExperiment,
   fetchExperimentResults,
+  fetchCustomMetrics,
   exportExperiment,
   ApiError,
 } from "../../lib/api";
@@ -27,15 +28,24 @@ type LoadState =
 
 export default function ExperimentResults({ projectId, experimentId }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [criteriaMetricNames, setCriteriaMetricNames] = useState<string[]>([]);
+  // Active judge metric for the dashboard tab (undefined = built-in multi-LLM judge)
+  const [activeJudgeMetric, setActiveJudgeMetric] = useState<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const [exp, results] = await Promise.all([
+      const [exp, results, customMetrics] = await Promise.all([
         fetchExperiment(projectId, experimentId),
         fetchExperimentResults(projectId, experimentId),
+        fetchCustomMetrics(projectId),
       ]);
       setState({ status: "loaded", experiment: exp, results });
+      setCriteriaMetricNames(
+        customMetrics
+          .filter((m) => m.metric_type === "criteria_judge")
+          .map((m) => m.name),
+      );
     } catch (err) {
       setState({
         status: "error",
@@ -112,7 +122,11 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }
 
   const { experiment, results } = state;
-  const hasJudge = results.some((r) => "multi_llm_judge" in r.metrics);
+  const hasBuiltinJudge = results.some((r) => "multi_llm_judge" in r.metrics);
+  const criteriaJudgesInResults = criteriaMetricNames.filter((n) =>
+    results.some((r) => n in r.metrics),
+  );
+  const hasJudge = hasBuiltinJudge || criteriaJudgesInResults.length > 0;
 
   const agg = experiment.aggregate_metrics;
 
@@ -276,6 +290,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
                   result={r}
                   projectId={projectId}
                   experimentId={experimentId}
+                  criteriaMetricNames={criteriaMetricNames}
                 />
               ))}
             </div>
@@ -284,7 +299,43 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
       )}
 
       {activeTab === "judge" && hasJudge && (
-        <MultiLLMJudgeDashboard projectId={projectId} experimentId={experimentId} />
+        <>
+          {/* Selector when multiple judge metrics exist */}
+          {(hasBuiltinJudge ? 1 : 0) + criteriaJudgesInResults.length > 1 && (
+            <div className="mb-4 flex flex-wrap gap-2">
+              {hasBuiltinJudge && (
+                <button
+                  onClick={() => setActiveJudgeMetric(undefined)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                    activeJudgeMetric === undefined
+                      ? "border-accent/50 bg-accent/10 text-accent"
+                      : "border-border text-text-secondary hover:border-border-focus"
+                  }`}
+                >
+                  Multi-LLM Judge
+                </button>
+              )}
+              {criteriaJudgesInResults.map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setActiveJudgeMetric(n)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                    activeJudgeMetric === n
+                      ? "border-purple-500/50 bg-purple-500/10 text-purple-300"
+                      : "border-border text-text-secondary hover:border-border-focus"
+                  }`}
+                >
+                  {n.replace(/_/g, " ")}
+                </button>
+              ))}
+            </div>
+          )}
+          <MultiLLMJudgeDashboard
+            projectId={projectId}
+            experimentId={experimentId}
+            metricName={activeJudgeMetric}
+          />
+        </>
       )}
     </div>
   );

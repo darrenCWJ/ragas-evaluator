@@ -17,8 +17,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-
-from openai import AsyncOpenAI
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +73,14 @@ SOURCE CHUNKS (retrieved context used by the bot):
 @dataclass
 class MultiLLMJudgeConfig:
     num_evaluators: int = 5
-    model: str | None = None  # defaults to DEFAULT_EVAL_MODEL at call time
+    model: str | None = None  # default model when model_assignments is not set
     temperature_min: float = 0.3
     temperature_max: float = 0.75
+    model_assignments: list[str] | None = None
+    temperature_assignments: list[float] | None = None
+    # When model_assignments / temperature_assignments are set:
+    #   - len overrides num_evaluators
+    #   - evaluator i uses model_assignments[i] and temperature_assignments[i]
 
 
 def _build_context_section(context_dicts: list[dict]) -> str:
@@ -110,7 +114,6 @@ def _extract_json(text: str) -> dict:
 
 
 async def _single_evaluator(
-    client: AsyncOpenAI,
     model: str,
     temperature: float,
     evaluator_index: int,
@@ -119,22 +122,22 @@ async def _single_evaluator(
     context_section: str,
 ) -> dict | None:
     """Run one evaluator call. Returns structured dict or None on failure."""
+    from pipeline.llm import chat_completion
+
     prompt = _JUDGE_PROMPT.format(
         question=question,
         response=response,
         context_section=context_section,
     )
     try:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=800,
+        result = await chat_completion(
+            model,
+            [{"role": "user", "content": prompt}],
+            {"temperature": temperature, "max_tokens": 800},
         )
-        raw = resp.choices[0].message.content or ""
+        raw = result["content"]
         data = _extract_json(raw)
 
-        # Validate and normalise
         verdict = data.get("verdict", "mixed")
         if verdict not in ("positive", "mixed", "critical"):
             verdict = "mixed"
@@ -157,9 +160,10 @@ async def _single_evaluator(
             "verdict": verdict,
             "score": score,
             "claims": claims,
+            "model": model,
         }
     except Exception as e:
-        logger.warning("Evaluator %d failed (temp=%.2f): %s", evaluator_index, temperature, e, exc_info=True)
+        logger.warning("Evaluator %d (model=%s, temp=%.2f) failed: %s", evaluator_index, model, temperature, e, exc_info=True)
         return None
 
 
@@ -171,25 +175,33 @@ async def run_judge(
 ) -> list[dict]:
     """Run N evaluators in parallel. Returns list of evaluator result dicts.
 
-    Each result dict: {evaluator_index, verdict, score, claims}
+    Each result dict: {evaluator_index, verdict, score, claims, model}
     Failed evaluators are omitted from the returned list.
     """
     from config import DEFAULT_EVAL_MODEL
 
-    model = config.model or DEFAULT_EVAL_MODEL
     context_section = _build_context_section(context_dicts or [])
-    client = AsyncOpenAI()
 
-    # Linearly space temperatures across evaluators
-    n = config.num_evaluators
-    if n == 1:
+    # Determine models per slot
+    if config.model_assignments:
+        models = config.model_assignments
+        n = len(models)
+    else:
+        default_model = config.model or DEFAULT_EVAL_MODEL
+        n = config.num_evaluators
+        models = [default_model] * n
+
+    # Use explicit per-slot temperatures if provided, else linearly space
+    if config.temperature_assignments and len(config.temperature_assignments) == n:
+        temperatures = config.temperature_assignments
+    elif n == 1:
         temperatures = [config.temperature_min]
     else:
         step = (config.temperature_max - config.temperature_min) / (n - 1)
         temperatures = [config.temperature_min + step * i for i in range(n)]
 
     tasks = [
-        _single_evaluator(client, model, temperatures[i], i, question, response, context_section)
+        _single_evaluator(models[i], temperatures[i], i, question, response, context_section)
         for i in range(n)
     ]
     results = await asyncio.gather(*tasks)
@@ -210,3 +222,168 @@ def aggregate_score(evaluations: list[dict], excluded_indices: set[int] | None =
         return 0.0
     mean_score = sum(e["score"] for e in active) / len(active)
     return round((mean_score - 1) / 9, 4)  # normalise 1–10 → 0–1
+
+
+# ---------------------------------------------------------------------------
+# Criteria Judge — custom-criteria variant of the multi-LLM judge
+# ---------------------------------------------------------------------------
+
+_CRITERIA_JUDGE_USER = """\
+{criteria_prompt}
+
+---
+Evaluate the following chatbot response using the criteria above.
+
+QUESTION:
+{question}
+
+BOT RESPONSE:
+{response}
+
+{context_section}
+
+Respond with ONLY valid JSON in exactly this format:
+{{
+  "verdict": "good" | "mixed" | "bad",
+  "score": <number>,
+  "highlights": [
+    {{
+      "quote": "<exact substring from the bot response>",
+      "type": "supporting" | "contradicting" | "neutral",
+      "critique": "<1-2 sentences explaining how this quote relates to the criteria>"
+    }}
+  ],
+  "reasoning": "<1-2 sentence overall justification for the verdict>"
+}}
+
+Score mapping: good = 1.0, mixed = 0.5, bad = 0.0
+Include 1-4 highlights. Granularity (sentence, phrase, or structural element) should \
+match the nature of the criteria as specified in the prompt above.
+quote must be a verbatim substring of the bot response.
+"""
+
+
+@dataclass
+class CriteriaJudgeConfig:
+    metric_name: str
+    refined_prompt: str
+    num_evaluators: int = 3
+    model: str | None = None
+    temperature_min: float = 0.3
+    temperature_max: float = 0.75
+    model_assignments: list[str] | None = None
+    temperature_assignments: list[float] | None = None
+
+
+async def _single_criteria_evaluator(
+    model: str,
+    temperature: float,
+    evaluator_index: int,
+    criteria_prompt: str,
+    question: str,
+    response: str,
+    context_section: str,
+) -> dict | None:
+    """Run one criteria judge evaluator. Returns structured dict or None on failure."""
+    from pipeline.llm import chat_completion
+
+    prompt = _CRITERIA_JUDGE_USER.format(
+        criteria_prompt=criteria_prompt,
+        question=question,
+        response=response,
+        context_section=context_section,
+    )
+    try:
+        result = await chat_completion(
+            model,
+            [{"role": "user", "content": prompt}],
+            {"temperature": temperature, "max_tokens": 800},
+        )
+        raw = result["content"]
+        data = _extract_json(raw)
+
+        verdict = data.get("verdict", "mixed")
+        if verdict not in ("good", "mixed", "bad"):
+            verdict = "mixed"
+
+        score_map = {"good": 1.0, "mixed": 0.5, "bad": 0.0}
+        score = score_map.get(verdict, 0.5)
+
+        highlights = []
+        for h in data.get("highlights", [])[:4]:
+            highlights.append({
+                "quote": str(h.get("quote", "")),
+                "type": h.get("type", "neutral") if h.get("type") in ("supporting", "contradicting", "neutral") else "neutral",
+                "critique": str(h.get("critique", "")),
+            })
+
+        return {
+            "evaluator_index": evaluator_index,
+            "verdict": verdict,
+            "score": score,
+            "highlights": highlights,
+            "reasoning": str(data.get("reasoning", "")),
+            "model": model,
+        }
+    except Exception as e:
+        logger.warning(
+            "Criteria evaluator %d (model=%s, temp=%.2f) failed: %s",
+            evaluator_index, model, temperature, e, exc_info=True,
+        )
+        return None
+
+
+async def run_criteria_judge(
+    config: CriteriaJudgeConfig,
+    question: str,
+    response: str,
+    context_dicts: list[dict] | None = None,
+) -> list[dict]:
+    """Run N criteria judge evaluators in parallel.
+
+    Returns list of dicts: {evaluator_index, verdict, score, highlights, reasoning, model}
+    Failed evaluators are omitted.
+    """
+    from config import DEFAULT_EVAL_MODEL
+
+    context_section = _build_context_section(context_dicts or [])
+
+    if config.model_assignments:
+        models = config.model_assignments
+        n = len(models)
+    else:
+        default_model = config.model or DEFAULT_EVAL_MODEL
+        n = config.num_evaluators
+        models = [default_model] * n
+
+    if config.temperature_assignments and len(config.temperature_assignments) == n:
+        temperatures = config.temperature_assignments
+    elif n == 1:
+        temperatures = [config.temperature_min]
+    else:
+        step = (config.temperature_max - config.temperature_min) / (n - 1)
+        temperatures = [config.temperature_min + step * i for i in range(n)]
+
+    tasks = [
+        _single_criteria_evaluator(
+            models[i], temperatures[i], i,
+            config.refined_prompt, question, response, context_section,
+        )
+        for i in range(n)
+    ]
+    results = await asyncio.gather(*tasks)
+    return [r for r in results if r is not None]
+
+
+def aggregate_criteria_score(
+    evaluations: list[dict],
+    excluded_indices: set[int] | None = None,
+) -> float:
+    """Return mean score (0–1) of non-excluded criteria judge evaluators."""
+    excluded = excluded_indices or set()
+    active = [e for e in evaluations if e["evaluator_index"] not in excluded]
+    if not active:
+        active = evaluations
+    if not active:
+        return 0.0
+    return round(sum(e["score"] for e in active) / len(active), 4)

@@ -94,6 +94,12 @@ MULTI_LLM_JUDGE_DEFAULT_EVALUATORS = int(os.environ.get("MULTI_LLM_JUDGE_DEFAULT
 MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD = float(os.environ.get("MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD", "0.6"))
 
 # ---------------------------------------------------------------------------
+# Third-party LLM provider API keys (used by judge multi-model routing)
+# ---------------------------------------------------------------------------
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
+# ---------------------------------------------------------------------------
 # Validation sets (shared across routes and models)
 # ---------------------------------------------------------------------------
 VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"}

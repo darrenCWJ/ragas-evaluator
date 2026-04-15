@@ -6,6 +6,8 @@ interface Props {
   result: ExperimentResult;
   projectId: number;
   experimentId: number;
+  /** Names of custom metrics that are criteria_judge type */
+  criteriaMetricNames?: string[];
 }
 
 /** Humanize snake_case → Title Case */
@@ -28,10 +30,24 @@ function textColor(v: number): string {
   return "text-score-low";
 }
 
-export default function QuestionResultRow({ result, projectId, experimentId }: Props) {
+export default function QuestionResultRow({ result, projectId, experimentId, criteriaMetricNames = [] }: Props) {
   const [open, setOpen] = useState(false);
   const [judgeOpen, setJudgeOpen] = useState(false);
+  const [openCriteriaPanels, setOpenCriteriaPanels] = useState<Set<string>>(new Set());
   const hasJudge = "multi_llm_judge" in result.metrics;
+  const criteriaMetricsInResult = criteriaMetricNames.filter((n) => n in result.metrics);
+
+  const toggleCriteriaPanel = (metricName: string) => {
+    setOpenCriteriaPanels((prev) => {
+      const next = new Set(prev);
+      if (next.has(metricName)) {
+        next.delete(metricName);
+      } else {
+        next.add(metricName);
+      }
+      return next;
+    });
+  };
 
   const metrics = Object.entries(result.metrics).filter(
     (e): e is [string, number] => typeof e[1] === "number",
@@ -202,6 +218,34 @@ export default function QuestionResultRow({ result, projectId, experimentId }: P
                 )}
               </div>
             )}
+
+            {/* Criteria Judge panels — one per criteria_judge metric */}
+            {criteriaMetricsInResult.map((metricName) => (
+              <div key={metricName}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleCriteriaPanel(metricName);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/5 px-3 py-1.5 text-xs font-medium text-purple-300 transition hover:bg-purple-500/10"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 001.5 2.122V15m-6.75 0h6.75m0 0v1.125A2.25 2.25 0 0113.5 18.375H10.5A2.25 2.25 0 018.25 16.5V15m0 0h6.75" />
+                  </svg>
+                  {openCriteriaPanels.has(metricName) ? "Hide" : "Show"} {metricName.replace(/_/g, " ")} Evaluations
+                </button>
+                {openCriteriaPanels.has(metricName) && (
+                  <div className="mt-3">
+                    <MultiLLMJudgePanel
+                      projectId={projectId}
+                      experimentId={experimentId}
+                      resultId={result.id}
+                      metricName={metricName}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       </div>

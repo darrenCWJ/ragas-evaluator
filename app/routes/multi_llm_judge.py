@@ -3,6 +3,10 @@
 Endpoints for fetching evaluator outputs, the 20% annotation sample,
 submitting claim-level human annotations, and computing per-evaluator
 reliability stats.
+
+All endpoints accept an optional ?metric_name= query parameter:
+  - omitted / empty → built-in multi_llm_judge (custom_metric_name IS NULL)
+  - provided        → criteria_judge metric with that name
 """
 
 from __future__ import annotations
@@ -10,19 +14,27 @@ from __future__ import annotations
 import json
 import logging
 import random
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.models import ClaimAnnotationRequest
 import db.init
 from config import MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
-from evaluation.metrics.multi_llm_judge import aggregate_score
+from evaluation.metrics.multi_llm_judge import aggregate_score, aggregate_criteria_score
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["multi_llm_judge"])
 
 VALID_ANNOTATION_STATUSES = {"accurate", "inaccurate", "unsure"}
+
+# Verdict sets
+_BUILTIN_VERDICTS = {"positive", "mixed", "critical"}
+_CRITERIA_VERDICTS = {"good", "mixed", "bad"}
+
+# Normalise criteria verdicts → built-in labels for the frontend panel
+_CRITERIA_VERDICT_MAP = {"good": "positive", "bad": "critical", "mixed": "mixed"}
 
 
 def _validate_experiment(conn, project_id: int, experiment_id: int):
@@ -43,12 +55,47 @@ def _validate_experiment(conn, project_id: int, experiment_id: int):
     return experiment
 
 
-def _load_evaluations_for_result(conn, result_id: int) -> list[dict]:
-    """Load all evaluator rows + their claim annotations for a result."""
-    eval_rows = conn.execute(
-        "SELECT * FROM multi_llm_evaluations WHERE experiment_result_id = ? ORDER BY evaluator_index",
-        (result_id,),
-    ).fetchall()
+def _normalize_criteria_claims(highlights: list[dict]) -> list[dict]:
+    """Convert criteria judge highlights → built-in claims shape for the panel."""
+    type_map = {"supporting": "praise", "contradicting": "critique", "neutral": "critique"}
+    return [
+        {
+            "type": type_map.get(h.get("type", "neutral"), "critique"),
+            "response_quote": h.get("quote", ""),
+            "chunk_reference": None,
+            "chunk_quote": None,
+            "explanation": h.get("critique", ""),
+        }
+        for h in highlights
+    ]
+
+
+def _load_evaluations_for_result(
+    conn,
+    result_id: int,
+    metric_name: str | None = None,
+) -> list[dict]:
+    """Load evaluator rows + claim annotations for a result.
+
+    metric_name=None → built-in judge (custom_metric_name IS NULL)
+    metric_name=str  → criteria judge with that metric name
+    """
+    is_criteria = metric_name is not None
+
+    if is_criteria:
+        eval_rows = conn.execute(
+            """SELECT * FROM multi_llm_evaluations
+               WHERE experiment_result_id = ? AND custom_metric_name = ?
+               ORDER BY evaluator_index""",
+            (result_id, metric_name),
+        ).fetchall()
+    else:
+        eval_rows = conn.execute(
+            """SELECT * FROM multi_llm_evaluations
+               WHERE experiment_result_id = ? AND custom_metric_name IS NULL
+               ORDER BY evaluator_index""",
+            (result_id,),
+        ).fetchall()
 
     evaluations = []
     for ev in eval_rows:
@@ -64,12 +111,23 @@ def _load_evaluations_for_result(conn, result_id: int) -> list[dict]:
             }
             for a in annotation_rows
         }
+
+        raw_claims = json.loads(ev["claims_json"])
+
+        # Normalise criteria judge highlights → panel-compatible claims shape
+        if is_criteria:
+            claims = _normalize_criteria_claims(raw_claims)
+            verdict = _CRITERIA_VERDICT_MAP.get(ev["verdict"], "mixed")
+        else:
+            claims = raw_claims
+            verdict = ev["verdict"]
+
         evaluations.append({
             "id": ev["id"],
             "evaluator_index": ev["evaluator_index"],
-            "verdict": ev["verdict"],
+            "verdict": verdict,
             "score": ev["score"],
-            "claims": json.loads(ev["claims_json"]),
+            "claims": claims,
             "annotations": annotations,
             "created_at": ev["created_at"],
         })
@@ -79,8 +137,16 @@ def _load_evaluations_for_result(conn, result_id: int) -> list[dict]:
 @router.get(
     "/projects/{project_id}/experiments/{experiment_id}/results/{result_id}/judge-evaluations"
 )
-async def get_judge_evaluations(project_id: int, experiment_id: int, result_id: int):
-    """Return all evaluator outputs + claim annotations for a single result."""
+async def get_judge_evaluations(
+    project_id: int,
+    experiment_id: int,
+    result_id: int,
+    metric_name: Optional[str] = Query(default=None),
+):
+    """Return all evaluator outputs + claim annotations for a single result.
+
+    Pass ?metric_name=<name> for a criteria_judge metric; omit for the built-in judge.
+    """
     conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
@@ -91,33 +157,50 @@ async def get_judge_evaluations(project_id: int, experiment_id: int, result_id: 
     if result_row is None:
         raise HTTPException(status_code=404, detail="Result not found")
 
-    evaluations = _load_evaluations_for_result(conn, result_id)
+    evaluations = _load_evaluations_for_result(conn, result_id, metric_name or None)
     return {"result_id": result_id, "evaluations": evaluations}
 
 
 @router.get(
     "/projects/{project_id}/experiments/{experiment_id}/judge-annotation-sample"
 )
-async def get_judge_annotation_sample(project_id: int, experiment_id: int):
+async def get_judge_annotation_sample(
+    project_id: int,
+    experiment_id: int,
+    metric_name: Optional[str] = Query(default=None),
+):
     """Return a 20% random sample of results for human claim annotation.
 
-    Deterministic (seed = experiment_id). Only results that have multi-LLM
-    judge evaluations are included.
+    Deterministic (seed = experiment_id). Only results that have evaluations
+    for the requested metric are included.
     """
     conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
-    # Only results that have evaluations
-    all_results = conn.execute(
-        """SELECT DISTINCT er.id, er.test_question_id, er.response, er.metrics_json,
-                  tq.question, tq.reference_answer, tq.user_edited_answer
-           FROM experiment_results er
-           JOIN test_questions tq ON er.test_question_id = tq.id
-           JOIN multi_llm_evaluations mle ON mle.experiment_result_id = er.id
-           WHERE er.experiment_id = ?
-           ORDER BY er.id""",
-        (experiment_id,),
-    ).fetchall()
+    resolved_metric = metric_name or None
+
+    if resolved_metric is not None:
+        all_results = conn.execute(
+            """SELECT DISTINCT er.id, er.test_question_id, er.response, er.metrics_json,
+                      tq.question, tq.reference_answer, tq.user_edited_answer
+               FROM experiment_results er
+               JOIN test_questions tq ON er.test_question_id = tq.id
+               JOIN multi_llm_evaluations mle ON mle.experiment_result_id = er.id
+               WHERE er.experiment_id = ? AND mle.custom_metric_name = ?
+               ORDER BY er.id""",
+            (experiment_id, resolved_metric),
+        ).fetchall()
+    else:
+        all_results = conn.execute(
+            """SELECT DISTINCT er.id, er.test_question_id, er.response, er.metrics_json,
+                      tq.question, tq.reference_answer, tq.user_edited_answer
+               FROM experiment_results er
+               JOIN test_questions tq ON er.test_question_id = tq.id
+               JOIN multi_llm_evaluations mle ON mle.experiment_result_id = er.id
+               WHERE er.experiment_id = ? AND mle.custom_metric_name IS NULL
+               ORDER BY er.id""",
+            (experiment_id,),
+        ).fetchall()
 
     total = len(all_results)
     if total == 0:
@@ -138,9 +221,8 @@ async def get_judge_annotation_sample(project_id: int, experiment_id: int):
     annotated_count = 0
     for r in sampled_rows:
         ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
-        evaluations = _load_evaluations_for_result(conn, r["id"])
+        evaluations = _load_evaluations_for_result(conn, r["id"], resolved_metric)
 
-        # A result is "annotated" if any claim has been annotated
         has_annotation = any(ev["annotations"] for ev in evaluations)
         if has_annotation:
             annotated_count += 1
@@ -179,7 +261,6 @@ async def annotate_judge_claim(
     conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
-    # Verify evaluation belongs to this result/experiment
     ev_row = conn.execute(
         """SELECT mle.id FROM multi_llm_evaluations mle
            JOIN experiment_results er ON mle.experiment_result_id = er.id
@@ -189,7 +270,6 @@ async def annotate_judge_claim(
     if ev_row is None:
         raise HTTPException(status_code=404, detail="Evaluation not found")
 
-    # Verify claim_index is valid
     claims_row = conn.execute(
         "SELECT claims_json FROM multi_llm_evaluations WHERE id = ?", (evaluation_id,)
     ).fetchone()
@@ -214,27 +294,42 @@ async def annotate_judge_claim(
 @router.get(
     "/projects/{project_id}/experiments/{experiment_id}/judge-reliability"
 )
-async def get_judge_reliability(project_id: int, experiment_id: int):
+async def get_judge_reliability(
+    project_id: int,
+    experiment_id: int,
+    metric_name: Optional[str] = Query(default=None),
+):
     """Return per-evaluator reliability stats and the excluded evaluator set.
 
-    Reliability = accurate_claims / (accurate + inaccurate) among annotated claims.
-    'unsure' annotations are excluded from the denominator.
-    Evaluators below MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD are marked excluded.
+    Pass ?metric_name=<name> for a criteria_judge metric; omit for the built-in judge.
     """
     conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
-    # Fetch all evaluations and their annotations for this experiment
-    rows = conn.execute(
-        """SELECT mle.evaluator_index, mle.score, mle.verdict,
-                  eca.status AS annotation_status
-           FROM multi_llm_evaluations mle
-           JOIN experiment_results er ON mle.experiment_result_id = er.id
-           LEFT JOIN evaluator_claim_annotations eca ON eca.evaluation_id = mle.id
-           WHERE er.experiment_id = ?
-           ORDER BY mle.evaluator_index""",
-        (experiment_id,),
-    ).fetchall()
+    resolved_metric = metric_name or None
+
+    if resolved_metric is not None:
+        rows = conn.execute(
+            """SELECT mle.evaluator_index, mle.score, mle.verdict,
+                      eca.status AS annotation_status
+               FROM multi_llm_evaluations mle
+               JOIN experiment_results er ON mle.experiment_result_id = er.id
+               LEFT JOIN evaluator_claim_annotations eca ON eca.evaluation_id = mle.id
+               WHERE er.experiment_id = ? AND mle.custom_metric_name = ?
+               ORDER BY mle.evaluator_index""",
+            (experiment_id, resolved_metric),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT mle.evaluator_index, mle.score, mle.verdict,
+                      eca.status AS annotation_status
+               FROM multi_llm_evaluations mle
+               JOIN experiment_results er ON mle.experiment_result_id = er.id
+               LEFT JOIN evaluator_claim_annotations eca ON eca.evaluation_id = mle.id
+               WHERE er.experiment_id = ? AND mle.custom_metric_name IS NULL
+               ORDER BY mle.evaluator_index""",
+            (experiment_id,),
+        ).fetchall()
 
     if not rows:
         return {
@@ -245,7 +340,6 @@ async def get_judge_reliability(project_id: int, experiment_id: int):
             "threshold": MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD,
         }
 
-    # Aggregate per evaluator
     stats: dict[int, dict] = {}
     for r in rows:
         idx = r["evaluator_index"]
@@ -259,7 +353,9 @@ async def get_judge_reliability(project_id: int, experiment_id: int):
                 "verdict_counts": {"positive": 0, "mixed": 0, "critical": 0},
             }
         s = stats[idx]
-        s["verdict_counts"][r["verdict"]] = s["verdict_counts"].get(r["verdict"], 0) + 1
+        # Normalise criteria verdicts for verdict_counts display
+        display_verdict = _CRITERIA_VERDICT_MAP.get(r["verdict"], r["verdict"])
+        s["verdict_counts"][display_verdict] = s["verdict_counts"].get(display_verdict, 0) + 1
         if r["annotation_status"] == "accurate":
             s["accurate"] += 1
             s["total_claims_annotated"] += 1
@@ -275,10 +371,7 @@ async def get_judge_reliability(project_id: int, experiment_id: int):
     for idx in sorted(stats):
         s = stats[idx]
         scorable = s["accurate"] + s["inaccurate"]
-        if scorable > 0:
-            reliability = round(s["accurate"] / scorable, 4)
-        else:
-            reliability = None  # not yet annotated
+        reliability = round(s["accurate"] / scorable, 4) if scorable > 0 else None
 
         excluded = reliability is not None and reliability < MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
         if excluded:
@@ -295,7 +388,6 @@ async def get_judge_reliability(project_id: int, experiment_id: int):
             "excluded": excluded,
         })
 
-    # Overall reliability = mean of evaluators that have been annotated
     annotated = [e for e in evaluators if e["reliability"] is not None]
     overall = round(sum(e["reliability"] for e in annotated) / len(annotated), 4) if annotated else None
 
@@ -315,17 +407,22 @@ async def get_judge_reliability(project_id: int, experiment_id: int):
 @router.get(
     "/projects/{project_id}/experiments/{experiment_id}/judge-summary"
 )
-async def get_judge_summary(project_id: int, experiment_id: int):
+async def get_judge_summary(
+    project_id: int,
+    experiment_id: int,
+    metric_name: Optional[str] = Query(default=None),
+):
     """Return per-result judge verdicts for the Q&A table in the dashboard.
 
-    Returns all results with their per-evaluator verdict and the aggregate score,
-    adjusted to exclude low-reliability evaluators.
+    Pass ?metric_name=<name> for a criteria_judge metric; omit for the built-in judge.
     """
     conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
-    # Get excluded evaluator indices from reliability
-    reliability_resp = await get_judge_reliability(project_id, experiment_id)
+    resolved_metric = metric_name or None
+    is_criteria = resolved_metric is not None
+
+    reliability_resp = await get_judge_reliability(project_id, experiment_id, metric_name=metric_name)
     excluded = set(reliability_resp["excluded_indices"])
 
     results = conn.execute(
@@ -340,17 +437,37 @@ async def get_judge_summary(project_id: int, experiment_id: int):
 
     summary = []
     for r in results:
-        eval_rows = conn.execute(
-            "SELECT evaluator_index, verdict, score FROM multi_llm_evaluations WHERE experiment_result_id = ? ORDER BY evaluator_index",
-            (r["id"],),
-        ).fetchall()
+        if is_criteria:
+            eval_rows = conn.execute(
+                """SELECT evaluator_index, verdict, score
+                   FROM multi_llm_evaluations
+                   WHERE experiment_result_id = ? AND custom_metric_name = ?
+                   ORDER BY evaluator_index""",
+                (r["id"], resolved_metric),
+            ).fetchall()
+        else:
+            eval_rows = conn.execute(
+                """SELECT evaluator_index, verdict, score
+                   FROM multi_llm_evaluations
+                   WHERE experiment_result_id = ? AND custom_metric_name IS NULL
+                   ORDER BY evaluator_index""",
+                (r["id"],),
+            ).fetchall()
 
         if not eval_rows:
             continue
 
-        evaluator_verdicts = {ev["evaluator_index"]: ev["verdict"] for ev in eval_rows}
+        # Normalise verdict labels for display
+        evaluator_verdicts = {
+            ev["evaluator_index"]: _CRITERIA_VERDICT_MAP.get(ev["verdict"], ev["verdict"])
+            for ev in eval_rows
+        }
         eval_dicts = [{"evaluator_index": ev["evaluator_index"], "score": ev["score"]} for ev in eval_rows]
-        adjusted_score = aggregate_score(eval_dicts, excluded_indices=excluded)
+
+        if is_criteria:
+            adjusted_score = aggregate_criteria_score(eval_dicts, excluded_indices=excluded)
+        else:
+            adjusted_score = aggregate_score(eval_dicts, excluded_indices=excluded)
 
         ref = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
         summary.append({
