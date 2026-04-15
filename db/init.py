@@ -395,6 +395,27 @@ def init_db() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Migration: add refined_prompt to custom_metrics (LLM-refined evaluation criteria)
+    try:
+        conn.execute("ALTER TABLE custom_metrics ADD COLUMN refined_prompt TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add custom_metric_name to multi_llm_evaluations (NULL = built-in judge)
+    try:
+        conn.execute("ALTER TABLE multi_llm_evaluations ADD COLUMN custom_metric_name TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Migration: add judge_model_assignments_json to projects (per-project default judge models)
+    try:
+        conn.execute("ALTER TABLE projects ADD COLUMN judge_model_assignments_json TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Migration: backfill NULL chunk_config_id by matching chunks_hash
     orphan_kgs = conn.execute(
         "SELECT id, project_id, chunks_hash FROM knowledge_graphs WHERE chunk_config_id IS NULL"

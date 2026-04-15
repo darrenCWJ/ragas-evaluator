@@ -132,6 +132,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    judge_model_assignments: list[str] | None = None
 
     @field_validator("name")
     @classmethod
@@ -396,6 +397,11 @@ class ExperimentRunRequest(BaseModel):
     rubrics: dict[str, str] | None = None
     concurrency: int = 5
     multi_llm_judge_evaluators: int = 5
+    judge_model_assignments: list[str] | None = None
+    judge_temperature_assignments: list[float] | None = None
+    # When judge_model_assignments is provided:
+    #   - len overrides multi_llm_judge_evaluators
+    #   - each slot uses the assigned model + temperature (or linear spacing if temperatures omitted)
 
     @field_validator("concurrency")
     @classmethod
@@ -407,8 +413,8 @@ class ExperimentRunRequest(BaseModel):
     @field_validator("multi_llm_judge_evaluators")
     @classmethod
     def validate_multi_llm_judge_evaluators(cls, v: int) -> int:
-        if v < 3 or v > 6:
-            raise ValueError("multi_llm_judge_evaluators must be between 3 and 6")
+        if v < 1 or v > 20:
+            raise ValueError("multi_llm_judge_evaluators must be between 1 and 20")
         return v
 
 
@@ -465,7 +471,7 @@ class BatchApplyRequest(BaseModel):
         return v
 
 
-VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics"}
+VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics", "criteria_judge"}
 
 
 class CustomMetricCreate(BaseModel):
@@ -475,6 +481,7 @@ class CustomMetricCreate(BaseModel):
     rubrics: dict[str, str] | None = None
     min_score: int = 1
     max_score: int = 5
+    refined_prompt: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -504,10 +511,27 @@ class CustomMetricCreate(BaseModel):
             raise ValueError("prompt is required for integer_range and similarity metric types")
         if self.metric_type == "rubrics" and not self.rubrics:
             raise ValueError("rubrics are required for rubrics metric type")
-        if self.min_score >= self.max_score:
-            raise ValueError("min_score must be less than max_score")
-        if self.min_score < 0 or self.max_score > 10:
-            raise ValueError("score range must be between 0 and 10")
+        if self.metric_type == "criteria_judge" and not self.refined_prompt:
+            raise ValueError("refined_prompt is required for criteria_judge metric type")
+        if self.metric_type != "criteria_judge":
+            if self.min_score >= self.max_score:
+                raise ValueError("min_score must be less than max_score")
+            if self.min_score < 0 or self.max_score > 10:
+                raise ValueError("score range must be between 0 and 10")
+
+
+class RefinementRequest(BaseModel):
+    description: str
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("description must not be empty")
+        if len(v) > 1000:
+            raise ValueError("description must not exceed 1000 characters")
+        return v
 
 
 class BotConfigCreate(BaseModel):

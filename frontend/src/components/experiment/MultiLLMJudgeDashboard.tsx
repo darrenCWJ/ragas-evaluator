@@ -13,6 +13,8 @@ import MultiLLMJudgePanel from "./MultiLLMJudgePanel";
 interface Props {
   projectId: number;
   experimentId: number;
+  /** For criteria_judge metrics. Omit for the built-in judge. */
+  metricName?: string;
 }
 
 const VERDICT_DOT: Record<string, string> = {
@@ -101,11 +103,13 @@ function AnnotationSampleSection({
   experimentId,
   sample,
   excludedIndices,
+  metricName,
 }: {
   projectId: number;
   experimentId: number;
   sample: JudgeAnnotationSampleItem[];
   excludedIndices: Set<number>;
+  metricName?: string;
 }) {
   const [openResultId, setOpenResultId] = useState<number | null>(null);
 
@@ -163,6 +167,7 @@ function AnnotationSampleSection({
                   resultId={item.result_id}
                   preloadedEvaluations={item.evaluations}
                   excludedIndices={excludedIndices}
+                  metricName={metricName}
                 />
               </div>
             </div>
@@ -173,7 +178,7 @@ function AnnotationSampleSection({
   );
 }
 
-export default function MultiLLMJudgeDashboard({ projectId, experimentId }: Props) {
+export default function MultiLLMJudgeDashboard({ projectId, experimentId, metricName }: Props) {
   const [reliability, setReliability] = useState<JudgeReliabilityResult | null>(null);
   const [summary, setSummary] = useState<JudgeSummaryResponse | null>(null);
   const [sampleData, setSampleData] = useState<JudgeAnnotationSampleResult | null>(null);
@@ -183,10 +188,11 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId }: Prop
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     Promise.all([
-      fetchJudgeReliability(projectId, experimentId),
-      fetchJudgeSummary(projectId, experimentId),
-      fetchJudgeAnnotationSample(projectId, experimentId),
+      fetchJudgeReliability(projectId, experimentId, metricName),
+      fetchJudgeSummary(projectId, experimentId, metricName),
+      fetchJudgeAnnotationSample(projectId, experimentId, metricName),
     ])
       .then(([rel, sum, samp]) => {
         setReliability(rel);
@@ -195,7 +201,7 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId }: Prop
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [projectId, experimentId]);
+  }, [projectId, experimentId, metricName]);
 
   if (loading) {
     return (
@@ -390,6 +396,7 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId }: Prop
                   experimentId={experimentId}
                   sample={sampleData.sample}
                   excludedIndices={excludedSet}
+                  metricName={metricName}
                 />
               </>
             )}

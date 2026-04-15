@@ -14,6 +14,8 @@ interface Props {
   /** Optional: if annotations come from the 20% sample view, pass pre-loaded evaluations */
   preloadedEvaluations?: JudgeEvaluation[];
   excludedIndices?: Set<number>;
+  /** For criteria_judge metrics: the metric name to filter evaluations. Omit for built-in judge. */
+  metricName?: string;
 }
 
 type AnnotationMap = Record<number, Record<number, ClaimAnnotation>>;
@@ -36,9 +38,9 @@ const CLAIM_BADGE: Record<string, string> = {
 };
 
 function scoreColor(score: number): string {
-  const norm = (score - 1) / 9;
-  if (norm >= 0.7) return "text-score-high";
-  if (norm >= 0.4) return "text-score-mid";
+  // Criteria judge scores are already 0–1; built-in are 1–10 normalised by display
+  if (score >= 0.7) return "text-score-high";
+  if (score >= 0.4) return "text-score-mid";
   return "text-score-low";
 }
 
@@ -188,7 +190,11 @@ function EvaluatorCard({
   savingKey: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const normScore = ((evaluation.score - 1) / 9 * 100).toFixed(0);
+  // Built-in judge: score is 1–10, normalise to 0–100%.
+  // Criteria judge: score is already 0–1 (good=1, mixed=0.5, bad=0).
+  const normScore = evaluation.score <= 1.0
+    ? (evaluation.score * 100).toFixed(0)
+    : ((evaluation.score - 1) / 9 * 100).toFixed(0);
 
   return (
     <div
@@ -273,6 +279,7 @@ export default function MultiLLMJudgePanel({
   resultId,
   preloadedEvaluations,
   excludedIndices = new Set(),
+  metricName,
 }: Props) {
   const [evaluations, setEvaluations] = useState<JudgeEvaluation[]>(preloadedEvaluations ?? []);
   const [annotationMap, setAnnotationMap] = useState<AnnotationMap>({});
@@ -292,7 +299,7 @@ export default function MultiLLMJudgePanel({
     }
 
     setLoading(true);
-    fetchJudgeEvaluations(projectId, experimentId, resultId)
+    fetchJudgeEvaluations(projectId, experimentId, resultId, metricName)
       .then((data) => {
         setEvaluations(data.evaluations);
         const map: AnnotationMap = {};
@@ -303,7 +310,7 @@ export default function MultiLLMJudgePanel({
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [projectId, experimentId, resultId, preloadedEvaluations]);
+  }, [projectId, experimentId, resultId, preloadedEvaluations, metricName]);
 
   const handleAnnotate = useCallback(
     async (evalId: number, claimIdx: number, status: "accurate" | "inaccurate" | "unsure") => {
