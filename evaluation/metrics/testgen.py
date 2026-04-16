@@ -55,7 +55,7 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db
+from db.init import get_db, NOW_SQL
 
 
 logger = logging.getLogger(__name__)
@@ -392,7 +392,7 @@ def save_kg_to_db(
     db.execute(
         "INSERT INTO knowledge_graphs "
         "(project_id, chunks_hash, chunk_config_id, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps, last_heartbeat, kg_source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'), ?)",
+        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL}, ?)",
         (project_id, h, chunk_config_id, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps, kg_source),
     )
     db.commit()
@@ -415,7 +415,7 @@ def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
     """Touch the heartbeat timestamp for the KG build of a project+source."""
     db = get_db()
     db.execute(
-        "UPDATE knowledge_graphs SET last_heartbeat = datetime('now', 'localtime') "
+        f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
         "WHERE project_id = ? AND kg_source = ?",
         (project_id, kg_source),
     )
