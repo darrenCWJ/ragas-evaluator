@@ -1,0 +1,742 @@
+import { useState, useEffect, useCallback } from "react";
+import type {
+  RagConfig,
+  RagConfigCreate,
+  RagConfigExpanded,
+  EmbeddingConfig,
+  ChunkConfig,
+} from "../../lib/api";
+import {
+  fetchRagConfigs,
+  fetchConfigDefaults,
+  createRagConfig,
+  deleteRagConfig,
+  fetchRagConfigExpanded,
+} from "../../lib/api";
+import RagTestQuery from "./RagTestQuery";
+
+const SEARCH_TYPES = ["dense", "sparse", "hybrid"] as const;
+const RESPONSE_MODES = ["single_shot", "multi_step"] as const;
+
+const SEARCH_LABELS: Record<string, string> = {
+  dense: "Dense",
+  sparse: "Sparse",
+  hybrid: "Hybrid",
+};
+
+const MODE_LABELS: Record<string, string> = {
+  single_shot: "Single Shot",
+  multi_step: "Multi Step",
+};
+
+interface Props {
+  projectId: number;
+  embeddingConfigs: EmbeddingConfig[];
+  chunkConfigs: ChunkConfig[];
+  onConfigsChanged?: () => void;
+}
+
+export default function RagConfigPanel({
+  projectId,
+  embeddingConfigs,
+  chunkConfigs,
+  onConfigsChanged,
+}: Props) {
+  const [configs, setConfigs] = useState<RagConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Form state
+  const [name, setName] = useState("");
+  const [embConfigId, setEmbConfigId] = useState<number | "">(
+    embeddingConfigs.length > 0 ? embeddingConfigs[0]!.id : "",
+  );
+  const [chunkConfigId, setChunkConfigId] = useState<number | "">(
+    chunkConfigs.length > 0 ? chunkConfigs[0]!.id : "",
+  );
+  const [searchType, setSearchType] = useState<string>("dense");
+  const [llmModel, setLlmModel] = useState("");
+  const [responseMode, setResponseMode] = useState<string>("single_shot");
+  const [topK, setTopK] = useState(5);
+  const [maxSteps, setMaxSteps] = useState(3);
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  // Hybrid fields
+  const [sparseConfigId, setSparseConfigId] = useState<number | "">(
+    embeddingConfigs.find((c) => c.type === "bm25_sparse")?.id ?? "",
+  );
+  const [alpha, setAlpha] = useState(0.5);
+  // Reranker fields
+  const [rerankerModel, setRerankerModel] = useState("");
+  const [rerankerTopK, setRerankerTopK] = useState(5);
+
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Delete state
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Test inline
+  const [testConfigId, setTestConfigId] = useState<number | null>(null);
+
+  // Expand config summary
+  const [expandedConfigId, setExpandedConfigId] = useState<number | null>(null);
+  const [expandedCache, setExpandedCache] = useState<Map<number, RagConfigExpanded>>(new Map());
+  const [expandLoading, setExpandLoading] = useState(false);
+  const [expandError, setExpandError] = useState<string | null>(null);
+
+  const loadConfigs = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setExpandedCache(new Map());
+    try {
+      const data = await fetchRagConfigs(projectId);
+      setConfigs(data);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load RAG configs",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadConfigs();
+    // Set default LLM model from backend config
+    fetchConfigDefaults().then((defaults) => {
+      setLlmModel((prev) => prev || defaults.default_eval_model);
+    }).catch(() => {
+      setLlmModel((prev) => prev || "gpt-4o-mini");
+    });
+  }, [loadConfigs]);
+
+  // Update default selectors when configs change
+  useEffect(() => {
+    if (embeddingConfigs.length > 0 && embConfigId === "") {
+      setEmbConfigId(embeddingConfigs[0]!.id);
+    }
+  }, [embeddingConfigs, embConfigId]);
+
+  useEffect(() => {
+    if (chunkConfigs.length > 0 && chunkConfigId === "") {
+      setChunkConfigId(chunkConfigs[0]!.id);
+    }
+  }, [chunkConfigs, chunkConfigId]);
+
+  const canSave =
+    name.trim().length > 0 && embConfigId !== "" && chunkConfigId !== "";
+
+  async function handleSave() {
+    if (!canSave) return;
+    setSaving(true);
+    setFormError(null);
+    try {
+      const payload: RagConfigCreate = {
+        name: name.trim(),
+        embedding_config_id: embConfigId as number,
+        chunk_config_id: chunkConfigId as number,
+        search_type: searchType,
+        llm_model: llmModel,
+        top_k: topK,
+        response_mode: responseMode,
+      };
+      if (responseMode === "multi_step") payload.max_steps = maxSteps;
+      if (systemPrompt.trim()) payload.system_prompt = systemPrompt.trim();
+      if (searchType === "hybrid") {
+        if (sparseConfigId !== "") payload.sparse_config_id = sparseConfigId as number;
+        payload.alpha = alpha;
+      }
+      if (rerankerModel.trim()) {
+        payload.reranker_model = rerankerModel.trim();
+        payload.reranker_top_k = rerankerTopK;
+      }
+      await createRagConfig(projectId, payload);
+      setName("");
+      setSearchType("dense");
+      setLlmModel("gpt-4o-mini");
+      setResponseMode("single_shot");
+      setTopK(5);
+      setMaxSteps(3);
+      setSystemPrompt("");
+      setShowAdvanced(false);
+      setRerankerModel("");
+      setRerankerTopK(5);
+      loadConfigs();
+      onConfigsChanged?.();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(configId: number) {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteRagConfig(projectId, configId);
+      setConfirmDeleteId(null);
+      loadConfigs();
+      onConfigsChanged?.();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+      setConfirmDeleteId(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // If no embedding configs available, show guidance
+  if (embeddingConfigs.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="rounded-xl border border-border bg-card/60 p-5">
+          <p className="text-sm text-text-muted">
+            Create an embedding config first before setting up RAG.
+          </p>
+        </div>
+        {/* Still show saved configs list */}
+        {renderConfigsList()}
+      </div>
+    );
+  }
+
+  async function handleToggleExpand(configId: number) {
+    if (expandedConfigId === configId) {
+      setExpandedConfigId(null);
+      setExpandError(null);
+      return;
+    }
+    setExpandedConfigId(configId);
+    setExpandError(null);
+    if (expandedCache.has(configId)) return;
+    setExpandLoading(true);
+    try {
+      const expanded = await fetchRagConfigExpanded(projectId, configId);
+      setExpandedCache((prev) => new Map(prev).set(configId, expanded));
+    } catch (err) {
+      setExpandError(err instanceof Error ? err.message : "Failed to load details");
+    } finally {
+      setExpandLoading(false);
+    }
+  }
+
+  function renderConfigsList() {
+    return (
+      <div>
+        <h4 className="mb-3 text-sm font-semibold text-text-primary">
+          Saved RAG Configs
+        </h4>
+
+        {loading ? (
+          <div className="flex items-center gap-2 py-4 text-sm text-text-muted">
+            <svg
+              className="h-4 w-4 animate-spin"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+            Loading configs...
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-3 text-sm text-score-low">
+            <span>{error}</span>
+            <button
+              onClick={loadConfigs}
+              className="ml-3 rounded-md bg-score-low/20 px-3 py-1 text-xs font-medium hover:bg-score-low/30"
+            >
+              Retry
+            </button>
+          </div>
+        ) : configs.length === 0 ? (
+          <p className="py-4 text-center text-sm text-text-muted">
+            No RAG configs yet. Create one above.
+          </p>
+        ) : (
+          <>
+          {deleteError && (
+            <div className="mb-2 flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
+              <span>{deleteError}</span>
+              <button
+                onClick={() => setDeleteError(null)}
+                className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+          <ul className="space-y-2">
+            {configs.map((cfg) => (
+              <li key={cfg.id} className="rounded-lg bg-card px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <span className="truncate text-sm font-medium text-text-primary">
+                      {cfg.name}
+                    </span>
+                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider text-accent">
+                      {SEARCH_LABELS[cfg.search_type] ?? cfg.search_type}
+                    </span>
+                    <span className="shrink-0 font-mono text-2xs text-text-muted">
+                      {cfg.llm_model}
+                    </span>
+                    <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-2xs text-text-muted">
+                      {MODE_LABELS[cfg.response_mode] ?? cfg.response_mode}
+                    </span>
+                    <span className="shrink-0 text-xs text-text-muted">
+                      {new Date(cfg.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={() => handleToggleExpand(cfg.id)}
+                      className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+                      title="Toggle config details"
+                    >
+                      <svg
+                        className={`h-3.5 w-3.5 transition-transform ${expandedConfigId === cfg.id ? "rotate-90" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() =>
+                        setTestConfigId(
+                          testConfigId === cfg.id ? null : cfg.id,
+                        )
+                      }
+                      className="rounded px-2 py-1 text-xs text-accent hover:bg-accent/10"
+                    >
+                      Test
+                    </button>
+                    {confirmDeleteId === cfg.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleDelete(cfg.id)}
+                          disabled={deleting}
+                          className="rounded bg-score-low/20 px-2 py-1 text-xs text-score-low hover:bg-score-low/30 disabled:opacity-50"
+                        >
+                          {deleting ? "..." : "Yes"}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="rounded bg-elevated px-2 py-1 text-xs text-text-secondary hover:bg-border"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDeleteId(cfg.id)}
+                        className="rounded p-1 text-text-muted hover:bg-elevated hover:text-score-low"
+                        title="Delete config"
+                      >
+                        <svg
+                          className="h-3.5 w-3.5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded config summary */}
+                {expandedConfigId === cfg.id && (
+                  <div className="mt-3 border-t border-border pt-3">
+                    {expandLoading && !expandedCache.has(cfg.id) ? (
+                      <p className="text-xs text-text-muted">Loading details...</p>
+                    ) : expandError && !expandedCache.has(cfg.id) ? (
+                      <p className="text-xs text-score-low">Failed to load details</p>
+                    ) : expandedCache.has(cfg.id) ? (
+                      <div className="space-y-1 text-xs text-text-muted">
+                        {expandedCache.get(cfg.id)!.chunk_config ? (
+                          <p>
+                            <span className="text-text-secondary">Chunk:</span>{" "}
+                            {expandedCache.get(cfg.id)!.chunk_config!.name} — {expandedCache.get(cfg.id)!.chunk_config!.method}
+                          </p>
+                        ) : (
+                          <p><span className="text-text-secondary">Chunk:</span> (deleted)</p>
+                        )}
+                        {expandedCache.get(cfg.id)!.embedding_config ? (
+                          <p>
+                            <span className="text-text-secondary">Embedding:</span>{" "}
+                            {expandedCache.get(cfg.id)!.embedding_config!.name} — {expandedCache.get(cfg.id)!.embedding_config!.type}, {expandedCache.get(cfg.id)!.embedding_config!.model_name}
+                          </p>
+                        ) : (
+                          <p><span className="text-text-secondary">Embedding:</span> (deleted)</p>
+                        )}
+                        <p>
+                          <span className="text-text-secondary">RAG:</span>{" "}
+                          search={cfg.search_type}, LLM={cfg.llm_model}, top_k={cfg.top_k}, mode={cfg.response_mode}
+                        </p>
+                        {cfg.reranker_model && (
+                          <p>
+                            <span className="text-text-secondary">Reranker:</span>{" "}
+                            {cfg.reranker_model}{cfg.reranker_top_k ? `, top_k=${cfg.reranker_top_k}` : ""}
+                          </p>
+                        )}
+                        {cfg.system_prompt && (
+                          <p>
+                            <span className="text-text-secondary">System prompt:</span>{" "}
+                            {cfg.system_prompt.length > 80 ? cfg.system_prompt.slice(0, 80) + "..." : cfg.system_prompt}
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                {/* Inline test query */}
+                {testConfigId === cfg.id && (
+                  <div className="mt-3 border-t border-border pt-3">
+                    <RagTestQuery
+                      projectId={projectId}
+                      ragConfigId={cfg.id}
+                    />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* New RAG Config Form */}
+      <div className="rounded-xl border border-border bg-card/60 p-5">
+        <h4 className="mb-4 text-sm font-semibold text-text-primary">
+          New RAG Config
+        </h4>
+
+        <label className="block">
+          <span className="mb-1 block text-xs text-text-secondary">Name</span>
+          <p className="mt-0.5 text-xs text-text-muted">A descriptive name for this RAG configuration</p>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. dense-gpt4o"
+            className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+          />
+        </label>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              Embedding Config
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">Which embedding model to use for retrieval</p>
+            <select
+              value={embConfigId}
+              onChange={(e) => setEmbConfigId(Number(e.target.value))}
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+            >
+              {embeddingConfigs.map((ec) => (
+                <option key={ec.id} value={ec.id}>
+                  {ec.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              Chunk Config
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">Which chunking strategy was used for the documents</p>
+            <select
+              value={chunkConfigId}
+              onChange={(e) => setChunkConfigId(Number(e.target.value))}
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+            >
+              {chunkConfigs.map((cc) => (
+                <option key={cc.id} value={cc.id}>
+                  {cc.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              Search Type
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">dense: vector similarity search | sparse: BM25 keyword search | hybrid: combines both with alpha weighting</p>
+            <select
+              value={searchType}
+              onChange={(e) => setSearchType(e.target.value)}
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+            >
+              {SEARCH_TYPES.map((st) => (
+                <option key={st} value={st}>
+                  {SEARCH_LABELS[st]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              LLM Model
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">OpenAI model for generating answers (e.g., gpt-4o-mini, gpt-4o, gpt-4-turbo)</p>
+            <input
+              type="text"
+              value={llmModel}
+              onChange={(e) => setLlmModel(e.target.value)}
+              placeholder="gpt-4o-mini"
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+            />
+          </label>
+        </div>
+
+        {/* Hybrid-specific fields */}
+        {searchType === "hybrid" && (
+          <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-border/50 bg-card/30 p-3">
+            <label className="block">
+              <span className="mb-1 block text-xs text-text-secondary">
+                Sparse Config
+              </span>
+              <p className="mt-0.5 text-xs text-text-muted">BM25 embedding config for the sparse component of hybrid search</p>
+              <select
+                value={sparseConfigId}
+                onChange={(e) =>
+                  setSparseConfigId(
+                    e.target.value ? Number(e.target.value) : "",
+                  )
+                }
+                className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+              >
+                <option value="">None</option>
+                {embeddingConfigs.map((ec) => (
+                  <option key={ec.id} value={ec.id}>
+                    {ec.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-xs text-text-secondary">
+                Alpha ({alpha.toFixed(2)})
+              </span>
+              <p className="mt-0.5 text-xs text-text-muted">Weight between dense (1.0) and sparse (0.0) search in hybrid mode</p>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={alpha}
+                onChange={(e) => setAlpha(parseFloat(e.target.value))}
+                className="mt-1 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border accent-accent"
+              />
+            </label>
+          </div>
+        )}
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              Response Mode
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">single_shot: one retrieval + answer | multi_step: iteratively refines search queries for better context</p>
+            <select
+              value={responseMode}
+              onChange={(e) => setResponseMode(e.target.value)}
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+            >
+              {RESPONSE_MODES.map((rm) => (
+                <option key={rm} value={rm}>
+                  {MODE_LABELS[rm]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              Top K
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">Number of chunks to retrieve (1-50, typical: 3-10)</p>
+            <input
+              type="number"
+              value={topK}
+              min={1}
+              max={50}
+              onChange={(e) => setTopK(parseInt(e.target.value) || 5)}
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+            />
+          </label>
+        </div>
+
+        {/* Multi-step: max_steps */}
+        {responseMode === "multi_step" && (
+          <label className="mt-3 block">
+            <span className="mb-1 block text-xs text-text-secondary">
+              Max Steps
+            </span>
+            <p className="mt-0.5 text-xs text-text-muted">Maximum query refinement iterations in multi-step mode (1-10)</p>
+            <input
+              type="number"
+              value={maxSteps}
+              min={1}
+              max={10}
+              onChange={(e) => setMaxSteps(parseInt(e.target.value) || 3)}
+              className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+            />
+          </label>
+        )}
+
+        {/* Advanced: system prompt (collapsible) */}
+        <div className="mt-3 border-t border-border pt-3">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
+          >
+            <svg
+              className={`h-3 w-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
+            Advanced Settings
+          </button>
+
+          {showAdvanced && (
+            <div className="mt-2 space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs text-text-secondary">
+                  System Prompt (optional)
+                </span>
+                <p className="mt-0.5 text-xs text-text-muted">Custom instructions for the LLM (e.g., tone, format, domain constraints)</p>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="You are a helpful assistant..."
+                  rows={3}
+                  className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                />
+              </label>
+
+              {/* Reranker */}
+              <div className="rounded-lg border border-border/50 bg-card/30 p-3">
+                <p className="mb-2 text-xs font-medium text-text-secondary">
+                  Reranker (optional)
+                </p>
+                <p className="mb-2 text-xs text-text-muted">
+                  After initial retrieval, a cross-encoder reranker scores each
+                  (query, passage) pair directly for more accurate relevance
+                  ranking. This improves precision but adds latency. Models are
+                  loaded from{" "}
+                  <a
+                    href="https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads&search=cross-encoder"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-accent"
+                  >
+                    Hugging Face
+                  </a>
+                  .
+                </p>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-text-secondary">
+                    Reranker Model
+                  </span>
+                  <p className="mt-0.5 text-xs text-text-muted">
+                    Common models: <code className="rounded bg-elevated px-1">cross-encoder/ms-marco-MiniLM-L-6-v2</code> (fast, good quality) | <code className="rounded bg-elevated px-1">cross-encoder/ms-marco-MiniLM-L-12-v2</code> (slower, better quality) | <code className="rounded bg-elevated px-1">BAAI/bge-reranker-base</code> | <code className="rounded bg-elevated px-1">BAAI/bge-reranker-large</code>
+                  </p>
+                  <input
+                    type="text"
+                    value={rerankerModel}
+                    onChange={(e) => setRerankerModel(e.target.value)}
+                    placeholder="e.g. cross-encoder/ms-marco-MiniLM-L-6-v2"
+                    className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                  />
+                </label>
+                {rerankerModel.trim() && (
+                  <label className="mt-2 block">
+                    <span className="mb-1 block text-xs text-text-secondary">
+                      Reranker Top K
+                    </span>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Number of results to keep after reranking (should be &le;
+                      retrieval Top K above)
+                    </p>
+                    <input
+                      type="number"
+                      value={rerankerTopK}
+                      min={1}
+                      max={50}
+                      onChange={(e) =>
+                        setRerankerTopK(parseInt(e.target.value) || 5)
+                      }
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {formError && (
+          <p className="mt-3 text-xs text-score-low">{formError}</p>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={!canSave || saving}
+          className="mt-4 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {saving ? "Saving..." : "Save Config"}
+        </button>
+      </div>
+
+      {/* Existing configs list */}
+      {renderConfigsList()}
+    </div>
+  );
+}

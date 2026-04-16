@@ -1,0 +1,11 @@
+.env
+.git
+__pycache__
+.paul
+.claude
+.DS_Store
+output/
+input/
+data/
+projects/
+*.pyc

@@ -1,0 +1,37 @@
+# Environment
+.env
+.claude
+.paul
+
+# Data
+data/
+
+# Input/Output data
+input/
+output/
+
+# Python
+__pycache__/
+*.pyc
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# Accidental pip output
+=*
+
+# Generated skill docs
+SKILL.md
+
+# Projects planning
+projects/
