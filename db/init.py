@@ -92,6 +92,12 @@ class _PgConnection:
                 cur.execute("ROLLBACK TO SAVEPOINT _sp")
         self._conn.commit()
 
+    def executemany(self, sql: str, seq_of_params) -> None:
+        pg_sql = sql.replace("?", "%s")
+        cur = self._conn.cursor()
+        for params in seq_of_params:
+            cur.execute(pg_sql, params)
+
     def commit(self) -> None:
         self._conn.commit()
 
@@ -383,7 +389,19 @@ PG_SCHEMA_SQL = SCHEMA_SQL \
 # Helpers
 # ---------------------------------------------------------------------------
 
+# SQL fragment for current timestamp — use in f-strings or string concatenation
+NOW_SQL = "NOW()" if _USE_PG else "datetime('now', 'localtime')"
+
 _connection: sqlite3.Connection | _PgConnection | None = None
+
+
+def is_integrity_error(exc: Exception) -> bool:
+    """Return True if *exc* is a unique/FK constraint violation on either backend."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    if _USE_PG:
+        return isinstance(exc, psycopg2.IntegrityError)
+    return False
 
 
 def _add_column_if_missing(

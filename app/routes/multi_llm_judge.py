@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.models import ClaimAnnotationRequest
 import db.init
+from db.init import NOW_SQL
 from config import MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
 from evaluation.metrics.multi_llm_judge import aggregate_score, aggregate_criteria_score
 
@@ -278,12 +279,12 @@ async def annotate_judge_claim(
         raise HTTPException(status_code=422, detail=f"claim_index {claim_index} out of range")
 
     conn.execute(
-        """INSERT INTO evaluator_claim_annotations (evaluation_id, claim_index, status, comment)
+        f"""INSERT INTO evaluator_claim_annotations (evaluation_id, claim_index, status, comment)
            VALUES (?, ?, ?, ?)
            ON CONFLICT(evaluation_id, claim_index)
            DO UPDATE SET status = excluded.status,
                          comment = excluded.comment,
-                         annotated_at = datetime('now', 'localtime')""",
+                         annotated_at = {NOW_SQL}""",
         (evaluation_id, claim_index, req.status, req.comment),
     )
     conn.commit()
