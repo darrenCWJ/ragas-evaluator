@@ -9,9 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
-# Create data directory for SQLite
+# Create data directory for SQLite (mount a persistent volume here on Northflank)
 RUN mkdir -p /app/data
 
-EXPOSE 8000
+EXPOSE 3000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000"]
