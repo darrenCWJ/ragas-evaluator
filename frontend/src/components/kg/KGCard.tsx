@@ -56,6 +56,12 @@ const OVERLAP_OPTIONS = [
 export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
   const [building, setBuilding] = useState(false);
   const [buildStage, setBuildStage] = useState<string | null>(null);
+  const [buildProgress, setBuildProgress] = useState<{
+    batch_current?: number;
+    batch_total?: number;
+    nodes_processed?: number;
+    nodes_total?: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showRebuildLinks, setShowRebuildLinks] = useState(false);
   const [overlapMaxNodes, setOverlapMaxNodes] = useState<number | null>(500);
@@ -71,8 +77,14 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
     const poll = async () => {
       try {
         const progress = await fetchKGBuildProgress(kg.project_id);
-        if (progress.stage) {
-          setBuildStage(progress.stage);
+        if (progress.stage) setBuildStage(progress.stage);
+        if (progress.batch_total != null) {
+          setBuildProgress({
+            batch_current: progress.batch_current,
+            batch_total: progress.batch_total,
+            nodes_processed: progress.nodes_processed,
+            nodes_total: progress.nodes_total,
+          });
         }
         if (!progress.active && progress.is_complete) {
           setBuilding(false);
@@ -205,11 +217,33 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
 
         {/* Building progress */}
         {building && buildStage && (
-          <div className="mb-3 flex items-center gap-2 rounded-lg bg-blue-500/5 border border-blue-500/10 px-3 py-2">
-            <div className="h-3 w-3 shrink-0 animate-spin rounded-full border border-blue-400 border-t-transparent" />
-            <span className="text-micro text-blue-300 truncate">
-              {STAGE_LABELS[buildStage] ?? buildStage}
-            </span>
+          <div className="mb-3 rounded-lg bg-blue-500/5 border border-blue-500/10 px-3 py-2.5 space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="h-3 w-3 shrink-0 animate-spin rounded-full border border-blue-400 border-t-transparent" />
+              <span className="text-micro text-blue-300 truncate">
+                {STAGE_LABELS[buildStage] ?? buildStage}
+              </span>
+            </div>
+            {buildProgress?.batch_total != null && buildProgress.batch_total > 0 && (
+              <>
+                <div className="h-1 w-full rounded-full bg-blue-900/40 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-blue-400 transition-all duration-500"
+                    style={{
+                      width: `${Math.min(100, Math.round(((buildProgress.batch_current ?? 0) / buildProgress.batch_total) * 100))}%`,
+                    }}
+                  />
+                </div>
+                <div className="flex justify-between text-2xs text-blue-400/60 font-mono">
+                  <span>
+                    {buildProgress.batch_current ?? 0}/{buildProgress.batch_total} chunks
+                  </span>
+                  {buildProgress.nodes_total != null && buildProgress.nodes_total > 0 && (
+                    <span>{buildProgress.nodes_processed ?? 0}/{buildProgress.nodes_total} nodes</span>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
