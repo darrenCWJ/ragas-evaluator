@@ -268,15 +268,22 @@ export default function ExperimentRunner({
 
   // Multi-model judge state — seed with fallback list so dropdowns are usable immediately
   const FALLBACK_MODELS: JudgeModel[] = [
-    { id: "gpt-4o",            name: "GPT-4o",             provider: "openai",     available: true },
-    { id: "gpt-4o-mini",       name: "GPT-4o Mini",        provider: "openai",     available: true },
-    { id: "gpt-4.1",           name: "GPT-4.1",            provider: "openai",     available: true },
-    { id: "gpt-4.1-mini",      name: "GPT-4.1 Mini",       provider: "openai",     available: true },
-    { id: "claude-opus-4-5",   name: "Claude Opus 4.5",    provider: "anthropic",  available: false },
-    { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5",  provider: "anthropic",  available: false },
-    { id: "claude-haiku-4-5",  name: "Claude Haiku 4.5",   provider: "anthropic",  available: false },
-    { id: "gemini-2.0-flash",  name: "Gemini 2.0 Flash",   provider: "gemini",     available: false },
-    { id: "gemini-1.5-pro",    name: "Gemini 1.5 Pro",     provider: "gemini",     available: false },
+    { id: "gpt-4o",                  name: "GPT-4o",                    provider: "openai",   available: true  },
+    { id: "gpt-4o-mini",             name: "GPT-4o Mini",               provider: "openai",   available: true  },
+    { id: "gpt-4.1",                 name: "GPT-4.1",                   provider: "openai",   available: true  },
+    { id: "gpt-4.1-mini",            name: "GPT-4.1 Mini",              provider: "openai",   available: true  },
+    { id: "claude-opus-4-5",         name: "Claude Opus 4.5",           provider: "anthropic",available: false },
+    { id: "claude-sonnet-4-5",       name: "Claude Sonnet 4.5",         provider: "anthropic",available: false },
+    { id: "claude-haiku-4-5",        name: "Claude Haiku 4.5",          provider: "anthropic",available: false },
+    { id: "gemini-2.0-flash",        name: "Gemini 2.0 Flash",          provider: "gemini",   available: false },
+    { id: "gemini-1.5-pro",          name: "Gemini 1.5 Pro",            provider: "gemini",   available: false },
+    { id: "azure.claude-haiku-4-5",  name: "Claude Haiku 4.5 (Azure)",  provider: "gateway",  available: false },
+    { id: "azure.claude-sonnet-4-5", name: "Claude Sonnet 4.5 (Azure)", provider: "gateway",  available: false },
+    { id: "rsn.claude-haiku-4-5",    name: "Claude Haiku 4.5 (RSN)",    provider: "gateway",  available: false },
+    { id: "rsn.claude-sonnet-4-5",   name: "Claude Sonnet 4.5 (RSN)",   provider: "gateway",  available: false },
+    { id: "rsn.claude-opus-4-5",     name: "Claude Opus 4.5 (RSN)",     provider: "gateway",  available: false },
+    { id: "gemini-2.5-flash",        name: "Gemini 2.5 Flash",          provider: "gateway",  available: false },
+    { id: "gemini-2.5-flash-lite",   name: "Gemini 2.5 Flash Lite",     provider: "gateway",  available: false },
   ];
   const [availableModels, setAvailableModels] = useState<JudgeModel[]>(FALLBACK_MODELS);
   const [judgeModelSlots, setJudgeModelSlots] = useState<string[]>(["gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini"]);
