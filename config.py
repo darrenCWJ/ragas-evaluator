@@ -11,6 +11,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Storage paths
 # ---------------------------------------------------------------------------
+DATABASE_URL = os.environ.get("DATABASE_URL", "")  # Neon/PostgreSQL connection string; empty = SQLite
 DATABASE_PATH = Path(os.environ.get("DATABASE_PATH", "data/ragas.db"))
 CHROMADB_PATH = os.environ.get("CHROMADB_PATH", "data/chromadb")
 BM25_PATH = os.environ.get("BM25_PATH", "data/bm25")
