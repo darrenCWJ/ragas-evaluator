@@ -392,6 +392,17 @@ PG_SCHEMA_SQL = SCHEMA_SQL \
 # SQL fragment for current timestamp — use in f-strings or string concatenation
 NOW_SQL = "NOW()" if _USE_PG else "datetime('now', 'localtime')"
 
+
+def json_extract_sql(column: str, key: str) -> str:
+    """Return SQL to extract a scalar value from a JSON text column.
+
+    SQLite:    json_extract(column, '$.key')
+    PostgreSQL: (column::jsonb->>'key')
+    """
+    if _USE_PG:
+        return f"({column}::jsonb->>'{key}')"
+    return f"json_extract({column}, '$.{key}')"
+
 _connection: sqlite3.Connection | _PgConnection | None = None
 
 
