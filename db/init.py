@@ -507,6 +507,21 @@ def get_db() -> sqlite3.Connection | _PgConnection:
     global _connection
     if _connection is None:
         _connection = init_db()
+        return _connection
+
+    if _USE_PG:
+        # Neon serverless closes idle connections — reconnect transparently
+        try:
+            if _connection._conn.closed:
+                raise Exception("closed")
+            _connection._conn.cursor().execute("SELECT 1")
+        except Exception:
+            try:
+                _connection.close()
+            except Exception:
+                pass
+            _connection = _make_pg_connection()
+
     return _connection
 
 
