@@ -1,0 +1,10 @@
+FROM node:22-alpine
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci --ignore-scripts 2>/dev/null || { echo "⚠️  package-lock.json out of sync, regenerating..."; rm -f package-lock.json; npm install --ignore-scripts; }; else npm install --ignore-scripts; fi
+COPY . .
+RUN npm rebuild 2>/dev/null || true && \
+    if grep -q '"postinstall"' package.json; then npm run postinstall; fi
+ENV NODE_OPTIONS="--max-old-space-size=384"
+EXPOSE 3000
+CMD ["npx", "next", "dev", "-H", "0.0.0.0", "-p", "3000"]
