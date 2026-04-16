@@ -322,7 +322,7 @@ def load_cached_kg(
         # the current pipeline (e.g. 6-step KG in a 7-step pipeline).
         row = db.execute(
             "SELECT kg_json, is_complete, completed_steps, chunks_hash FROM knowledge_graphs "
-            "WHERE project_id = ? AND kg_source = ? AND (is_complete = 0 OR completed_steps < 11)",
+            "WHERE project_id = ? AND kg_source = ? AND (is_complete = FALSE OR completed_steps < 11)",
             (project_id, kg_source),
         ).fetchone()
         if row is not None:
