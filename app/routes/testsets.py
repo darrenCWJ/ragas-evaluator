@@ -25,7 +25,7 @@ from app.models import (
 )
 from config import TESTGEN_SUBPROCESS_TIMEOUT
 import db.init
-from db.init import NOW_SQL
+from db.init import NOW_SQL, json_extract_sql
 
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
@@ -641,7 +641,7 @@ async def list_test_sets(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     rows = conn.execute(
-        """SELECT ts.id, ts.name, ts.generation_config_json, ts.created_at,
+        f"""SELECT ts.id, ts.name, ts.generation_config_json, ts.created_at,
                   ts.status AS generation_status, ts.error_message,
                   COUNT(tq.id) AS total_questions,
                   SUM(CASE WHEN tq.status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
@@ -650,7 +650,7 @@ async def list_test_sets(project_id: int):
            FROM test_sets ts
            LEFT JOIN test_questions tq ON tq.test_set_id = ts.id
            WHERE ts.project_id = ? AND ts.status != 'generating'
-                 AND COALESCE(json_extract(ts.generation_config_json, '$.source'), '') != 'csv_auto'
+                 AND COALESCE({json_extract_sql('ts.generation_config_json', 'source')}, '') != 'csv_auto'
            GROUP BY ts.id
            ORDER BY ts.created_at DESC""",
         (project_id,),
