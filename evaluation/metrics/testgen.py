@@ -713,7 +713,7 @@ def build_kg_standalone(
 
     conn = _db.get_thread_db()
     rows = conn.execute(
-        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (chunk_config_id,),
     ).fetchall()
     chunks = [r["content"] for r in rows]
@@ -862,7 +862,7 @@ def rebuild_kg_links(
             import db.init as _db
             conn = _db.get_db()
             chunk_rows = conn.execute(
-                "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                 (chunk_config_id,),
             ).fetchall()
             chunks = [r["content"] for r in chunk_rows]
@@ -966,7 +966,7 @@ def incremental_update_kg(
 
     # Load current chunks from DB
     chunk_rows = conn.execute(
-        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (chunk_config_id,),
     ).fetchall()
     new_chunks = [r["content"] for r in chunk_rows]

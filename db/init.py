@@ -496,7 +496,7 @@ def init_db() -> sqlite3.Connection | _PgConnection:
             ).fetchall()
             for cc in cc_rows:
                 chunks = conn.execute(
-                    "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                    "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                     (cc["id"],),
                 ).fetchall()
                 h = hashlib.sha256()

@@ -150,7 +150,7 @@ async def create_test_set(project_id: int, req: TestSetCreate):
             raise HTTPException(status_code=404, detail="Chunk config not found")
 
         chunk_rows = conn.execute(
-            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
             (req.chunk_config_id,),
         ).fetchall()
         if not chunk_rows:
@@ -1030,7 +1030,7 @@ async def get_knowledge_graph_info(project_id: int, kg_source: str = "chunks"):
             chunk_config_id = info.get("chunk_config_id")
             if chunk_config_id:
                 chunk_rows = conn.execute(
-                    "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                    "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                     (chunk_config_id,),
                 ).fetchall()
                 if chunk_rows:
@@ -1522,7 +1522,7 @@ async def list_all_knowledge_graphs():
         chunks_stale = False
         if d.get("chunk_config_id") and d.get("chunks_hash"):
             chunk_rows = conn.execute(
-                "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY rowid",
+                "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                 (d["chunk_config_id"],),
             ).fetchall()
             if chunk_rows:
