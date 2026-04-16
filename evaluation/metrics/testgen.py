@@ -428,7 +428,6 @@ def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
         conn.commit()
     finally:
         conn.close()
-    db.commit()
 
 
 _HEARTBEAT_STALE_MINUTES = 5
