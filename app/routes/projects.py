@@ -2,8 +2,6 @@
 
 import csv
 import io
-import sqlite3
-
 import json
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
@@ -16,6 +14,7 @@ from app.models import (
     MAX_BASELINE_ROWS,
 )
 import db.init
+from db.init import NOW_SQL, is_integrity_error
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -37,8 +36,10 @@ async def create_project(req: ProjectCreate):
             (cursor.lastrowid,),
         ).fetchone()
         return _format_project(row)
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Project name already exists")
+    except Exception as e:
+        if is_integrity_error(e):
+            raise HTTPException(status_code=409, detail="Project name already exists")
+        raise
 
 
 def _format_project(row) -> dict:
@@ -90,7 +91,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
     if req.judge_model_assignments is not None:
         updates.append("judge_model_assignments_json = ?")
         params.append(json.dumps(req.judge_model_assignments) if req.judge_model_assignments else None)
-    updates.append("updated_at = datetime('now', 'localtime')")
+    updates.append(f"updated_at = {NOW_SQL}")
     params.append(project_id)
     try:
         conn.execute(
@@ -98,8 +99,10 @@ async def update_project(project_id: int, req: ProjectUpdate):
             params,
         )
         conn.commit()
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Project name already exists")
+    except Exception as e:
+        if is_integrity_error(e):
+            raise HTTPException(status_code=409, detail="Project name already exists")
+        raise
     row = conn.execute(
         "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
         (project_id,),
@@ -358,7 +361,7 @@ async def save_api_config(project_id: int, payload: ApiConfigCreate):
 
     if existing:
         conn.execute(
-            "UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = datetime('now', 'localtime') WHERE project_id = ?",
+            f"UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = {NOW_SQL} WHERE project_id = ?",
             (payload.endpoint_url, payload.api_key, payload.headers_json, project_id),
         )
         config_id = existing[0]

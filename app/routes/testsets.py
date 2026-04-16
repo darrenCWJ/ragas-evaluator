@@ -25,6 +25,7 @@ from app.models import (
 )
 from config import TESTGEN_SUBPROCESS_TIMEOUT
 import db.init
+from db.init import NOW_SQL
 
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
@@ -775,10 +776,10 @@ async def annotate_question(
     edited_ctx_json = json.dumps(req.user_edited_contexts) if req.user_edited_contexts is not None else None
     metadata_json = json.dumps(req.metadata) if req.metadata is not None else None
     conn.execute(
-        """UPDATE test_questions
+        f"""UPDATE test_questions
            SET status = ?, user_edited_answer = ?, user_edited_contexts = ?, user_notes = ?,
                metadata_json = COALESCE(?, metadata_json),
-               reviewed_at = datetime('now', 'localtime')
+               reviewed_at = {NOW_SQL}
            WHERE id = ?""",
         (req.status, req.user_edited_answer, edited_ctx_json, req.user_notes, metadata_json, question_id),
     )
@@ -842,7 +843,7 @@ async def bulk_annotate_questions(
 
         # Update specified questions
         cursor = conn.execute(
-            f"UPDATE test_questions SET status = ?, reviewed_at = datetime('now', 'localtime') WHERE id IN ({placeholders}) AND test_set_id = ?",
+            f"UPDATE test_questions SET status = ?, reviewed_at = {NOW_SQL} WHERE id IN ({placeholders}) AND test_set_id = ?",
             (target_status, *req.question_ids, test_set_id),
         )
         conn.commit()
@@ -858,7 +859,7 @@ async def bulk_annotate_questions(
 
         # Update all pending questions in this test set
         cursor = conn.execute(
-            "UPDATE test_questions SET status = ?, reviewed_at = datetime('now', 'localtime') WHERE test_set_id = ? AND status = 'pending'",
+            f"UPDATE test_questions SET status = ?, reviewed_at = {NOW_SQL} WHERE test_set_id = ? AND status = 'pending'",
             (target_status, test_set_id),
         )
         conn.commit()
