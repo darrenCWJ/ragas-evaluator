@@ -386,16 +386,20 @@ def save_kg_to_db(
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    db = get_db()
-    # Remove old entry for this project+source (content may have changed).
-    db.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
-    db.execute(
-        "INSERT INTO knowledge_graphs "
-        "(project_id, chunks_hash, chunk_config_id, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps, last_heartbeat, kg_source) "
-        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL}, ?)",
-        (project_id, h, chunk_config_id, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps, kg_source),
-    )
-    db.commit()
+    import db.init as _db
+    conn = _db.get_thread_db()
+    try:
+        # Remove old entry for this project+source (content may have changed).
+        conn.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
+        conn.execute(
+            "INSERT INTO knowledge_graphs "
+            "(project_id, chunks_hash, chunk_config_id, kg_json, num_nodes, num_chunks, is_complete, completed_steps, total_steps, last_heartbeat, kg_source) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL}, ?)",
+            (project_id, h, chunk_config_id, kg_json, len(kg.nodes), len(chunks), is_complete, completed_steps, total_steps, kg_source),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     status = "complete" if is_complete else f"partial ({completed_steps}/{total_steps})"
     logger.info("Saved %s KG (source=%s) for project %d to DB (%d nodes)", status, kg_source, project_id, len(kg.nodes))
 
@@ -413,12 +417,17 @@ def delete_kg_from_db(project_id: int, kg_source: str = "chunks") -> bool:
 
 def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
     """Touch the heartbeat timestamp for the KG build of a project+source."""
-    db = get_db()
-    db.execute(
-        f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
-        "WHERE project_id = ? AND kg_source = ?",
-        (project_id, kg_source),
-    )
+    import db.init as _db
+    conn = _db.get_thread_db()
+    try:
+        conn.execute(
+            f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
+            "WHERE project_id = ? AND kg_source = ?",
+            (project_id, kg_source),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     db.commit()
 
 
@@ -449,7 +458,10 @@ def get_kg_info(project_id: int, kg_source: str = "chunks") -> dict | None:
     if not info["is_complete"] and info.get("last_heartbeat"):
         from datetime import datetime, timedelta
         try:
-            hb = datetime.strptime(info["last_heartbeat"], "%Y-%m-%d %H:%M:%S")
+            hb = info["last_heartbeat"]
+            # psycopg2 returns datetime objects; SQLite returns strings
+            if isinstance(hb, str):
+                hb = datetime.strptime(hb, "%Y-%m-%d %H:%M:%S")
             info["heartbeat_stale"] = datetime.now() - hb > timedelta(minutes=_HEARTBEAT_STALE_MINUTES)
         except (ValueError, TypeError):
             info["heartbeat_stale"] = True
