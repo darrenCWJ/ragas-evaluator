@@ -38,7 +38,10 @@ _openai_client: AsyncOpenAI | None = None
 def _get_openai_client() -> AsyncOpenAI:
     global _openai_client
     if _openai_client is None:
-        _openai_client = AsyncOpenAI()
+        _openai_client = AsyncOpenAI(
+            max_retries=1,   # 1 retry max — prevent endless loops during gateway outages
+            timeout=60.0,    # 60s hard timeout per request
+        )
     return _openai_client
 
 
