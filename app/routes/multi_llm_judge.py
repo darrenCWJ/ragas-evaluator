@@ -22,6 +22,7 @@ import db.init
 from db.init import NOW_SQL
 from config import MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
 from evaluation.metrics.multi_llm_judge import aggregate_score, aggregate_criteria_score
+from app.routes.annotations import _validate_experiment
 
 logger = logging.getLogger(__name__)
 
@@ -36,23 +37,6 @@ _CRITERIA_VERDICTS = {"good", "mixed", "bad"}
 # Normalise criteria verdicts → built-in labels for the frontend panel
 _CRITERIA_VERDICT_MAP = {"good": "positive", "bad": "critical", "mixed": "mixed"}
 
-
-def _validate_experiment(conn, project_id: int, experiment_id: int):
-    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    experiment = conn.execute(
-        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
-        (experiment_id, project_id),
-    ).fetchone()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
-    if experiment["status"] != "completed":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Experiment must be completed (current: {experiment['status']})",
-        )
-    return experiment
 
 
 def _normalize_criteria_claims(highlights: list[dict]) -> list[dict]:
@@ -142,7 +126,7 @@ async def get_judge_evaluations(
     project_id: int,
     experiment_id: int,
     result_id: int,
-    metric_name: Optional[str] = Query(default=None),
+    metric_name: str | None = Query(default=None),
 ):
     """Return all evaluator outputs + claim annotations for a single result.
 
@@ -168,7 +152,7 @@ async def get_judge_evaluations(
 async def get_judge_annotation_sample(
     project_id: int,
     experiment_id: int,
-    metric_name: Optional[str] = Query(default=None),
+    metric_name: str | None = Query(default=None),
 ):
     """Return a 20% random sample of results for human claim annotation.
 
@@ -298,7 +282,7 @@ async def annotate_judge_claim(
 async def get_judge_reliability(
     project_id: int,
     experiment_id: int,
-    metric_name: Optional[str] = Query(default=None),
+    metric_name: str | None = Query(default=None),
 ):
     """Return per-evaluator reliability stats and the excluded evaluator set.
 
@@ -411,7 +395,7 @@ async def get_judge_reliability(
 async def get_judge_summary(
     project_id: int,
     experiment_id: int,
-    metric_name: Optional[str] = Query(default=None),
+    metric_name: str | None = Query(default=None),
 ):
     """Return per-result judge verdicts for the Q&A table in the dashboard.
 

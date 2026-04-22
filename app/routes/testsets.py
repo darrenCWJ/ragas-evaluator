@@ -5,7 +5,6 @@ import csv
 import io
 import json
 import logging
-import random
 import threading
 from datetime import datetime
 
@@ -23,7 +22,7 @@ from app.models import (
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
 )
-from config import TESTGEN_SUBPROCESS_TIMEOUT, KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE
+from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE
 import db.init
 from db.init import NOW_SQL, json_extract_sql
 

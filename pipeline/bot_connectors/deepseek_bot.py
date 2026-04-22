@@ -14,7 +14,7 @@ from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
-from config import CONNECTOR_DEFAULT_MODELS
+from config import CONNECTOR_DEFAULT_MODELS, BOT_QUERY_TIMEOUT
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -31,7 +31,7 @@ class DeepSeekBotConnector:
         system_prompt: str = "",
         prompt_for_sources: bool = False,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, base_url=_DEEPSEEK_BASE_URL)
+        self._client = AsyncOpenAI(api_key=api_key, base_url=_DEEPSEEK_BASE_URL, max_retries=1, timeout=BOT_QUERY_TIMEOUT)
         self._model = model
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources

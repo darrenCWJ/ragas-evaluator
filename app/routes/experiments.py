@@ -6,7 +6,6 @@ import io
 import json
 import logging
 import math
-import sqlite3
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
@@ -27,6 +26,7 @@ import db.init
 from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
 from pipeline.bot_connectors.factory import create_connector
 from app.routes.bot_configs import bot_config_returns_contexts
+from app.routes.projects import _sanitize_csv_value
 from pipeline.rag import single_shot_query, multi_step_query
 
 logger = logging.getLogger(__name__)
@@ -120,12 +120,6 @@ def _build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
         "reranker_top_k": retrieval_config.get("reranker_top_k"),
     }
 
-
-def _sanitize_csv_value(val: str) -> str:
-    """Prevent CSV formula injection (CWE-1236) by prefixing dangerous characters."""
-    if val and isinstance(val, str) and len(val) > 0 and val[0] in ("=", "+", "-", "@"):
-        return "'" + val
-    return val
 
 
 def _sanitize_nan(obj):
@@ -798,12 +792,10 @@ async def run_experiment(
         )
 
     # Build set of valid metric names (built-in + custom for this project)
-    custom_names = {
-        r["name"]
-        for r in conn.execute(
-            "SELECT name FROM custom_metrics WHERE project_id = ?", (project_id,)
-        ).fetchall()
-    }
+    all_custom_rows = conn.execute(
+        "SELECT * FROM custom_metrics WHERE project_id = ?", (project_id,)
+    ).fetchall()
+    custom_names = {r["name"] for r in all_custom_rows}
     valid_names = set(ALL_METRICS) | custom_names
 
     requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
@@ -885,10 +877,7 @@ async def run_experiment(
                 "multi_llm_judge" in selected_metrics
                 or any(
                     cr["metric_type"] in ("criteria_judge", "reference_judge") and cr["name"] in selected_metrics
-                    for cr in run_conn.execute(
-                        "SELECT name, metric_type FROM custom_metrics WHERE project_id = ?",
-                        (project_id,),
-                    ).fetchall()
+                    for cr in all_custom_rows
                 )
             )
             if judge_is_selected and judge_assignments:
@@ -909,10 +898,7 @@ async def run_experiment(
                     )
 
             # Load custom metrics for this project
-            custom_rows = run_conn.execute(
-                "SELECT * FROM custom_metrics WHERE project_id = ?",
-                (project_id,),
-            ).fetchall()
+            custom_rows = all_custom_rows
             custom_configs = []
             criteria_judge_configs = []
             reference_judge_configs = []

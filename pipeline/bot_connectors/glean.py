@@ -64,33 +64,33 @@ class GleanBotConnector:
     ) -> dict[str, Any]:
         """POST to Glean with exponential backoff on 429 and 5xx errors."""
         backoff = _INITIAL_BACKOFF
-        for attempt in range(_MAX_RETRIES):
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            for attempt in range(_MAX_RETRIES):
                 resp = await client.post(
                     f"{self._base_url}/rest/api/v1/chat",
                     json=body,
                     headers=headers,
                 )
-            if resp.status_code == 429 or resp.status_code >= 500:
-                if attempt == _MAX_RETRIES - 1:
-                    logger.error(
-                        "Glean %d after %d attempts. Body: %s",
-                        resp.status_code,
-                        _MAX_RETRIES,
-                        resp.text[:500],
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    if attempt == _MAX_RETRIES - 1:
+                        logger.error(
+                            "Glean %d after %d attempts. Body: %s",
+                            resp.status_code,
+                            _MAX_RETRIES,
+                            resp.text[:500],
+                        )
+                        resp.raise_for_status()
+                    retry_after = resp.headers.get("Retry-After")
+                    wait = float(retry_after) if retry_after else backoff
+                    logger.info(
+                        "Glean %d, retrying in %.1fs (attempt %d/%d)",
+                        resp.status_code, wait, attempt + 1, _MAX_RETRIES,
                     )
-                    resp.raise_for_status()
-                retry_after = resp.headers.get("Retry-After")
-                wait = float(retry_after) if retry_after else backoff
-                logger.info(
-                    "Glean %d, retrying in %.1fs (attempt %d/%d)",
-                    resp.status_code, wait, attempt + 1, _MAX_RETRIES,
-                )
-                await asyncio.sleep(wait)
-                backoff *= 2
-                continue
-            resp.raise_for_status()
-            return resp.json()
+                    await asyncio.sleep(wait)
+                    backoff *= 2
+                    continue
+                resp.raise_for_status()
+                return resp.json()
         # Unreachable, but satisfies type checker
         raise RuntimeError("Exhausted retries")
 
