@@ -171,6 +171,16 @@ openssl rand -hex 32
 
 Once set, all API requests require: `Authorization: Bearer <your-key>`
 
+### Private network deployments
+
+If your bot or cited document sources are hosted on a private/internal network, set:
+
+```bash
+ALLOW_PRIVATE_ENDPOINTS=true
+```
+
+By default this is `false`, which blocks requests to private IP ranges to prevent SSRF attacks on internet-facing deployments. Only enable this when the app itself runs on a trusted private network.
+
 ## Project Structure
 
 ```

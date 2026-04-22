@@ -93,6 +93,14 @@ DEFAULT_EXPERIMENT_METRICS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Network access
+# ---------------------------------------------------------------------------
+# Set to true when the app runs on a private network and needs to reach
+# internal bots or cite internal document URLs. When false (default),
+# private/internal IP ranges are blocked to prevent SSRF on internet-facing deployments.
+ALLOW_PRIVATE_ENDPOINTS = os.environ.get("ALLOW_PRIVATE_ENDPOINTS", "false").lower() == "true"
+
+# ---------------------------------------------------------------------------
 # Multi-LLM Judge metric
 # ---------------------------------------------------------------------------
 MULTI_LLM_JUDGE_DEFAULT_EVALUATORS = int(os.environ.get("MULTI_LLM_JUDGE_DEFAULT_EVALUATORS", "3"))

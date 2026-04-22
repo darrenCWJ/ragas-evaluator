@@ -40,13 +40,24 @@ _PRIVATE_NETWORKS = [
 
 
 def _validate_endpoint_url(url: str) -> None:
-    """Raise ValueError if the URL targets a private/internal address."""
+    """Raise ValueError if the URL is unsafe.
+
+    Private IP ranges are only blocked when ALLOW_PRIVATE_ENDPOINTS is false
+    (the default). Set ALLOW_PRIVATE_ENDPOINTS=true when the app runs on a
+    private network and needs to reach internal bots or document servers.
+    """
+    from config import ALLOW_PRIVATE_ENDPOINTS
+
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"Endpoint URL must use http or https scheme, got: {parsed.scheme!r}")
     hostname = parsed.hostname or ""
     if not hostname:
         raise ValueError("Endpoint URL must include a hostname")
+
+    if ALLOW_PRIVATE_ENDPOINTS:
+        return
+
     if hostname.lower() in ("localhost", "0.0.0.0"):
         raise ValueError(f"Endpoint URL hostname {hostname!r} is not allowed")
     try:
