@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from pipeline.bot_connectors.custom import _validate_endpoint_url
 from pipeline.llm import chat_completion
 
 from config import DEFAULT_EVAL_MODEL, SOURCE_VERIFY_FETCH_TIMEOUT
@@ -66,10 +67,22 @@ async def verify_citation(
             details="No URL provided",
         )
 
-    # Attempt to fetch the URL
+    # Block SSRF — reject private/internal URLs before fetching
+    try:
+        _validate_endpoint_url(url)
+    except ValueError as exc:
+        return VerificationResult(
+            citation_index=citation_index,
+            title=title,
+            url=url,
+            status="unverifiable",
+            details=f"URL not allowed: {exc}",
+        )
+
+    # Attempt to fetch the URL (redirects disabled to prevent redirect-based SSRF)
     try:
         async with httpx.AsyncClient(
-            follow_redirects=True, timeout=_FETCH_TIMEOUT
+            follow_redirects=False, timeout=_FETCH_TIMEOUT
         ) as client:
             response = await client.get(url, headers={"User-Agent": "RagasEval/1.0"})
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):

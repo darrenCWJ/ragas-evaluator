@@ -14,6 +14,7 @@ import ipaddress
 import json
 import logging
 import re
+import socket
 from typing import Any
 from urllib.parse import urlparse
 
@@ -56,7 +57,18 @@ def _validate_endpoint_url(url: str) -> None:
     except ValueError as e:
         if "is not allowed" in str(e) or "private" in str(e) or "scheme" in str(e) or "hostname" in str(e):
             raise
-        # Not an IP address — hostname DNS resolution happens at request time; allow it
+        # Resolve DNS now to block private-IP targets and DNS rebinding attacks
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+        except OSError:
+            raise ValueError(f"Hostname {hostname!r} could not be resolved")
+        for *_, sockaddr in resolved:
+            resolved_ip = ipaddress.ip_address(sockaddr[0])
+            for net in _PRIVATE_NETWORKS:
+                if resolved_ip in net:
+                    raise ValueError(
+                        f"Hostname {hostname!r} resolves to private address {resolved_ip}"
+                    )
 
 
 class CustomBotConnector:
