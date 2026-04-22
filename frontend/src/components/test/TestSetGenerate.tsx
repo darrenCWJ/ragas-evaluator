@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { ChunkConfig, TestSetCreate, SavedPersona, GenerationProgress, KnowledgeGraphInfo, KGBuildProgress } from "../../lib/api";
 import {
   createTestSet,
+  cancelTestSetGeneration,
   generatePersonas,
   fetchPersonas,
   savePersonasBulk,
@@ -157,7 +158,10 @@ export default function TestSetGenerate({
     community: true,
   });
   const [graphRagDistribution, setGraphRagDistribution] = useState<Record<string, number>>({ ...DEFAULT_GRAPH_RAG_DIST });
+  const [useKgAsSource, setUseKgAsSource] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [activeTestSetId, setActiveTestSetId] = useState<number | null>(null);
   const [generatingPersonas, setGeneratingPersonas] = useState(false);
   const [personaGenMode, setPersonaGenMode] = useState<"fast" | "full">("fast");
   const [savedPersonas, setSavedPersonas] = useState<SavedPersona[]>([]);
@@ -172,6 +176,7 @@ export default function TestSetGenerate({
   const [kgBuilding, setKgBuilding] = useState(false);
   const [kgProgress, setKgProgress] = useState<KGBuildProgress | null>(null);
   const [overlapMaxNodes, setOverlapMaxNodes] = useState<number | null>(500);
+  const [fastKgMode, setFastKgMode] = useState(false);
 
   const loadSavedPersonas = useCallback(async () => {
     try {
@@ -252,23 +257,31 @@ export default function TestSetGenerate({
   // Poll generation progress while generating
   useEffect(() => {
     if (!generating) return;
-    let cancelled = false;
+    let stopped = false;
     const poll = async () => {
-      while (!cancelled) {
+      while (!stopped) {
         try {
           const p = await fetchGenerationProgress(projectId);
-          if (cancelled) break;
+          if (stopped) break;
           setProgress(p);
+          // Sync activeTestSetId from progress if not already set
+          if (p.test_set_id) setActiveTestSetId(p.test_set_id);
 
-          // Generation completed or failed — stop polling
           if (p.status === "completed") {
             setGenerating(false);
+            setCancelling(false);
             onTestSetCreated();
+            break;
+          }
+          if (p.status === "cancelled") {
+            setGenerating(false);
+            setCancelling(false);
             break;
           }
           if (p.status === "failed") {
             setError(p.error_message || "Test generation failed");
             setGenerating(false);
+            setCancelling(false);
             break;
           }
         } catch {
@@ -278,7 +291,7 @@ export default function TestSetGenerate({
       }
     };
     poll();
-    return () => { cancelled = true; };
+    return () => { stopped = true; };
   }, [generating, projectId, onTestSetCreated]);
 
   const validateSize = (s: string) => {
@@ -368,11 +381,10 @@ export default function TestSetGenerate({
     }
   };
 
-  // Chunk config is optional when ONLY Graph RAG categories are selected with Documents source
+  // Chunk config not required when using KG as source, or when only Graph RAG (Documents) categories
   const chunksRequired = !(
-    useGraphRag &&
-    graphRagKgSource === "documents" &&
-    !useCategories
+    useKgAsSource ||
+    (useGraphRag && graphRagKgSource === "documents" && !useCategories)
   );
 
   const handleGenerate = async () => {
@@ -387,7 +399,9 @@ export default function TestSetGenerate({
 
     try {
       const config: TestSetCreate = {
-        chunk_config_id: chunksRequired ? (chunkConfigId as number) : undefined,
+        use_kg_as_source: useKgAsSource || undefined,
+        fast_kg_mode: fastKgMode || undefined,
+        chunk_config_id: !useKgAsSource && chunksRequired ? (chunkConfigId as number) : undefined,
         testset_size: parsedSize,
         num_personas: usePersonas ? parsedPersonas : undefined,
         use_personas: usePersonas,
@@ -440,7 +454,8 @@ export default function TestSetGenerate({
       }
 
       // POST returns immediately — generation runs in background
-      await createTestSet(projectId, config);
+      const created = await createTestSet(projectId, config);
+      setActiveTestSetId(created.id);
 
       // Reset form
       setName("");
@@ -624,6 +639,23 @@ export default function TestSetGenerate({
           </div>
 
           <p className="text-xs text-text-muted">This may take a few minutes depending on chunk count.</p>
+
+          {/* Cancel button */}
+          <button
+            onClick={async () => {
+              if (!activeTestSetId || cancelling) return;
+              setCancelling(true);
+              try {
+                await cancelTestSetGeneration(projectId, activeTestSetId);
+              } catch {
+                setCancelling(false);
+              }
+            }}
+            disabled={cancelling || !activeTestSetId}
+            className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {cancelling ? "Cancelling…" : "Cancel generation"}
+          </button>
         </div>
       </div>
     );
@@ -636,30 +668,86 @@ export default function TestSetGenerate({
       </h3>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {/* Chunk config selector */}
+        {/* Source selector */}
         <div className="sm:col-span-2">
-          <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-            Chunk Config
-            {useGraphRag && graphRagKgSource === "documents" && (
-              <span className="text-[10px] text-text-muted">(optional — not needed for Graph RAG Documents only)</span>
-            )}
+          <label className="mb-1.5 block text-xs font-medium text-text-secondary">
+            Source
           </label>
-          <select
-            value={chunkConfigId}
-            onChange={(e) =>
-              setChunkConfigId(e.target.value ? Number(e.target.value) : "")
-            }
-            className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
-            disabled={generating}
-          >
-            <option value="">Select a chunk config…</option>
-            {chunkConfigs.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.method})
-              </option>
-            ))}
-          </select>
+          <div className="flex overflow-hidden rounded-lg border border-border">
+            {(["chunks", "knowledge_graph"] as const).map((src) => {
+              const active = src === (useKgAsSource ? "knowledge_graph" : "chunks");
+              return (
+                <button
+                  key={src}
+                  type="button"
+                  onClick={() => setUseKgAsSource(src === "knowledge_graph")}
+                  disabled={generating}
+                  className={`flex-1 py-1.5 text-xs font-medium transition ${
+                    active
+                      ? "bg-accent/15 text-accent"
+                      : "text-text-muted hover:bg-elevated hover:text-text-secondary"
+                  }`}
+                >
+                  {src === "chunks" ? "Chunk Config" : "Knowledge Graph"}
+                </button>
+              );
+            })}
+          </div>
         </div>
+
+        {/* Chunk config selector — hidden when KG is source */}
+        {!useKgAsSource && (
+          <div className="sm:col-span-2">
+            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+              Chunk Config
+              {useGraphRag && graphRagKgSource === "documents" && (
+                <span className="text-[10px] text-text-muted">(optional — not needed for Graph RAG Documents only)</span>
+              )}
+            </label>
+            <select
+              value={chunkConfigId}
+              onChange={(e) =>
+                setChunkConfigId(e.target.value ? Number(e.target.value) : "")
+              }
+              className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              disabled={generating}
+            >
+              <option value="">Select a chunk config…</option>
+              {chunkConfigs.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.method})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* KG info card — shown when KG is source */}
+        {useKgAsSource && (
+          <div className="sm:col-span-2">
+            {kgInfo?.exists && kgInfo.is_complete ? (
+              <div className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-accent">Knowledge Graph ready</span>
+                  <span className="tabular-nums text-text-muted">
+                    {kgInfo.num_nodes?.toLocaleString()} nodes
+                  </span>
+                </div>
+                <p className="mt-0.5 text-text-muted">
+                  Node texts will be used as the generation source. The stored KG is reused directly — no rebuild.
+                </p>
+              </div>
+            ) : kgInfo?.exists && !kgInfo.is_complete ? (
+              <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2.5 text-xs text-yellow-400">
+                Knowledge graph build is incomplete ({kgInfo.completed_steps}/{kgInfo.total_steps} steps). Finish building it before using it as a source.
+              </div>
+            ) : (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-xs text-red-400">
+                No knowledge graph found for this project. Build one in the <strong>Build</strong> tab first.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Name */}
         <div className="sm:col-span-2">
@@ -703,10 +791,10 @@ export default function TestSetGenerate({
           )}
         </div>
 
-        {/* Chunk sample size */}
+        {/* Chunk / node sample size */}
         <div>
           <label className="mb-1 block text-xs font-medium text-text-secondary">
-            Chunk Sample Size
+            {useKgAsSource ? "Node Sample Size" : "Chunk Sample Size"}
           </label>
           <input
             type="number"
@@ -717,7 +805,9 @@ export default function TestSetGenerate({
             disabled={generating}
           />
           <p className="mt-1 text-xs text-text-muted">
-            Random subset of chunks to use. 0 = all chunks.
+            {useKgAsSource
+              ? "Random subset of KG nodes to use. 0 = all nodes."
+              : "Random subset of chunks to use. 0 = all chunks."}
           </p>
         </div>
 
@@ -826,6 +916,8 @@ export default function TestSetGenerate({
                             projectId,
                             kgInfo.chunk_config_id ?? (chunkConfigId as number) ?? null,
                             overlapMaxNodes,
+                            "chunks",
+                            fastKgMode,
                           );
                         } catch (err) {
                           setKgBuilding(false);
@@ -862,6 +954,27 @@ export default function TestSetGenerate({
                 <p className="text-xs text-text-muted">
                   Pre-build a knowledge graph for faster "Full" persona generation and richer test sets.
                 </p>
+
+                {/* Fast mode toggle */}
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={fastKgMode}
+                    onChange={(e) => setFastKgMode(e.target.checked)}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <div>
+                    <span className="text-xs font-medium text-text-secondary">
+                      Fast build mode
+                    </span>
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-text-muted">
+                      Combines keyphrases, summary, themes, entities &amp; filter into{" "}
+                      <strong className="text-text-secondary">one LLM call per node</strong>{" "}
+                      instead of 5 — roughly 3× faster. Slight quality trade-off.
+                    </p>
+                  </div>
+                </label>
+
                 <div className="flex items-center gap-3">
                   <label className="text-xs text-text-secondary whitespace-nowrap">
                     Overlap node cap
@@ -884,7 +997,7 @@ export default function TestSetGenerate({
                   onClick={async () => {
                     try {
                       setKgBuilding(true);
-                      await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes);
+                      await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes, "chunks", fastKgMode);
                     } catch (err) {
                       setKgBuilding(false);
                       setError(
@@ -1102,7 +1215,7 @@ export default function TestSetGenerate({
               <button
                 type="button"
                 onClick={handleAutoGeneratePersonas}
-                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "")}
+                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
                 className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {generatingPersonas
@@ -1574,7 +1687,11 @@ export default function TestSetGenerate({
       {/* Generate button */}
       <button
         onClick={handleGenerate}
-        disabled={generating || (chunksRequired && chunkConfigId === "")}
+        disabled={
+          generating ||
+          (chunksRequired && chunkConfigId === "") ||
+          (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))
+        }
         className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {generating ? (

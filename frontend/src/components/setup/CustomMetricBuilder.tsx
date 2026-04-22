@@ -37,6 +37,11 @@ const METRIC_TYPES = [
     label: "Criteria Judge",
     description: "AI evaluators judge responses against your custom criteria (good/mixed/bad).",
   },
+  {
+    value: "reference_judge",
+    label: "Reference Answer Judge",
+    description: "AI evaluators compare the bot answer against your suggested/reference answer (good/mixed/bad).",
+  },
 ] as const;
 
 const PROMPT_HINTS: Record<string, string> = {
@@ -160,10 +165,10 @@ export default function CustomMetricBuilder({ projectId }: Props) {
     setError(null);
 
     try {
-      if (metricType === "criteria_judge") {
+      if (isAiJudge) {
         await createCustomMetric(projectId, {
           name: name.trim(),
-          metric_type: "criteria_judge",
+          metric_type: metricType,
           prompt: description.trim() || undefined,
           refined_prompt: refinedPrompt.trim(),
           min_score: 0,
@@ -204,12 +209,14 @@ export default function CustomMetricBuilder({ projectId }: Props) {
   const needsPrompt = metricType === "integer_range" || metricType === "similarity";
   const needsRubrics = metricType === "rubrics";
   const isCriteriaJudge = metricType === "criteria_judge";
+  const isReferenceJudge = metricType === "reference_judge";
+  const isAiJudge = isCriteriaJudge || isReferenceJudge;
 
   const nameValid = /^[a-z][a-z0-9_]*$/.test(name.trim());
   const promptValid = !needsPrompt || prompt.trim().length > 0;
   const rubricsValid =
     !needsRubrics || Object.values(rubrics).every((v) => v.trim().length > 0);
-  const criteriaValid = !isCriteriaJudge || refinedPrompt.trim().length > 0;
+  const criteriaValid = !isAiJudge || refinedPrompt.trim().length > 0;
   const canSubmit =
     nameValid && promptValid && rubricsValid && criteriaValid && !submitting;
 
@@ -264,21 +271,21 @@ export default function CustomMetricBuilder({ projectId }: Props) {
                   <span className="rounded bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-medium text-purple-400">
                     {m.metric_type.replace(/_/g, " ")}
                   </span>
-                  {m.metric_type !== "criteria_judge" && (
+                  {m.metric_type !== "criteria_judge" && m.metric_type !== "reference_judge" && (
                     <span className="text-[10px] text-text-muted">
                       {m.min_score}–{m.max_score}
                     </span>
                   )}
-                  {m.metric_type === "criteria_judge" && (
+                  {(m.metric_type === "criteria_judge" || m.metric_type === "reference_judge") && (
                     <span className="text-[10px] text-text-muted">good / mixed / bad</span>
                   )}
                 </div>
-                {m.metric_type === "criteria_judge" && m.refined_prompt && (
+                {(m.metric_type === "criteria_judge" || m.metric_type === "reference_judge") && m.refined_prompt && (
                   <p className="mt-0.5 truncate text-xs text-text-muted">
                     {m.refined_prompt.slice(0, 80)}...
                   </p>
                 )}
-                {m.metric_type !== "criteria_judge" && m.prompt && (
+                {m.metric_type !== "criteria_judge" && m.metric_type !== "reference_judge" && m.prompt && (
                   <p className="mt-0.5 truncate text-xs text-text-muted">
                     {m.prompt.slice(0, 80)}...
                   </p>
@@ -360,7 +367,7 @@ export default function CustomMetricBuilder({ projectId }: Props) {
           </div>
 
           {/* Score range — for integer_range and similarity */}
-          {(metricType === "integer_range" || metricType === "similarity" || metricType === "rubrics") && (
+          {(metricType === "integer_range" || metricType === "similarity" || metricType === "rubrics") && !isAiJudge && (
             <div className="flex gap-4">
               <div className="flex-1">
                 <label className="mb-1.5 block text-xs font-medium text-text-secondary">
@@ -459,8 +466,8 @@ export default function CustomMetricBuilder({ projectId }: Props) {
             </div>
           )}
 
-          {/* Criteria Judge: description + refine */}
-          {isCriteriaJudge && (
+          {/* Criteria Judge / Reference Judge: description + refine */}
+          {isAiJudge && (
             <div className="space-y-3">
               <div>
                 <label className="mb-1.5 block text-xs font-medium text-text-secondary">
@@ -470,7 +477,11 @@ export default function CustomMetricBuilder({ projectId }: Props) {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={3}
-                  placeholder="e.g. Does the response avoid harmful or unsafe content?"
+                  placeholder={
+                    isReferenceJudge
+                      ? "e.g. Does the bot answer convey the same key facts as the suggested answer?"
+                      : "e.g. Does the response avoid harmful or unsafe content?"
+                  }
                   className="w-full rounded-lg border border-border bg-input px-3 py-2 text-xs text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
                 />
                 <button
@@ -502,6 +513,9 @@ export default function CustomMetricBuilder({ projectId }: Props) {
                   />
                   <p className="mt-1 text-[10px] text-text-muted">
                     Evaluators will judge responses as <span className="text-green-400">good</span> / <span className="text-yellow-400">mixed</span> / <span className="text-red-400">bad</span> based on this prompt.
+                    {isReferenceJudge && (
+                      <span className="ml-1">The judge will see both the <strong>suggested answer</strong> and the <strong>bot answer</strong> side-by-side.</span>
+                    )}
                   </p>
                 </div>
               )}

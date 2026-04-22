@@ -56,6 +56,7 @@ const OVERLAP_OPTIONS = [
 export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
   const [building, setBuilding] = useState(false);
   const [buildStage, setBuildStage] = useState<string | null>(null);
+  const [buildStep, setBuildStep] = useState<{ completed: number; total: number } | null>(null);
   const [buildProgress, setBuildProgress] = useState<{
     batch_current?: number;
     batch_total?: number;
@@ -70,14 +71,31 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
   const isComplete = kg.is_complete;
   const isPartial = !isComplete && kg.completed_steps > 0;
 
+  // On mount, check if a build is already running on the backend (e.g. after page refresh)
+  useEffect(() => {
+    fetchKGBuildProgress(kg.project_id, kg.kg_source).then((progress) => {
+      if (progress.active) {
+        setBuilding(true);
+        if (progress.stage) setBuildStage(progress.stage);
+        if (progress.completed_steps != null && progress.total_steps != null) {
+          setBuildStep({ completed: progress.completed_steps, total: progress.total_steps });
+        }
+      }
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kg.project_id]);
+
   // Poll progress while building
   useEffect(() => {
     if (!building) return;
 
     const poll = async () => {
       try {
-        const progress = await fetchKGBuildProgress(kg.project_id);
+        const progress = await fetchKGBuildProgress(kg.project_id, kg.kg_source);
         if (progress.stage) setBuildStage(progress.stage);
+        if (progress.completed_steps != null && progress.total_steps != null) {
+          setBuildStep({ completed: progress.completed_steps, total: progress.total_steps });
+        }
         if (progress.batch_total != null) {
           setBuildProgress({
             batch_current: progress.batch_current,
@@ -220,9 +238,14 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
           <div className="mb-3 rounded-lg bg-blue-500/5 border border-blue-500/10 px-3 py-2.5 space-y-2">
             <div className="flex items-center gap-2">
               <div className="h-3 w-3 shrink-0 animate-spin rounded-full border border-blue-400 border-t-transparent" />
-              <span className="text-micro text-blue-300 truncate">
+              <span className="min-w-0 flex-1 text-micro text-blue-300 truncate">
                 {STAGE_LABELS[buildStage] ?? buildStage}
               </span>
+              {buildStep && (
+                <span className="shrink-0 font-mono text-micro text-blue-400/60">
+                  {buildStep.completed + 1}/{buildStep.total}
+                </span>
+              )}
             </div>
             {buildProgress?.batch_total != null && buildProgress.batch_total > 0 && (
               <>

@@ -62,6 +62,8 @@ class TestSetCreate(BaseModel):
     num_workers: int = 4
     question_categories: dict[str, int] | None = None
     graph_rag_kg_source: str = "chunks"  # "chunks" or "documents"
+    use_kg_as_source: bool = False  # use stored KG node texts as source instead of a chunk config
+    fast_kg_mode: bool = False      # use fast 2-LLM-round KG build (1 combined call per node)
 
     @field_validator("testset_size")
     @classmethod
@@ -471,7 +473,7 @@ class BatchApplyRequest(BaseModel):
         return v
 
 
-VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics", "criteria_judge"}
+VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics", "criteria_judge", "reference_judge"}
 
 
 class CustomMetricCreate(BaseModel):
@@ -511,9 +513,9 @@ class CustomMetricCreate(BaseModel):
             raise ValueError("prompt is required for integer_range and similarity metric types")
         if self.metric_type == "rubrics" and not self.rubrics:
             raise ValueError("rubrics are required for rubrics metric type")
-        if self.metric_type == "criteria_judge" and not self.refined_prompt:
-            raise ValueError("refined_prompt is required for criteria_judge metric type")
-        if self.metric_type != "criteria_judge":
+        if self.metric_type in ("criteria_judge", "reference_judge") and not self.refined_prompt:
+            raise ValueError("refined_prompt is required for criteria_judge and reference_judge metric types")
+        if self.metric_type not in ("criteria_judge", "reference_judge"):
             if self.min_score >= self.max_score:
                 raise ValueError("min_score must be less than max_score")
             if self.min_score < 0 or self.max_score > 10:

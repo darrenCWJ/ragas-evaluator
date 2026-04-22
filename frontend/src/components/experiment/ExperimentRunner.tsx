@@ -3,6 +3,7 @@ import {
   runExperimentSSE,
   observeExperimentProgress,
   fetchExperiment,
+  fetchProgressSnapshot,
   fetchCustomMetrics,
   fetchJudgeModels,
   fetchProject,
@@ -232,17 +233,7 @@ export default function ExperimentRunner({
   })();
 
   const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
-  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(
-    () => {
-      const defaults = new Set(DEFAULT_METRICS);
-      if (!hasContexts) {
-        for (const m of CONTEXT_REQUIRED_METRICS) {
-          defaults.delete(m);
-        }
-      }
-      return defaults;
-    },
-  );
+  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set());
   const [runState, setRunState] = useState<RunState>({ phase: "idle" });
   const [errorCount, setErrorCount] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -293,7 +284,7 @@ export default function ExperimentRunner({
   // Derived: judge selected + missing key check (placed after all useState declarations)
   const judgeSelected =
     selectedMetrics.has("multi_llm_judge") ||
-    customMetrics.some((cm) => cm.metric_type === "criteria_judge" && selectedMetrics.has(cm.name));
+    customMetrics.some((cm) => (cm.metric_type === "criteria_judge" || cm.metric_type === "reference_judge") && selectedMetrics.has(cm.name));
   const missingKeyModels = judgeSelected
     ? judgeModelSlots.filter((id) => {
         const m = availableModels.find((am) => am.id === id);
@@ -367,10 +358,43 @@ export default function ExperimentRunner({
     // Already observing
     if (handleRef.current) return;
 
-    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "", inFlight: [], scoringMetrics: [], inFlightDetails: [] });
+    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "Reconnecting...", inFlight: [], scoringMetrics: [], inFlightDetails: [] });
     startTimer();
 
+    // Pre-populate state from snapshot so the UI shows real progress immediately
+    // instead of "Initializing..." until the first SSE event arrives.
+    fetchProgressSnapshot(projectId, experiment.id).then((snapshot) => {
+      if (!snapshot || snapshot.total === 0) return;
+      setRunState((prev) => {
+        if (prev.phase !== "running" || prev.total > 0) return prev;
+        return {
+          phase: "running",
+          current: snapshot.current,
+          total: snapshot.total,
+          currentQuestion: snapshot.question,
+          inFlight: snapshot.in_flight,
+          scoringMetrics: snapshot.scoring_metrics,
+          inFlightDetails: snapshot.in_flight_details,
+        };
+      });
+    }).catch(() => {});
+
     const handle = observeExperimentProgress(projectId, experiment.id, {
+      onStarted: (data: SSEStartedEvent) => {
+        if (data.experiment_name) {
+          setExperimentMeta({
+            name: data.experiment_name,
+            model: data.model ?? "",
+            testSet: data.test_set_name ?? "",
+          });
+        }
+        // Update total from the started event, but preserve any progress already shown
+        setRunState((prev) => ({
+          ...prev,
+          phase: "running" as const,
+          total: data.total_questions,
+        } as typeof prev));
+      },
       onProgress: (data: SSEProgressEvent) => {
         if (data.error) setErrorCount((prev) => prev + 1);
         if (data.new_completions?.length) {
@@ -541,7 +565,7 @@ export default function ExperimentRunner({
       {/* Idle — metric selection + run button */}
       {runState.phase === "idle" && (
         <div className="space-y-4">
-          {disabledMetrics.size > 0 && (
+          {!hasContexts && (
             <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-300/80">
               {connectorType
                 ? `The ${connectorType} connector does not return retrieved contexts — context-dependent metrics are disabled.`
@@ -727,8 +751,8 @@ export default function ExperimentRunner({
             </div>
           )}
 
-          {/* LLM Judge Settings — shown when multi_llm_judge or any criteria_judge is selected */}
-          {(selectedMetrics.has("multi_llm_judge") || customMetrics.some((cm) => cm.metric_type === "criteria_judge" && selectedMetrics.has(cm.name))) && (
+          {/* LLM Judge Settings — shown when multi_llm_judge, criteria_judge, or reference_judge is selected */}
+          {(selectedMetrics.has("multi_llm_judge") || customMetrics.some((cm) => (cm.metric_type === "criteria_judge" || cm.metric_type === "reference_judge") && selectedMetrics.has(cm.name))) && (
             <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-4 py-3 space-y-3">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-violet-400">LLM Judge Settings</p>
@@ -751,6 +775,13 @@ export default function ExperimentRunner({
 
               {/* Per-slot model selectors */}
               <div className="space-y-2">
+                {/* Column headers */}
+                <div className="flex items-center gap-2">
+                  <span className="w-20 shrink-0" />
+                  <span className="flex-1 text-2xs font-medium text-text-muted">Model</span>
+                  <span className="w-16 shrink-0 text-center text-2xs font-medium text-text-muted">Temp</span>
+                  {judgeModelSlots.length > 1 && <span className="w-5 shrink-0" />}
+                </div>
                 {judgeModelSlots.map((modelId, i) => {
                   const model = availableModels.find(m => m.id === modelId);
                   const unavailable = model ? !model.available : false;

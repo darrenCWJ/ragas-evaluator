@@ -51,6 +51,10 @@ BOT_QUERY_TIMEOUT = float(os.environ.get("BOT_QUERY_TIMEOUT", "120.0"))
 METRIC_SCORING_TIMEOUT = float(os.environ.get("METRIC_SCORING_TIMEOUT", "300.0"))
 TESTGEN_SUBPROCESS_TIMEOUT = int(os.environ.get("TESTGEN_SUBPROCESS_TIMEOUT", "7200"))
 PERSONA_SUBPROCESS_TIMEOUT = int(os.environ.get("PERSONA_SUBPROCESS_TIMEOUT", "3600"))
+# KG builds can run for many hours with large overlap_max_nodes (O(n²) cost).
+# Default 24 h. Set KG_SUBPROCESS_TIMEOUT=0 in .env to disable the timeout.
+_kg_timeout_raw = os.environ.get("KG_SUBPROCESS_TIMEOUT", "86400")
+KG_SUBPROCESS_TIMEOUT: "int | None" = None if _kg_timeout_raw == "0" else int(_kg_timeout_raw)
 SOURCE_VERIFY_FETCH_TIMEOUT = int(os.environ.get("SOURCE_VERIFY_FETCH_TIMEOUT", "15"))
 
 # ---------------------------------------------------------------------------

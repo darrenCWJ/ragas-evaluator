@@ -85,40 +85,222 @@ def _register_shutdown_handler() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Progress tracking — in-memory, keyed by project_id
+# Progress tracking — in-memory, keyed by (project_id, kg_source).
+# Use kg_source="testset" for test-set generation progress.
 # ---------------------------------------------------------------------------
 
 _progress_lock = threading.Lock()
-_progress: dict[int, dict] = {}
+_progress: dict[tuple[int, str], dict] = {}
 
 
-def set_progress(project_id: int, data: dict) -> None:
+def set_progress(project_id: int, data: dict, kg_source: str = "chunks") -> None:
     with _progress_lock:
-        _progress[project_id] = data
+        _progress[(project_id, kg_source)] = data
 
 
-def update_progress(project_id: int, **fields) -> None:
+def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> None:
     with _progress_lock:
-        if project_id in _progress:
-            _progress[project_id].update(fields)
+        key = (project_id, kg_source)
+        if key in _progress:
+            _progress[key].update(fields)
 
 
-def get_progress(project_id: int) -> dict | None:
+def get_progress(project_id: int, kg_source: str = "chunks") -> dict | None:
     with _progress_lock:
-        entry = _progress.get(project_id)
+        entry = _progress.get((project_id, kg_source))
         return entry.copy() if entry is not None else None
 
 
-def clear_progress(project_id: int) -> None:
+def clear_progress(project_id: int, kg_source: str = "chunks") -> None:
     with _progress_lock:
-        _progress.pop(project_id, None)
+        _progress.pop((project_id, kg_source), None)
+
+
+# ---------------------------------------------------------------------------
+# Per-project cancel flags — set by the cancel endpoint, checked in workers
+# ---------------------------------------------------------------------------
+
+_cancel_lock = threading.Lock()
+_cancel_flags: dict[int, threading.Event] = {}  # project_id -> Event
+
+
+def register_cancel_flag(project_id: int) -> threading.Event:
+    event = threading.Event()
+    with _cancel_lock:
+        _cancel_flags[project_id] = event
+    return event
+
+
+def clear_cancel_flag(project_id: int) -> None:
+    with _cancel_lock:
+        _cancel_flags.pop(project_id, None)
+
+
+def cancel_generation(project_id: int) -> bool:
+    """Set the cancel flag for the given project. Returns True if a flag was found."""
+    with _cancel_lock:
+        flag = _cancel_flags.get(project_id)
+    if flag is not None:
+        flag.set()
+        return True
+    return False
+
+
+def is_cancelled(project_id: int | None) -> bool:
+    if project_id is None:
+        return False
+    with _cancel_lock:
+        flag = _cancel_flags.get(project_id)
+    return flag is not None and flag.is_set()
+
+
+# ---------------------------------------------------------------------------
+# KG helpers — load full KG without hash check, and sample nodes from JSON
+# ---------------------------------------------------------------------------
+
+def load_full_kg_json(project_id: int, kg_source: str = "chunks") -> str | None:
+    """Return raw JSON of the most recent *complete* KG for a project.
+
+    Unlike ``load_cached_kg``, this ignores the chunks hash so it works
+    even when the caller doesn't have the original chunk list.  Returns
+    ``None`` if no complete KG exists.
+    """
+    db = get_db()
+    row = db.execute(
+        "SELECT kg_json FROM knowledge_graphs "
+        "WHERE project_id = ? AND kg_source = ? AND is_complete = TRUE "
+        "ORDER BY created_at DESC LIMIT 1",
+        (project_id, kg_source),
+    ).fetchone()
+    return row["kg_json"] if row is not None else None
+
+
+def _load_kg_from_json_str(kg_json: str) -> KnowledgeGraph:
+    """Load a KnowledgeGraph from a raw JSON string (via a temp file)."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(kg_json)
+        tmp_path = f.name
+    try:
+        return _load_kg_safe(tmp_path)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Fast-mode combined extractor — replaces 5 separate LLM steps with 1
+# ---------------------------------------------------------------------------
+
+class CombinedNodeExtractor:
+    """One LLM call per node extracts keyphrases, summary, themes, entities,
+    and a quality-filter flag.  Designed as a drop-in Ragas transform step.
+
+    Replaces: KeyphrasesExtractor + SummaryExtractor + CustomNodeFilter +
+              ThemesExtractor + NERExtractor  (5 LLM rounds → 1).
+    """
+
+    def __init__(
+        self,
+        model: str = "",
+        max_keyphrases: int = 10,
+        max_themes: int = 3,
+        max_entities: int = 10,
+    ) -> None:
+        self.model = model
+        self.max_keyphrases = max_keyphrases
+        self.max_themes = max_themes
+        self.max_entities = max_entities
+
+    def generate_execution_plan(self, kg: "KnowledgeGraph") -> list:  # type: ignore[return]
+        from ragas.testset.graph import KnowledgeGraph as _KG  # noqa: F401
+        from pipeline.llm import chat_completion
+
+        async def _process(node) -> None:
+            text = node.properties.get("page_content", "")
+            if not text or not text.strip():
+                node.properties.update(
+                    keyphrases=[], summary="", themes=[], entities=[], _fast_keep=False
+                )
+                return
+
+            prompt = (
+                "Analyze the following text. Respond with ONLY a JSON object.\n\n"
+                f"TEXT:\n{text[:8000]}\n\n"
+                "Return a JSON object with these fields:\n"
+                f"- keyphrases: list of up to {self.max_keyphrases} key phrases\n"
+                "- summary: 1-2 sentence summary\n"
+                f"- themes: list of up to {self.max_themes} high-level themes\n"
+                f"- entities: list of up to {self.max_entities} named entities "
+                "(people, organisations, places, concepts)\n"
+                "- keep: true if the text is informative enough for a knowledge graph, "
+                "false if it is empty, trivial, or purely navigational\n\n"
+                '{"keyphrases": [...], "summary": "...", "themes": [...], '
+                '"entities": [...], "keep": true}'
+            )
+            try:
+                result = await chat_completion(
+                    self.model,
+                    [{"role": "user", "content": prompt}],
+                    {"temperature": 0.0, "max_tokens": 600},
+                )
+                data = _extract_json(result["content"])
+                node.properties.update(
+                    keyphrases=[str(k) for k in data.get("keyphrases", [])][: self.max_keyphrases],
+                    summary=str(data.get("summary", "")),
+                    themes=[str(t) for t in data.get("themes", [])][: self.max_themes],
+                    entities=[str(e) for e in data.get("entities", [])][: self.max_entities],
+                    _fast_keep=bool(data.get("keep", True)),
+                )
+            except Exception as exc:
+                logger.warning("CombinedNodeExtractor failed for node: %s", exc)
+                node.properties.setdefault("keyphrases", [])
+                node.properties.setdefault("summary", "")
+                node.properties.setdefault("themes", [])
+                node.properties.setdefault("entities", [])
+                node.properties.setdefault("_fast_keep", True)
+
+        return [_process(node) for node in kg.nodes]
+
+
+def sample_kg_from_json(kg_json: str, n: int) -> tuple[KnowledgeGraph, list[str]]:
+    """Sample *n* nodes from a serialised KG, filter dangling edges, and return
+    the resulting ``KnowledgeGraph`` together with the corresponding chunk texts.
+
+    If *n* ≥ total nodes the full KG is returned unchanged.
+    """
+    import json as _json
+
+    data = _json.loads(kg_json)
+    nodes = data.get("nodes", [])
+
+    if n >= len(nodes):
+        sampled_nodes = nodes
+    else:
+        sampled_nodes = random.sample(nodes, n)
+
+    sampled_ids = {node["id"] for node in sampled_nodes}
+    filtered_rels = [
+        r for r in data.get("relationships", [])
+        if r.get("source") in sampled_ids and r.get("target") in sampled_ids
+    ]
+
+    new_json = _json.dumps({**data, "nodes": sampled_nodes, "relationships": filtered_rels})
+    kg = _load_kg_from_json_str(new_json)
+    chunk_texts = [
+        node.get("properties", {}).get("page_content", "") for node in sampled_nodes
+    ]
+    return kg, chunk_texts
+
+
 
 
 def increment_questions(project_id: int, count: int = 1) -> None:
     with _progress_lock:
-        if project_id in _progress:
-            _progress[project_id]["questions_generated"] = (
-                _progress[project_id].get("questions_generated", 0) + count
+        key = (project_id, "testset")
+        if key in _progress:
+            _progress[key]["questions_generated"] = (
+                _progress[key].get("questions_generated", 0) + count
             )
 
 
@@ -479,6 +661,7 @@ def _apply_transform_batched(
     project_id: int | None = None,
     stage_name: str | None = None,
     overlap_max_nodes: int | None = 500,
+    kg_source: str = "chunks",
 ) -> None:
     """Apply a transform to a KG in batches to work around Ragas hanging
     when the number of nodes is large (>~100).
@@ -541,6 +724,7 @@ def _apply_transform_batched(
         if project_id is not None and stage_name:
             update_progress(
                 project_id,
+                kg_source=kg_source,
                 stage=stage_name,
                 batch_current=batch_idx + 1,
                 batch_total=total_batches,
@@ -555,6 +739,7 @@ def _apply_transform_batched(
     if project_id is not None and stage_name:
         update_progress(
             project_id,
+            kg_source=kg_source,
             stage=stage_name,
             batch_current=total_batches,
             batch_total=total_batches,
@@ -573,6 +758,7 @@ def build_knowledge_graph(
     overlap_max_nodes: int | None = 500,
     chunk_config_id: int | None = None,
     kg_source: str = "chunks",
+    fast_mode: bool = False,
 ) -> KnowledgeGraph:
     """Build a KnowledgeGraph from text chunks and apply transforms.
 
@@ -580,15 +766,25 @@ def build_knowledge_graph(
     calls with the same project and chunk content return the cached version
     instantly.
     """
-    # Check for complete or partial cached KG
+    # Check for complete or partial cached KG.
+    # Fast mode never resumes from a partial normal-mode checkpoint (different
+    # step count), but does return a fully complete KG immediately.
     resume_from_step = 0
     if project_id is not None:
-        cached = load_cached_kg(project_id, chunks, allow_partial=True, kg_source=kg_source)
+        cached = load_cached_kg(
+            project_id, chunks,
+            allow_partial=not fast_mode,  # no partial resume in fast mode
+            kg_source=kg_source,
+        )
         if cached is not None:
-            kg, cached_steps = cached
+            if fast_mode:
+                # allow_partial=False: cached is a plain KnowledgeGraph
+                update_progress(project_id, kg_source=kg_source, stage="kg_loaded_from_cache")
+                return cached  # type: ignore[return-value]
+            kg, cached_steps = cached  # type: ignore[misc]
             if cached_steps >= 11:
                 # Fully complete — return immediately
-                update_progress(project_id, stage="kg_loaded_from_cache")
+                update_progress(project_id, kg_source=kg_source, stage="kg_loaded_from_cache")
                 return kg
             # Partial checkpoint — resume from where we left off
             resume_from_step = cached_steps
@@ -596,7 +792,7 @@ def build_knowledge_graph(
                 "Resuming KG build for project %d from step %d/11 (%d nodes)",
                 project_id, resume_from_step, len(kg.nodes),
             )
-            update_progress(project_id, stage="kg_resuming_from_checkpoint")
+            update_progress(project_id, kg_source=kg_source, stage="kg_resuming_from_checkpoint")
 
     if llm is None or embeddings is None:
         llm, embeddings, _ = _build_llm_and_embeddings()
@@ -616,47 +812,103 @@ def build_knowledge_graph(
 
     # Run transforms one-by-one so we can report progress per step.
     # After each step, save a checkpoint so interrupted builds can resume.
-    transform_steps = [
-        ("kg_extracting_headlines", HeadlinesExtractor(llm=llm)),
-        ("kg_splitting_headlines", HeadlineSplitter(min_tokens=100, max_tokens=500)),
-        ("kg_extracting_keyphrases", KeyphrasesExtractor(llm=llm, property_name="keyphrases", max_num=10)),
-        ("kg_building_overlap", OverlapScoreBuilder(
-            property_name="keyphrases",
-            new_property_name="overlap_score",
-            threshold=0.1,
-            distance_threshold=0.9,
-        )),
-        ("kg_extracting_summaries", SummaryExtractor(llm=llm)),
-        ("kg_filtering_nodes", CustomNodeFilter(llm=llm)),
-        ("kg_embedding_summaries", EmbeddingExtractor(
-            embedding_model=embeddings,
-            property_name="summary_embedding",
-            embed_property_name="summary",
-        )),
-        ("kg_extracting_themes", ThemesExtractor(llm=llm)),
-        ("kg_extracting_entities", NERExtractor(llm=llm)),
-        ("kg_building_summary_similarity", CosineSimilarityBuilder(
-            property_name="summary_embedding",
-            new_property_name="summary_similarity",
-            threshold=0.7,
-        )),
-        ("kg_building_entity_overlap", OverlapScoreBuilder(
-            property_name="entities",
-            new_property_name="entity_overlap",
-            threshold=0.01,
-        )),
-    ]
+    #
+    # fast_mode uses a 7-step pipeline that replaces 5 separate LLM rounds with
+    # a single CombinedNodeExtractor call (keyphrases + summary + themes +
+    # entities + filter in one LLM call per node).
+    if fast_mode:
+        from config import DEFAULT_EVAL_MODEL
+        _fast_model = DEFAULT_EVAL_MODEL
+        transform_steps = [
+            ("kg_extracting_headlines", HeadlinesExtractor(llm=llm)),
+            ("kg_splitting_headlines", HeadlineSplitter(min_tokens=100, max_tokens=500)),
+            ("kg_combined_extraction", CombinedNodeExtractor(model=_fast_model)),
+            # inline filter applied after kg_combined_extraction (see loop below)
+            ("kg_building_overlap", OverlapScoreBuilder(
+                property_name="keyphrases",
+                new_property_name="overlap_score",
+                threshold=0.1,
+                distance_threshold=0.9,
+            )),
+            ("kg_embedding_summaries", EmbeddingExtractor(
+                embedding_model=embeddings,
+                property_name="summary_embedding",
+                embed_property_name="summary",
+            )),
+            ("kg_building_summary_similarity", CosineSimilarityBuilder(
+                property_name="summary_embedding",
+                new_property_name="summary_similarity",
+                threshold=0.7,
+            )),
+            ("kg_building_entity_overlap", OverlapScoreBuilder(
+                property_name="entities",
+                new_property_name="entity_overlap",
+                threshold=0.01,
+            )),
+        ]
+    else:
+        transform_steps = [
+            ("kg_extracting_headlines", HeadlinesExtractor(llm=llm)),
+            ("kg_splitting_headlines", HeadlineSplitter(min_tokens=100, max_tokens=500)),
+            ("kg_extracting_keyphrases", KeyphrasesExtractor(llm=llm, property_name="keyphrases", max_num=10)),
+            ("kg_building_overlap", OverlapScoreBuilder(
+                property_name="keyphrases",
+                new_property_name="overlap_score",
+                threshold=0.1,
+                distance_threshold=0.9,
+            )),
+            ("kg_extracting_summaries", SummaryExtractor(llm=llm)),
+            ("kg_filtering_nodes", CustomNodeFilter(llm=llm)),
+            ("kg_embedding_summaries", EmbeddingExtractor(
+                embedding_model=embeddings,
+                property_name="summary_embedding",
+                embed_property_name="summary",
+            )),
+            ("kg_extracting_themes", ThemesExtractor(llm=llm)),
+            ("kg_extracting_entities", NERExtractor(llm=llm)),
+            ("kg_building_summary_similarity", CosineSimilarityBuilder(
+                property_name="summary_embedding",
+                new_property_name="summary_similarity",
+                threshold=0.7,
+            )),
+            ("kg_building_entity_overlap", OverlapScoreBuilder(
+                property_name="entities",
+                new_property_name="entity_overlap",
+                threshold=0.01,
+            )),
+        ]
     completed_steps = resume_from_step
     for idx, (stage_name, transform) in enumerate(transform_steps):
         if idx < resume_from_step:
             logger.info("Skipping already-completed step %d: %s", idx + 1, stage_name)
             continue
         if project_id is not None:
-            update_progress(project_id, stage=stage_name)
+            update_progress(
+                project_id,
+                kg_source=kg_source,
+                stage=stage_name,
+                completed_steps=completed_steps,
+                total_steps=len(transform_steps),
+            )
             update_heartbeat(project_id, kg_source=kg_source)
         logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
         try:
-            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes)
+            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes, kg_source=kg_source)
+            # Fast mode: after combined extraction, filter nodes marked keep=False
+            if fast_mode and stage_name == "kg_combined_extraction":
+                before_filter = len(kg.nodes)
+                remove_ids = {n.id for n in kg.nodes if not n.properties.get("_fast_keep", True)}
+                if remove_ids:
+                    kg.nodes = [n for n in kg.nodes if n.id not in remove_ids]
+                    kg.relationships = [
+                        r for r in kg.relationships
+                        if r.source.id not in remove_ids and r.target.id not in remove_ids
+                    ]
+                    logger.info(
+                        "Fast-mode filter: removed %d/%d nodes",
+                        before_filter - len(kg.nodes), before_filter,
+                    )
+
             # After CustomNodeFilter removes nodes, clean up any relationships that
             # now reference missing node IDs to prevent KeyError on KG reload.
             if stage_name == "kg_filtering_nodes" and kg.relationships:
@@ -714,6 +966,7 @@ def build_kg_standalone(
     chunk_config_id: int,
     project_id: int,
     overlap_max_nodes: int | None = 500,
+    fast_mode: bool = False,
 ) -> dict:
     """Build a KG from chunks in the DB and cache it.
 
@@ -735,17 +988,17 @@ def build_kg_standalone(
         "stage": "building_knowledge_graph",
         "kg_building": True,
         "total_chunks": len(chunks),
-    })
+    }, kg_source="chunks")
 
     try:
-        kg = build_knowledge_graph(chunks, project_id=project_id, overlap_max_nodes=overlap_max_nodes, chunk_config_id=chunk_config_id)
-        clear_progress(project_id)
+        kg = build_knowledge_graph(chunks, project_id=project_id, overlap_max_nodes=overlap_max_nodes, chunk_config_id=chunk_config_id, fast_mode=fast_mode)
+        clear_progress(project_id, kg_source="chunks")
         return {
             "num_nodes": len(kg.nodes),
             "num_chunks": len(chunks),
         }
     except Exception:
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source="chunks")
         raise
 
 
@@ -781,7 +1034,7 @@ def build_kg_standalone_from_documents(
         "stage": "building_knowledge_graph",
         "kg_building": True,
         "total_chunks": len(doc_texts),
-    })
+    }, kg_source="documents")
 
     try:
         kg = build_knowledge_graph(
@@ -790,13 +1043,13 @@ def build_kg_standalone_from_documents(
             overlap_max_nodes=overlap_max_nodes,
             kg_source="documents",
         )
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source="documents")
         return {
             "num_nodes": len(kg.nodes),
             "num_chunks": len(doc_texts),
         }
     except Exception:
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source="documents")
         raise
 
 
@@ -830,7 +1083,7 @@ def rebuild_kg_links(
     set_progress(project_id, {
         "stage": "kg_building_overlap",
         "kg_building": True,
-    })
+    }, kg_source=kg_source)
 
     try:
         # Load KG from DB
@@ -851,7 +1104,7 @@ def rebuild_kg_links(
             project_id, old_count, len(kg.nodes), overlap_max_nodes,
         )
 
-        update_progress(project_id, stage="kg_building_overlap")
+        update_progress(project_id, kg_source=kg_source, stage="kg_building_overlap")
         update_heartbeat(project_id, kg_source=kg_source)
 
         transform = OverlapScoreBuilder(
@@ -865,6 +1118,7 @@ def rebuild_kg_links(
             project_id=project_id,
             stage_name="kg_building_overlap",
             overlap_max_nodes=overlap_max_nodes,
+            kg_source=kg_source,
         )
 
         # Get chunks for hash (needed by save_kg_to_db)
@@ -903,7 +1157,7 @@ def rebuild_kg_links(
             "num_relationships": len(kg.relationships),
         }
     finally:
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source=kg_source)
 
 
 # ---------------------------------------------------------------------------
@@ -998,7 +1252,7 @@ def incremental_update_kg(
     set_progress(project_id, {
         "stage": "kg_diffing_chunks",
         "kg_building": True,
-    })
+    }, kg_source=kg_source)
 
     # Reconstruct old chunks from the stored hash by loading from the DB
     # We need the actual old chunks to diff. The KG stores chunk content in node properties.
@@ -1027,7 +1281,7 @@ def incremental_update_kg(
     new_hash = _chunks_hash(new_chunks)
     if new_hash == row["chunks_hash"]:
         logger.info("Chunks unchanged for project %d — no update needed", project_id)
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source=kg_source)
         return {"status": "unchanged", "num_nodes": len(kg.nodes)}
 
     added_chunks, removed_old_indices, old_to_new_map = _diff_chunks(old_chunks, new_chunks)
@@ -1039,13 +1293,13 @@ def incremental_update_kg(
 
     if not added_chunks and not removed_old_indices:
         logger.info("No effective changes detected for project %d", project_id)
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source=kg_source)
         return {"status": "unchanged", "num_nodes": len(kg.nodes)}
 
     try:
         # --- Step 1: Remove nodes for deleted chunks ---
         if removed_old_indices:
-            update_progress(project_id, stage="kg_removing_old_nodes")
+            update_progress(project_id, kg_source=kg_source, stage="kg_removing_old_nodes")
             removed_set = set(removed_old_indices)
             # Find nodes to remove by their chunk_id
             nodes_to_remove = set()
@@ -1072,7 +1326,7 @@ def incremental_update_kg(
             )
 
         # --- Step 2: Re-index chunk_ids on surviving nodes ---
-        update_progress(project_id, stage="kg_reindexing_nodes")
+        update_progress(project_id, kg_source=kg_source, stage="kg_reindexing_nodes")
         for chunk_id, _, node in old_chunk_nodes:
             if chunk_id in old_to_new_map:
                 props = node.properties if hasattr(node, "properties") else {}
@@ -1082,7 +1336,7 @@ def incremental_update_kg(
 
         # --- Step 3: Process new chunks through per-node transforms ---
         if added_chunks:
-            update_progress(project_id, stage="kg_processing_new_chunks")
+            update_progress(project_id, kg_source=kg_source, stage="kg_processing_new_chunks")
             llm, embeddings, _ = _build_llm_and_embeddings()
 
             # Create nodes for new chunks
@@ -1119,7 +1373,7 @@ def incremental_update_kg(
             ]
 
             for stage_name, transform in per_node_transforms:
-                update_progress(project_id, stage=f"incremental_{stage_name}")
+                update_progress(project_id, kg_source=kg_source, stage=f"incremental_{stage_name}")
                 update_heartbeat(project_id)
                 logger.info("Incremental transform on new nodes: %s (%d nodes)", stage_name, len(new_kg.nodes))
                 _apply_transform_batched(
@@ -1127,6 +1381,7 @@ def incremental_update_kg(
                     project_id=project_id,
                     stage_name=stage_name,
                     overlap_max_nodes=overlap_max_nodes,
+                    kg_source=kg_source,
                 )
 
             # Merge new nodes into existing KG
@@ -1134,7 +1389,7 @@ def incremental_update_kg(
             kg.nodes.extend(new_kg.nodes)
 
         # --- Step 4: Re-run cross-node link transforms ---
-        update_progress(project_id, stage="kg_rebuilding_links")
+        update_progress(project_id, kg_source=kg_source, stage="kg_rebuilding_links")
         update_heartbeat(project_id)
 
         # Strip all existing relationships — they need to be rebuilt
@@ -1163,7 +1418,7 @@ def incremental_update_kg(
         ]
 
         for stage_name, transform in link_transforms:
-            update_progress(project_id, stage=stage_name)
+            update_progress(project_id, kg_source=kg_source, stage=stage_name)
             update_heartbeat(project_id, kg_source=kg_source)
             logger.info("Rebuilding links: %s", stage_name)
             _apply_transform_batched(
@@ -1171,6 +1426,7 @@ def incremental_update_kg(
                 project_id=project_id,
                 stage_name=stage_name,
                 overlap_max_nodes=overlap_max_nodes,
+                kg_source=kg_source,
             )
 
         # --- Step 5: Save ---
@@ -1195,7 +1451,7 @@ def incremental_update_kg(
             "chunks_removed": len(removed_old_indices),
         }
     finally:
-        clear_progress(project_id)
+        clear_progress(project_id, kg_source=kg_source)
 
 
 def generate_personas_fast(
@@ -1527,7 +1783,7 @@ def generate_testset_from_chunks(
             for partition in chunk_partitions
         ]
         for future in as_completed(futures):
-            if _shutdown_event.is_set():
+            if _shutdown_event.is_set() or is_cancelled(project_id):
                 for f in futures:
                     f.cancel()
                 break
@@ -1548,21 +1804,32 @@ def generate_testset_with_personas(
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
     project_id: int | None = None,
+    prebuilt_kg: "KnowledgeGraph | None" = None,
+    fast_mode: bool = False,
 ) -> dict:
     """Generate test questions with persona information using parallel workers.
 
     The knowledge graph is built once (sequential), then generation is split
     across *num_workers* threads sharing the same KG and persona list.
+
+    If *prebuilt_kg* is provided it is used directly and the KG build step is
+    skipped entirely (used for KG-node sampling from an existing full KG).
     """
     llm, embeddings, _ = _build_llm_and_embeddings()
 
-    logger.info("Building knowledge graph from %d chunks...", len(chunks))
-    if project_id is not None:
-        update_progress(project_id, stage="building_knowledge_graph")
-    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id)
+    if prebuilt_kg is not None:
+        kg = prebuilt_kg
+        logger.info(
+            "Using pre-sampled KG (%d nodes) — skipping KG build", len(kg.nodes)
+        )
+    else:
+        logger.info("Building knowledge graph from %d chunks...", len(chunks))
+        if project_id is not None:
+            update_progress(project_id, kg_source="testset", stage="building_knowledge_graph")
+        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, fast_mode=fast_mode)
 
     if project_id is not None:
-        update_progress(project_id, stage="generating_personas")
+        update_progress(project_id, kg_source="testset", stage="generating_personas")
 
     if custom_personas:
         personas = [_merge_persona_fields(p) for p in custom_personas]
@@ -1579,7 +1846,7 @@ def generate_testset_with_personas(
             personas = [_merge_persona_fields(p) for p in raw]
 
     if project_id is not None:
-        update_progress(project_id, stage="generating_questions")
+        update_progress(project_id, kg_source="testset", stage="generating_questions")
 
     effective_workers = max(1, min(num_workers, testset_size))
 
@@ -1616,7 +1883,7 @@ def generate_testset_with_personas(
                 for _ in range(effective_workers)
             ]
             for future in as_completed(futures):
-                if _shutdown_event.is_set():
+                if _shutdown_event.is_set() or is_cancelled(project_id):
                     for f in futures:
                         f.cancel()
                     break
@@ -2092,6 +2359,8 @@ def generate_project_testset(
     question_categories: dict[str, int] | None = None,
     project_id: int | None = None,
     graph_rag_kg_source: str = "chunks",
+    node_sample_size: int = 0,
+    fast_mode: bool = False,
 ) -> dict:
     """Unified entry point for project-scoped test set generation.
 
@@ -2112,7 +2381,7 @@ def generate_project_testset(
             "stage": "building_knowledge_graph",
             "questions_generated": 0,
             "target_size": testset_size,
-        })
+        }, kg_source="testset")
 
     try:
         return _generate_project_testset_inner(
@@ -2126,10 +2395,12 @@ def generate_project_testset(
             question_categories=question_categories,
             project_id=project_id,
             graph_rag_kg_source=graph_rag_kg_source,
+            node_sample_size=node_sample_size,
+            fast_mode=fast_mode,
         )
     finally:
         if project_id is not None:
-            clear_progress(project_id)
+            clear_progress(project_id, kg_source="testset")
 
 
 def _generate_project_testset_inner(
@@ -2143,22 +2414,66 @@ def _generate_project_testset_inner(
     question_categories: dict[str, int] | None = None,
     project_id: int | None = None,
     graph_rag_kg_source: str = "chunks",
+    node_sample_size: int = 0,
+    fast_mode: bool = False,
 ) -> dict:
+    # ---------------------------------------------------------------------------
+    # Resolve effective chunks and prebuilt KG for KG-node sampling.
+    #
+    # When node_sample_size > 0 and a complete KG already exists for this
+    # project we sample nodes directly from the stored KG instead of
+    # rebuilding it from a random subset of chunks.  This is much faster
+    # because the full 11-step transform pipeline is skipped entirely.
+    #
+    # For Graph RAG categories (bridge/comparative/community) we always use
+    # the full chunk list because those questions rely on graph-wide
+    # connectivity — sampling would degrade quality.
+    # ---------------------------------------------------------------------------
+    prebuilt_kg: "KnowledgeGraph | None" = None
+    effective_chunks = chunks
+
+    if node_sample_size > 0:
+        if project_id is not None:
+            kg_json = load_full_kg_json(project_id, kg_source=graph_rag_kg_source)
+            if kg_json is not None:
+                import json as _json
+                num_nodes = len(_json.loads(kg_json).get("nodes", []))
+                sample_n = min(node_sample_size, num_nodes)
+                logger.info(
+                    "project %d: sampling %d/%d KG nodes — skipping KG rebuild",
+                    project_id, sample_n, num_nodes,
+                )
+                prebuilt_kg, effective_chunks = sample_kg_from_json(kg_json, sample_n)
+                if project_id is not None:
+                    update_progress(project_id, kg_source="testset", stage="kg_loaded_from_cache")
+            else:
+                # No complete KG available — fall back to sampling chunks directly
+                if node_sample_size < len(chunks):
+                    logger.info(
+                        "project %d: no complete KG found — sampling %d/%d chunks",
+                        project_id, node_sample_size, len(chunks),
+                    )
+                    effective_chunks = random.sample(chunks, node_sample_size)
+        elif node_sample_size < len(chunks):
+            effective_chunks = random.sample(chunks, node_sample_size)
+
     # If no categories specified, generate all as "in_knowledge_base" (legacy behavior)
     if not question_categories:
         if use_personas:
             result = generate_testset_with_personas(
-                chunks=chunks,
+                chunks=effective_chunks,
                 testset_size=testset_size,
                 num_personas=num_personas,
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
                 num_workers=num_workers,
                 project_id=project_id,
+                prebuilt_kg=prebuilt_kg,
+                fast_mode=fast_mode,
             )
         else:
             questions = generate_testset_from_chunks(
-                chunks=chunks,
+                chunks=effective_chunks,
                 testset_size=testset_size,
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
@@ -2201,19 +2516,21 @@ def _generate_project_testset_inner(
 
         if use_personas:
             ragas_result = generate_testset_with_personas(
-                chunks=chunks,
+                chunks=effective_chunks,
                 testset_size=ragas_count,
                 num_personas=num_personas,
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
                 num_workers=num_workers,
                 project_id=project_id,
+                prebuilt_kg=prebuilt_kg,
+                fast_mode=fast_mode,
             )
             all_personas = ragas_result.get("personas", [])
             ragas_questions = ragas_result.get("questions", [])
         else:
             ragas_questions = generate_testset_from_chunks(
-                chunks=chunks,
+                chunks=effective_chunks,
                 testset_size=ragas_count,
                 custom_personas=custom_personas,
                 query_distribution=query_distribution,
@@ -2236,10 +2553,10 @@ def _generate_project_testset_inner(
 
     # Generate LLM-based questions (edge + out_of_knowledge_base)
     if project_id is not None and llm_categories:
-        update_progress(project_id, stage="generating_special_categories")
+        update_progress(project_id, kg_source="testset", stage="generating_special_categories")
     for cat, pct in llm_categories.items():
         cat_count = max(1, round(testset_size * pct / total_pct))
-        cat_questions = _generate_category_questions_via_llm(chunks, cat, cat_count)
+        cat_questions = _generate_category_questions_via_llm(effective_chunks, cat, cat_count)
         for q in cat_questions:
             q["category"] = cat
         all_questions.extend(cat_questions)
@@ -2265,7 +2582,7 @@ def _generate_project_testset_inner(
 
         if kg_for_graph is None:
             if project_id is not None:
-                update_progress(project_id, stage="building_knowledge_graph")
+                update_progress(project_id, kg_source="testset", stage="building_knowledge_graph")
             llm, embeddings, _ = _build_llm_and_embeddings()
             kg_for_graph = build_knowledge_graph(
                 source_texts, llm=llm, embeddings=embeddings,
@@ -2288,7 +2605,7 @@ def _generate_project_testset_inner(
         for cat, pct in graph_rag_categories.items():
             cat_count = max(1, round(testset_size * pct / total_pct))
             if project_id is not None:
-                update_progress(project_id, stage=_stage_names[cat])
+                update_progress(project_id, kg_source="testset", stage=_stage_names[cat])
             generator = _graph_generators[cat]
             cat_questions = generator(kg_for_graph, cat_count, llm_client)
             for q in cat_questions:
