@@ -21,6 +21,7 @@ from dataclasses import asdict
 
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
 from evaluation.metrics.custom_metric import CustomMetricConfig
+from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
 from evaluation.source_verification import verify_all_citations
 import db.init
 from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
@@ -811,6 +812,29 @@ async def run_experiment(
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
+    # Atomically claim the experiment — set status to 'running' now so any
+    # concurrent page load or refresh immediately sees the correct state.
+    cursor = conn.execute(
+        "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status IN ('pending', 'failed')",
+        (datetime.now().isoformat(), experiment_id),
+    )
+    conn.commit()
+    if cursor.rowcount != 1:
+        raise HTTPException(status_code=409, detail="Experiment already claimed by another request")
+
+    # Clean up partial results from a prior failed run (if any)
+    deleted = conn.execute(
+        "DELETE FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    )
+    if deleted.rowcount > 0:
+        conn.commit()
+        logger.info(
+            "Experiment %d re-run: deleted %d partial results from prior attempt",
+            experiment_id,
+            deleted.rowcount,
+        )
+
     # --- Launch background task ---
     cancel_event = asyncio.Event()
     _cancel_events[experiment_id] = cancel_event
@@ -827,33 +851,6 @@ async def run_experiment(
         tasks: list[asyncio.Task] = []
 
         try:
-            # Atomic status claim -- prevents concurrent run race condition
-            cursor = run_conn.execute(
-                "UPDATE experiments SET status = 'running', started_at = ? WHERE id = ? AND status IN ('pending', 'failed')",
-                (datetime.now().isoformat(), experiment_id),
-            )
-            run_conn.commit()
-
-            if cursor.rowcount != 1:
-                _experiment_progress[experiment_id] = {
-                    "phase": "error", "current": 0, "total": 0,
-                    "question": "", "error": "Experiment already claimed by another request", "result_count": 0,
-                }
-                return
-
-            # Clean up partial results from prior failed run (if any)
-            deleted = run_conn.execute(
-                "DELETE FROM experiment_results WHERE experiment_id = ?",
-                (experiment_id,),
-            )
-            if deleted.rowcount > 0:
-                run_conn.commit()
-                logger.info(
-                    "Experiment %d re-run: deleted %d partial results from prior attempt",
-                    experiment_id,
-                    deleted.rowcount,
-                )
-
             # Fetch approved/edited test questions
             questions = run_conn.execute(
                 "SELECT * FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited') ORDER BY id",
@@ -873,15 +870,83 @@ async def run_experiment(
             # Yield control so the SSE stream can send the setup phase
             await asyncio.sleep(0)
 
+            # Resolve judge model assignments:
+            # 1. Use request's judge_model_assignments if provided
+            # 2. Otherwise fall back to project-level defaults
+            judge_assignments = req.judge_model_assignments or None
+            if not judge_assignments:
+                proj_row = run_conn.execute(
+                    "SELECT judge_model_assignments_json FROM projects WHERE id = ?",
+                    (project_id,),
+                ).fetchone()
+                if proj_row and proj_row["judge_model_assignments_json"]:
+                    judge_assignments = json.loads(proj_row["judge_model_assignments_json"])
+
+            # Validate judge model API key availability before starting
+            judge_is_selected = (
+                "multi_llm_judge" in selected_metrics
+                or any(
+                    cr["metric_type"] in ("criteria_judge", "reference_judge") and cr["name"] in selected_metrics
+                    for cr in run_conn.execute(
+                        "SELECT name, metric_type FROM custom_metrics WHERE project_id = ?",
+                        (project_id,),
+                    ).fetchall()
+                )
+            )
+            if judge_is_selected and judge_assignments:
+                from pipeline.llm import JUDGE_MODELS, get_available_judge_models
+                availability = {m["id"]: m["available"] for m in get_available_judge_models()}
+                model_info = {m["id"]: m for m in JUDGE_MODELS}
+                _PROVIDER_KEY = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY"}
+                missing = []
+                for mid in dict.fromkeys(judge_assignments):  # deduplicate, preserve order
+                    if not availability.get(mid, False):
+                        provider = model_info.get(mid, {}).get("provider", "unknown")
+                        key_name = _PROVIDER_KEY.get(provider, f"{provider.upper()}_API_KEY")
+                        missing.append(f"{mid} (needs {key_name})")
+                if missing:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Missing API keys for judge models: {', '.join(missing)}",
+                    )
+
             # Load custom metrics for this project
             custom_rows = run_conn.execute(
                 "SELECT * FROM custom_metrics WHERE project_id = ?",
                 (project_id,),
             ).fetchall()
             custom_configs = []
+            criteria_judge_configs = []
+            reference_judge_configs = []
             for cr in custom_rows:
                 cm_name = cr["name"]
-                if cm_name in selected_metrics:
+                if cm_name not in selected_metrics:
+                    continue
+                if cr["metric_type"] == "criteria_judge":
+                    refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
+                    if refined:
+                        criteria_judge_configs.append(
+                            _multi_llm_judge_module.CriteriaJudgeConfig(
+                                metric_name=cm_name,
+                                refined_prompt=refined,
+                                num_evaluators=len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators,
+                                model_assignments=judge_assignments,
+                                temperature_assignments=req.judge_temperature_assignments,
+                            )
+                        )
+                elif cr["metric_type"] == "reference_judge":
+                    refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
+                    if refined:
+                        reference_judge_configs.append(
+                            _multi_llm_judge_module.ReferenceJudgeConfig(
+                                metric_name=cm_name,
+                                refined_prompt=refined,
+                                num_evaluators=len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators,
+                                model_assignments=judge_assignments,
+                                temperature_assignments=req.judge_temperature_assignments,
+                            )
+                        )
+                else:
                     custom_configs.append(CustomMetricConfig(
                         name=cm_name,
                         metric_type=cr["metric_type"],
@@ -892,12 +957,40 @@ async def run_experiment(
                     ))
 
             # Filter selected_metrics to only built-in ones for setup_scorers
-            builtin_selected = [m for m in selected_metrics if m in ALL_METRICS]
+            # multi_llm_judge, criteria_judge, and reference_judge metrics are excluded
+            # from setup_scorers — handled separately below.
+            criteria_names = {cfg.metric_name for cfg in criteria_judge_configs}
+            reference_names = {cfg.metric_name for cfg in reference_judge_configs}
+            judge_custom_names = criteria_names | reference_names
+            builtin_selected = [
+                m for m in selected_metrics
+                if m in ALL_METRICS and m != "multi_llm_judge"
+            ]
 
-            # Setup scorers — must run on the main event loop (not in executor)
-            # because AsyncOpenAI client binds to the current loop
+            # Setup multi-llm-judge config if selected
+            judge_config = None
+            if "multi_llm_judge" in selected_metrics:
+                n_evaluators = len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators
+                judge_config = _multi_llm_judge_module.MultiLLMJudgeConfig(
+                    num_evaluators=n_evaluators,
+                    model_assignments=judge_assignments,
+                    temperature_assignments=req.judge_temperature_assignments,
+                )
+                logger.info(
+                    "Experiment %d: multi_llm_judge enabled with %d evaluators (assignments: %s)",
+                    experiment_id, n_evaluators, judge_assignments,
+                )
+
+            # Setup scorers — skip entirely when no built-in or custom metrics
+            # are selected (e.g. only multi_llm_judge). Calling setup_scorers([])
+            # or setup_scorers(None) falls back to ALL_METRICS inside that
+            # function, so we must guard the call here instead.
             logger.info("Experiment %d: setting up scorers for %s", experiment_id, builtin_selected)
-            scorers, custom_scorers, llm = setup_scorers(builtin_selected, custom_configs, rubrics=req.rubrics)
+            scorers, custom_scorers, llm = setup_scorers(
+                builtin_selected,   # [] → no built-in metrics (fixed in scoring.py)
+                custom_configs,
+                rubrics=req.rubrics,
+            )
             logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
 
             # Transition from setup → running
@@ -1104,6 +1197,7 @@ async def run_experiment(
                         await progress_queue.put({
                             "idx": idx, "qid": qid, "question_text": question_text,
                             "generated_answer": generated_answer,
+                            "reference_answer": ref_answer,
                             "full_context_dicts": full_context_dicts,
                             "metrics_result": metrics_result,
                             "usage_info": usage_info,
@@ -1141,7 +1235,7 @@ async def run_experiment(
                 question_text = result["question_text"]
 
                 if result["error"] is None:
-                    run_conn.execute(
+                    cur = run_conn.execute(
                         """INSERT INTO experiment_results
                            (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
                            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -1153,6 +1247,124 @@ async def run_experiment(
                             json.dumps(result["usage_info"]),
                         ),
                     )
+                    result_row_id = cur.lastrowid
+
+                    # --- Multi-LLM Judge (isolated block — no impact on normal metrics) ---
+                    if judge_config is not None:
+                        try:
+                            judge_evals = await _multi_llm_judge_module.run_judge(
+                                judge_config,
+                                result["question_text"],
+                                result["generated_answer"] or "",
+                                result["full_context_dicts"],
+                            )
+                            if judge_evals:
+                                for ev in judge_evals:
+                                    run_conn.execute(
+                                        """INSERT INTO multi_llm_evaluations
+                                           (experiment_result_id, evaluator_index, verdict, score, claims_json, reasoning)
+                                           VALUES (?, ?, ?, ?, ?, ?)""",
+                                        (
+                                            result_row_id,
+                                            ev["evaluator_index"],
+                                            ev["verdict"],
+                                            ev["score"],
+                                            json.dumps(ev["claims"]),
+                                            ev.get("reasoning") or None,
+                                        ),
+                                    )
+                                agg = _multi_llm_judge_module.aggregate_score(judge_evals)
+                                result["metrics_result"]["multi_llm_judge"] = agg
+                                run_conn.execute(
+                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
+                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
+                                )
+                        except Exception as _judge_err:
+                            logger.warning(
+                                "Experiment %d: multi_llm_judge failed for result %d: %s",
+                                experiment_id, result_row_id, _judge_err,
+                                exc_info=True,
+                            )
+                    # --- End Multi-LLM Judge block ---
+
+                    # --- Criteria Judges (one per custom criteria_judge metric) ---
+                    for cj_config in criteria_judge_configs:
+                        try:
+                            cj_evals = await _multi_llm_judge_module.run_criteria_judge(
+                                cj_config,
+                                result["question_text"],
+                                result["generated_answer"] or "",
+                                result["full_context_dicts"],
+                            )
+                            if cj_evals:
+                                for ev in cj_evals:
+                                    run_conn.execute(
+                                        """INSERT INTO multi_llm_evaluations
+                                           (experiment_result_id, evaluator_index, verdict, score,
+                                            claims_json, custom_metric_name)
+                                           VALUES (?, ?, ?, ?, ?, ?)""",
+                                        (
+                                            result_row_id,
+                                            ev["evaluator_index"],
+                                            ev["verdict"],
+                                            ev["score"],
+                                            json.dumps(ev["highlights"]),
+                                            cj_config.metric_name,
+                                        ),
+                                    )
+                                agg = _multi_llm_judge_module.aggregate_criteria_score(cj_evals)
+                                result["metrics_result"][cj_config.metric_name] = agg
+                                run_conn.execute(
+                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
+                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
+                                )
+                        except Exception as _cj_err:
+                            logger.warning(
+                                "Experiment %d: criteria_judge '%s' failed for result %d: %s",
+                                experiment_id, cj_config.metric_name, result_row_id, _cj_err,
+                                exc_info=True,
+                            )
+                    # --- End Criteria Judges block ---
+
+                    # --- Reference Judges (one per custom reference_judge metric) ---
+                    for rj_config in reference_judge_configs:
+                        try:
+                            rj_evals = await _multi_llm_judge_module.run_reference_judge(
+                                rj_config,
+                                result["question_text"],
+                                result["reference_answer"] or "",
+                                result["generated_answer"] or "",
+                                result["full_context_dicts"],
+                            )
+                            if rj_evals:
+                                for ev in rj_evals:
+                                    run_conn.execute(
+                                        """INSERT INTO multi_llm_evaluations
+                                           (experiment_result_id, evaluator_index, verdict, score,
+                                            claims_json, custom_metric_name)
+                                           VALUES (?, ?, ?, ?, ?, ?)""",
+                                        (
+                                            result_row_id,
+                                            ev["evaluator_index"],
+                                            ev["verdict"],
+                                            ev["score"],
+                                            json.dumps(ev["highlights"]),
+                                            rj_config.metric_name,
+                                        ),
+                                    )
+                                agg = _multi_llm_judge_module.aggregate_criteria_score(rj_evals)
+                                result["metrics_result"][rj_config.metric_name] = agg
+                                run_conn.execute(
+                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
+                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
+                                )
+                        except Exception as _rj_err:
+                            logger.warning(
+                                "Experiment %d: reference_judge '%s' failed for result %d: %s",
+                                experiment_id, rj_config.metric_name, result_row_id, _rj_err,
+                                exc_info=True,
+                            )
+                    # --- End Reference Judges block ---
                 else:
                     run_conn.execute(
                         """INSERT INTO experiment_results
@@ -1195,8 +1407,12 @@ async def run_experiment(
                     "scoring_metrics": prog.get("scoring_metrics", []),
                 }
 
-            # Ensure all tasks are done (should already be)
-            await asyncio.gather(*tasks)
+            # Cancel pending tasks immediately if we broke out early
+            if cancel_event.is_set():
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
             if cancel_event.is_set():
                 run_conn.execute(
@@ -1261,6 +1477,32 @@ async def run_experiment(
         "experiment_id": experiment_id,
         "status": "started",
         "metrics": selected_metrics,
+    }
+
+
+# --- Progress snapshot (one-shot REST, for reconnect pre-population) ---
+
+
+@router.get("/projects/{project_id}/experiments/{experiment_id}/progress-snapshot")
+async def experiment_progress_snapshot(project_id: int, experiment_id: int):
+    """Return a one-shot JSON snapshot of current in-memory progress.
+
+    Used by the frontend on reconnect to immediately populate the UI before
+    the SSE stream sends its first event, avoiding the 'Initializing...' flicker.
+    """
+    progress = _experiment_progress.get(experiment_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="No active progress for this experiment")
+    return {
+        "phase": progress.get("phase", "starting"),
+        "current": progress.get("current", 0),
+        "total": progress.get("total", 0),
+        "question": progress.get("question", ""),
+        "in_flight": progress.get("in_flight", []),
+        "in_flight_details": list(progress.get("in_flight_details", {}).values()),
+        "scoring_metrics": progress.get("scoring_metrics", []),
+        "error": progress.get("error"),
+        "result_count": progress.get("result_count", 0),
     }
 
 

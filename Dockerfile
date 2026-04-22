@@ -1,17 +1,26 @@
-FROM python:3.11-slim
+# Stage 1: Build frontend
+FROM node:20-alpine AS frontend-builder
+WORKDIR /frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npx vite build
 
+# Stage 2: Python app
+FROM python:3.11-slim
 WORKDIR /app
 
-# Layer caching: install dependencies first
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
 COPY . .
 
-# Create data directory for SQLite
+# Copy built frontend from stage 1
+COPY --from=frontend-builder /frontend/dist ./frontend/dist
+
+# Create data directory for SQLite (mount a persistent volume here on Northflank)
 RUN mkdir -p /app/data
 
-EXPOSE 8000
+EXPOSE 3000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000"]

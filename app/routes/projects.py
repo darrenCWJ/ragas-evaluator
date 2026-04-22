@@ -2,8 +2,6 @@
 
 import csv
 import io
-import sqlite3
-
 import json
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
@@ -16,6 +14,7 @@ from app.models import (
     MAX_BASELINE_ROWS,
 )
 import db.init
+from db.init import NOW_SQL, is_integrity_error
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -33,38 +32,47 @@ async def create_project(req: ProjectCreate):
         )
         conn.commit()
         row = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?",
+            "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
             (cursor.lastrowid,),
         ).fetchone()
-        return dict(row)
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Project name already exists")
+        return _format_project(row)
+    except Exception as e:
+        if is_integrity_error(e):
+            raise HTTPException(status_code=409, detail="Project name already exists")
+        raise
+
+
+def _format_project(row) -> dict:
+    result = dict(row)
+    raw = result.pop("judge_model_assignments_json", None)
+    result["judge_model_assignments"] = json.loads(raw) if raw else None
+    return result
 
 
 @router.get("/projects")
 async def list_projects():
     conn = db.init.get_db()
     rows = conn.execute(
-        "SELECT id, name, description, created_at, updated_at FROM projects"
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects"
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [_format_project(r) for r in rows]
 
 
 @router.get("/projects/{project_id}")
 async def get_project(project_id: int):
     conn = db.init.get_db()
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?",
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
         (project_id,),
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    return dict(row)
+    return _format_project(row)
 
 
 @router.put("/projects/{project_id}")
 async def update_project(project_id: int, req: ProjectUpdate):
-    if req.name is None and req.description is None:
+    if req.name is None and req.description is None and req.judge_model_assignments is None:
         raise HTTPException(status_code=400, detail="No fields to update")
     conn = db.init.get_db()
     existing = conn.execute(
@@ -80,7 +88,10 @@ async def update_project(project_id: int, req: ProjectUpdate):
     if req.description is not None:
         updates.append("description = ?")
         params.append(req.description)
-    updates.append("updated_at = datetime('now', 'localtime')")
+    if req.judge_model_assignments is not None:
+        updates.append("judge_model_assignments_json = ?")
+        params.append(json.dumps(req.judge_model_assignments) if req.judge_model_assignments else None)
+    updates.append(f"updated_at = {NOW_SQL}")
     params.append(project_id)
     try:
         conn.execute(
@@ -88,13 +99,22 @@ async def update_project(project_id: int, req: ProjectUpdate):
             params,
         )
         conn.commit()
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Project name already exists")
+    except Exception as e:
+        if is_integrity_error(e):
+            raise HTTPException(status_code=409, detail="Project name already exists")
+        raise
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?",
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
         (project_id,),
     ).fetchone()
-    return dict(row)
+    return _format_project(row)
+
+
+@router.get("/judge-models")
+async def list_judge_models():
+    """Return all judge-eligible models with API key availability."""
+    from pipeline.llm import get_available_judge_models
+    return {"models": get_available_judge_models()}
 
 
 @router.delete("/projects/{project_id}")
@@ -341,7 +361,7 @@ async def save_api_config(project_id: int, payload: ApiConfigCreate):
 
     if existing:
         conn.execute(
-            "UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = datetime('now', 'localtime') WHERE project_id = ?",
+            f"UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = {NOW_SQL} WHERE project_id = ?",
             (payload.endpoint_url, payload.api_key, payload.headers_json, project_id),
         )
         config_id = existing[0]

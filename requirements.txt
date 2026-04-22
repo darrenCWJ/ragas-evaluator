@@ -21,3 +21,6 @@ google-genai>=1.0.0
 jsonpath-ng>=1.6.0
 sacrebleu>=2.4.0
 rouge_score>=0.1.2
+networkx>=3.0
+psycopg2-binary>=2.9.0
+rapidfuzz>=3.0.0

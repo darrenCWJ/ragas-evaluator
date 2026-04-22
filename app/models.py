@@ -51,7 +51,7 @@ class TestGenRequest(BaseModel):
 
 
 class TestSetCreate(BaseModel):
-    chunk_config_id: int
+    chunk_config_id: int | None = None
     name: str | None = None
     testset_size: int = 10
     num_personas: int = 3
@@ -61,6 +61,9 @@ class TestSetCreate(BaseModel):
     chunk_sample_size: int = 0
     num_workers: int = 4
     question_categories: dict[str, int] | None = None
+    graph_rag_kg_source: str = "chunks"  # "chunks" or "documents"
+    use_kg_as_source: bool = False  # use stored KG node texts as source instead of a chunk config
+    fast_kg_mode: bool = False      # use fast 2-LLM-round KG build (1 combined call per node)
 
     @field_validator("testset_size")
     @classmethod
@@ -131,6 +134,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    judge_model_assignments: list[str] | None = None
 
     @field_validator("name")
     @classmethod
@@ -394,12 +398,37 @@ class ExperimentRunRequest(BaseModel):
     metrics: list[str] | None = None
     rubrics: dict[str, str] | None = None
     concurrency: int = 5
+    multi_llm_judge_evaluators: int = 5
+    judge_model_assignments: list[str] | None = None
+    judge_temperature_assignments: list[float] | None = None
+    # When judge_model_assignments is provided:
+    #   - len overrides multi_llm_judge_evaluators
+    #   - each slot uses the assigned model + temperature (or linear spacing if temperatures omitted)
 
     @field_validator("concurrency")
     @classmethod
     def validate_concurrency(cls, v: int) -> int:
         if v < 1 or v > 20:
             raise ValueError("concurrency must be between 1 and 20")
+        return v
+
+    @field_validator("multi_llm_judge_evaluators")
+    @classmethod
+    def validate_multi_llm_judge_evaluators(cls, v: int) -> int:
+        if v < 1 or v > 20:
+            raise ValueError("multi_llm_judge_evaluators must be between 1 and 20")
+        return v
+
+
+class ClaimAnnotationRequest(BaseModel):
+    status: str  # accurate | inaccurate | unsure
+    comment: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in {"accurate", "inaccurate", "unsure"}:
+            raise ValueError("status must be accurate, inaccurate, or unsure")
         return v
 
 
@@ -444,7 +473,7 @@ class BatchApplyRequest(BaseModel):
         return v
 
 
-VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics"}
+VALID_CUSTOM_METRIC_TYPES = {"integer_range", "similarity", "rubrics", "instance_rubrics", "criteria_judge", "reference_judge"}
 
 
 class CustomMetricCreate(BaseModel):
@@ -454,6 +483,7 @@ class CustomMetricCreate(BaseModel):
     rubrics: dict[str, str] | None = None
     min_score: int = 1
     max_score: int = 5
+    refined_prompt: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -483,10 +513,27 @@ class CustomMetricCreate(BaseModel):
             raise ValueError("prompt is required for integer_range and similarity metric types")
         if self.metric_type == "rubrics" and not self.rubrics:
             raise ValueError("rubrics are required for rubrics metric type")
-        if self.min_score >= self.max_score:
-            raise ValueError("min_score must be less than max_score")
-        if self.min_score < 0 or self.max_score > 10:
-            raise ValueError("score range must be between 0 and 10")
+        if self.metric_type in ("criteria_judge", "reference_judge") and not self.refined_prompt:
+            raise ValueError("refined_prompt is required for criteria_judge and reference_judge metric types")
+        if self.metric_type not in ("criteria_judge", "reference_judge"):
+            if self.min_score >= self.max_score:
+                raise ValueError("min_score must be less than max_score")
+            if self.min_score < 0 or self.max_score > 10:
+                raise ValueError("score range must be between 0 and 10")
+
+
+class RefinementRequest(BaseModel):
+    description: str
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("description must not be empty")
+        if len(v) > 1000:
+            raise ValueError("description must not exceed 1000 characters")
+        return v
 
 
 class BotConfigCreate(BaseModel):

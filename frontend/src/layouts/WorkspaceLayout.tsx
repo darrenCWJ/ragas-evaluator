@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { version } from "../../package.json";
 import { Outlet, Navigate, useLocation } from "react-router-dom";
 import { useProject } from "../contexts/ProjectContext";
 import Stepper from "../components/Stepper";
@@ -46,7 +47,7 @@ export default function WorkspaceLayout() {
 
         {/* Sidebar footer */}
         <div className="border-t border-border px-4 py-3">
-          <div className="text-2xs text-text-muted">v0.4.1-alpha</div>
+          <div className="text-2xs text-text-muted">v{version}</div>
         </div>
       </aside>
 
@@ -91,7 +92,7 @@ export default function WorkspaceLayout() {
           <Stepper />
         </div>
         <div className="border-t border-border px-4 py-3">
-          <div className="text-2xs text-text-muted">v0.4.1-alpha</div>
+          <div className="text-2xs text-text-muted">v{version}</div>
         </div>
       </aside>
 

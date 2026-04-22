@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { ChunkConfig, TestSetCreate, SavedPersona, GenerationProgress, KnowledgeGraphInfo, KGBuildProgress } from "../../lib/api";
 import {
   createTestSet,
+  cancelTestSetGeneration,
   generatePersonas,
   fetchPersonas,
   savePersonasBulk,
@@ -33,6 +34,18 @@ const DEFAULT_CATEGORIES: Record<string, number> = {
   in_knowledge_base: 30,
   edge: 20,
   out_of_knowledge_base: 20,
+};
+
+const GRAPH_RAG_CATEGORIES = [
+  { key: "bridge", label: "Bridge", description: "Questions connecting distant concepts through multi-hop reasoning (requires KG)" },
+  { key: "comparative", label: "Comparative", description: "Compare and contrast related entities or concepts (requires KG)" },
+  { key: "community", label: "Community", description: "High-level thematic questions about topic clusters (requires KG)" },
+] as const;
+
+const DEFAULT_GRAPH_RAG_DIST: Record<string, number> = {
+  bridge: 34,
+  comparative: 33,
+  community: 33,
 };
 
 /**
@@ -135,7 +148,20 @@ export default function TestSetGenerate({
     out_of_knowledge_base: true,
   });
   const [categoryDistribution, setCategoryDistribution] = useState<Record<string, number>>({ ...DEFAULT_CATEGORIES });
+  const [useGraphRag, setUseGraphRag] = useState(false);
+  const [graphRagKgSource, setGraphRagKgSource] = useState<"chunks" | "documents">("chunks");
+  const [docKgInfo, setDocKgInfo] = useState<KnowledgeGraphInfo | null>(null);
+  const [docKgBuilding, setDocKgBuilding] = useState(false);
+  const [enabledGraphRag, setEnabledGraphRag] = useState<Record<string, boolean>>({
+    bridge: true,
+    comparative: true,
+    community: true,
+  });
+  const [graphRagDistribution, setGraphRagDistribution] = useState<Record<string, number>>({ ...DEFAULT_GRAPH_RAG_DIST });
+  const [useKgAsSource, setUseKgAsSource] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [activeTestSetId, setActiveTestSetId] = useState<number | null>(null);
   const [generatingPersonas, setGeneratingPersonas] = useState(false);
   const [personaGenMode, setPersonaGenMode] = useState<"fast" | "full">("fast");
   const [savedPersonas, setSavedPersonas] = useState<SavedPersona[]>([]);
@@ -150,6 +176,7 @@ export default function TestSetGenerate({
   const [kgBuilding, setKgBuilding] = useState(false);
   const [kgProgress, setKgProgress] = useState<KGBuildProgress | null>(null);
   const [overlapMaxNodes, setOverlapMaxNodes] = useState<number | null>(500);
+  const [fastKgMode, setFastKgMode] = useState(false);
 
   const loadSavedPersonas = useCallback(async () => {
     try {
@@ -157,6 +184,15 @@ export default function TestSetGenerate({
       setSavedPersonas(personas);
     } catch {
       // silent — not critical
+    }
+  }, [projectId]);
+
+  const loadDocKgInfo = useCallback(async () => {
+    try {
+      const info = await fetchKnowledgeGraphInfo(projectId, "documents");
+      setDocKgInfo(info);
+    } catch {
+      // silent
     }
   }, [projectId]);
 
@@ -178,7 +214,8 @@ export default function TestSetGenerate({
   useEffect(() => {
     loadSavedPersonas();
     loadKgInfo();
-  }, [loadSavedPersonas, loadKgInfo]);
+    loadDocKgInfo();
+  }, [loadSavedPersonas, loadKgInfo, loadDocKgInfo]);
 
   // Poll KG build progress
   useEffect(() => {
@@ -220,23 +257,31 @@ export default function TestSetGenerate({
   // Poll generation progress while generating
   useEffect(() => {
     if (!generating) return;
-    let cancelled = false;
+    let stopped = false;
     const poll = async () => {
-      while (!cancelled) {
+      while (!stopped) {
         try {
           const p = await fetchGenerationProgress(projectId);
-          if (cancelled) break;
+          if (stopped) break;
           setProgress(p);
+          // Sync activeTestSetId from progress if not already set
+          if (p.test_set_id) setActiveTestSetId(p.test_set_id);
 
-          // Generation completed or failed — stop polling
           if (p.status === "completed") {
             setGenerating(false);
+            setCancelling(false);
             onTestSetCreated();
+            break;
+          }
+          if (p.status === "cancelled") {
+            setGenerating(false);
+            setCancelling(false);
             break;
           }
           if (p.status === "failed") {
             setError(p.error_message || "Test generation failed");
             setGenerating(false);
+            setCancelling(false);
             break;
           }
         } catch {
@@ -246,7 +291,7 @@ export default function TestSetGenerate({
       }
     };
     poll();
-    return () => { cancelled = true; };
+    return () => { stopped = true; };
   }, [generating, projectId, onTestSetCreated]);
 
   const validateSize = (s: string) => {
@@ -336,11 +381,17 @@ export default function TestSetGenerate({
     }
   };
 
+  // Chunk config not required when using KG as source, or when only Graph RAG (Documents) categories
+  const chunksRequired = !(
+    useKgAsSource ||
+    (useGraphRag && graphRagKgSource === "documents" && !useCategories)
+  );
+
   const handleGenerate = async () => {
     setError(null);
     const sizeOk = validateSize(testsetSize);
     const personasOk = !usePersonas || validatePersonas(numPersonas);
-    if (!sizeOk || !personasOk || chunkConfigId === "") return;
+    if (!sizeOk || !personasOk || (chunksRequired && chunkConfigId === "")) return;
 
     const parsedSize = Number(testsetSize);
     const parsedPersonas = Number(numPersonas);
@@ -348,7 +399,9 @@ export default function TestSetGenerate({
 
     try {
       const config: TestSetCreate = {
-        chunk_config_id: chunkConfigId as number,
+        use_kg_as_source: useKgAsSource || undefined,
+        fast_kg_mode: fastKgMode || undefined,
+        chunk_config_id: !useKgAsSource && chunksRequired ? (chunkConfigId as number) : undefined,
         testset_size: parsedSize,
         num_personas: usePersonas ? parsedPersonas : undefined,
         use_personas: usePersonas,
@@ -363,16 +416,27 @@ export default function TestSetGenerate({
       if (name.trim()) config.name = name.trim();
 
       // Include question categories if enabled
+      const activeCats: Record<string, number> = {};
       if (useCategories) {
-        const activeCats: Record<string, number> = {};
         for (const cat of QUESTION_CATEGORIES) {
           if (enabledCategories[cat.key]) {
             activeCats[cat.key] = categoryDistribution[cat.key] ?? 0;
           }
         }
-        if (Object.keys(activeCats).length > 0) {
-          config.question_categories = activeCats;
+      }
+      // Merge Graph RAG categories if enabled
+      if (useGraphRag) {
+        for (const cat of GRAPH_RAG_CATEGORIES) {
+          if (enabledGraphRag[cat.key]) {
+            activeCats[cat.key] = graphRagDistribution[cat.key] ?? 0;
+          }
         }
+      }
+      if (Object.keys(activeCats).length > 0) {
+        config.question_categories = activeCats;
+      }
+      if (useGraphRag) {
+        config.graph_rag_kg_source = graphRagKgSource;
       }
 
       // Include custom personas only if valid entries exist (both name and role_description required)
@@ -390,7 +454,8 @@ export default function TestSetGenerate({
       }
 
       // POST returns immediately — generation runs in background
-      await createTestSet(projectId, config);
+      const created = await createTestSet(projectId, config);
+      setActiveTestSetId(created.id);
 
       // Reset form
       setName("");
@@ -406,6 +471,11 @@ export default function TestSetGenerate({
       setUseCategories(false);
       setEnabledCategories({ typical: true, in_knowledge_base: true, edge: true, out_of_knowledge_base: true });
       setCategoryDistribution({ ...DEFAULT_CATEGORIES });
+      setUseGraphRag(false);
+      setGraphRagKgSource("chunks");
+      setDocKgInfo(null);
+      setEnabledGraphRag({ bridge: true, comparative: true, community: true });
+      setGraphRagDistribution({ ...DEFAULT_GRAPH_RAG_DIST });
 
       // Enter generating state — polling effect will detect completion
       setGenerating(true);
@@ -459,6 +529,9 @@ export default function TestSetGenerate({
       generating_personas: "Generating personas",
       generating_questions: "Synthesizing questions",
       generating_special_categories: "Generating edge & out-of-KB questions",
+      generating_bridge_questions: "Generating bridge questions",
+      generating_comparative_questions: "Generating comparative questions",
+      generating_community_questions: "Generating community questions",
     };
     // When KG is loaded from cache, show a single "loaded from cache" step
     // instead of the individual KG build sub-steps.
@@ -472,6 +545,9 @@ export default function TestSetGenerate({
           "generating_personas",
           "generating_questions",
           "generating_special_categories",
+          "generating_bridge_questions",
+          "generating_comparative_questions",
+          "generating_community_questions",
         ]
       : [
           "building_knowledge_graph",
@@ -489,6 +565,9 @@ export default function TestSetGenerate({
           "generating_personas",
           "generating_questions",
           "generating_special_categories",
+          "generating_bridge_questions",
+          "generating_comparative_questions",
+          "generating_community_questions",
         ];
 
     const currentStageIdx = STAGE_ORDER.indexOf(currentStage);
@@ -560,6 +639,23 @@ export default function TestSetGenerate({
           </div>
 
           <p className="text-xs text-text-muted">This may take a few minutes depending on chunk count.</p>
+
+          {/* Cancel button */}
+          <button
+            onClick={async () => {
+              if (!activeTestSetId || cancelling) return;
+              setCancelling(true);
+              try {
+                await cancelTestSetGeneration(projectId, activeTestSetId);
+              } catch {
+                setCancelling(false);
+              }
+            }}
+            disabled={cancelling || !activeTestSetId}
+            className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {cancelling ? "Cancelling…" : "Cancel generation"}
+          </button>
         </div>
       </div>
     );
@@ -572,27 +668,86 @@ export default function TestSetGenerate({
       </h3>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {/* Chunk config selector */}
+        {/* Source selector */}
         <div className="sm:col-span-2">
-          <label className="mb-1 block text-xs font-medium text-text-secondary">
-            Chunk Config
+          <label className="mb-1.5 block text-xs font-medium text-text-secondary">
+            Source
           </label>
-          <select
-            value={chunkConfigId}
-            onChange={(e) =>
-              setChunkConfigId(e.target.value ? Number(e.target.value) : "")
-            }
-            className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
-            disabled={generating}
-          >
-            <option value="">Select a chunk config…</option>
-            {chunkConfigs.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.method})
-              </option>
-            ))}
-          </select>
+          <div className="flex overflow-hidden rounded-lg border border-border">
+            {(["chunks", "knowledge_graph"] as const).map((src) => {
+              const active = src === (useKgAsSource ? "knowledge_graph" : "chunks");
+              return (
+                <button
+                  key={src}
+                  type="button"
+                  onClick={() => setUseKgAsSource(src === "knowledge_graph")}
+                  disabled={generating}
+                  className={`flex-1 py-1.5 text-xs font-medium transition ${
+                    active
+                      ? "bg-accent/15 text-accent"
+                      : "text-text-muted hover:bg-elevated hover:text-text-secondary"
+                  }`}
+                >
+                  {src === "chunks" ? "Chunk Config" : "Knowledge Graph"}
+                </button>
+              );
+            })}
+          </div>
         </div>
+
+        {/* Chunk config selector — hidden when KG is source */}
+        {!useKgAsSource && (
+          <div className="sm:col-span-2">
+            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+              Chunk Config
+              {useGraphRag && graphRagKgSource === "documents" && (
+                <span className="text-[10px] text-text-muted">(optional — not needed for Graph RAG Documents only)</span>
+              )}
+            </label>
+            <select
+              value={chunkConfigId}
+              onChange={(e) =>
+                setChunkConfigId(e.target.value ? Number(e.target.value) : "")
+              }
+              className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              disabled={generating}
+            >
+              <option value="">Select a chunk config…</option>
+              {chunkConfigs.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.method})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* KG info card — shown when KG is source */}
+        {useKgAsSource && (
+          <div className="sm:col-span-2">
+            {kgInfo?.exists && kgInfo.is_complete ? (
+              <div className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-accent">Knowledge Graph ready</span>
+                  <span className="tabular-nums text-text-muted">
+                    {kgInfo.num_nodes?.toLocaleString()} nodes
+                  </span>
+                </div>
+                <p className="mt-0.5 text-text-muted">
+                  Node texts will be used as the generation source. The stored KG is reused directly — no rebuild.
+                </p>
+              </div>
+            ) : kgInfo?.exists && !kgInfo.is_complete ? (
+              <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2.5 text-xs text-yellow-400">
+                Knowledge graph build is incomplete ({kgInfo.completed_steps}/{kgInfo.total_steps} steps). Finish building it before using it as a source.
+              </div>
+            ) : (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-xs text-red-400">
+                No knowledge graph found for this project. Build one in the <strong>Build</strong> tab first.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Name */}
         <div className="sm:col-span-2">
@@ -636,10 +791,10 @@ export default function TestSetGenerate({
           )}
         </div>
 
-        {/* Chunk sample size */}
+        {/* Chunk / node sample size */}
         <div>
           <label className="mb-1 block text-xs font-medium text-text-secondary">
-            Chunk Sample Size
+            {useKgAsSource ? "Node Sample Size" : "Chunk Sample Size"}
           </label>
           <input
             type="number"
@@ -650,7 +805,9 @@ export default function TestSetGenerate({
             disabled={generating}
           />
           <p className="mt-1 text-xs text-text-muted">
-            Random subset of chunks to use. 0 = all chunks.
+            {useKgAsSource
+              ? "Random subset of KG nodes to use. 0 = all nodes."
+              : "Random subset of chunks to use. 0 = all chunks."}
           </p>
         </div>
 
@@ -755,7 +912,13 @@ export default function TestSetGenerate({
                       onClick={async () => {
                         try {
                           setKgBuilding(true);
-                          await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes);
+                          await buildKnowledgeGraph(
+                            projectId,
+                            kgInfo.chunk_config_id ?? (chunkConfigId as number) ?? null,
+                            overlapMaxNodes,
+                            "chunks",
+                            fastKgMode,
+                          );
                         } catch (err) {
                           setKgBuilding(false);
                           setError(
@@ -791,6 +954,27 @@ export default function TestSetGenerate({
                 <p className="text-xs text-text-muted">
                   Pre-build a knowledge graph for faster "Full" persona generation and richer test sets.
                 </p>
+
+                {/* Fast mode toggle */}
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={fastKgMode}
+                    onChange={(e) => setFastKgMode(e.target.checked)}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <div>
+                    <span className="text-xs font-medium text-text-secondary">
+                      Fast build mode
+                    </span>
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-text-muted">
+                      Combines keyphrases, summary, themes, entities &amp; filter into{" "}
+                      <strong className="text-text-secondary">one LLM call per node</strong>{" "}
+                      instead of 5 — roughly 3× faster. Slight quality trade-off.
+                    </p>
+                  </div>
+                </label>
+
                 <div className="flex items-center gap-3">
                   <label className="text-xs text-text-secondary whitespace-nowrap">
                     Overlap node cap
@@ -813,7 +997,7 @@ export default function TestSetGenerate({
                   onClick={async () => {
                     try {
                       setKgBuilding(true);
-                      await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes);
+                      await buildKnowledgeGraph(projectId, chunkConfigId as number, overlapMaxNodes, "chunks", fastKgMode);
                     } catch (err) {
                       setKgBuilding(false);
                       setError(
@@ -1031,7 +1215,7 @@ export default function TestSetGenerate({
               <button
                 type="button"
                 onClick={handleAutoGeneratePersonas}
-                disabled={generating || generatingPersonas || chunkConfigId === ""}
+                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
                 className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {generatingPersonas
@@ -1294,6 +1478,203 @@ export default function TestSetGenerate({
             })}
           </div>
         )}
+
+        {/* Graph RAG question types toggle */}
+        <div className="sm:col-span-2 flex items-end gap-3 pb-1">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={useGraphRag}
+              onChange={(e) => setUseGraphRag(e.target.checked)}
+              className="h-4 w-4 rounded border-border bg-input text-accent accent-accent"
+              disabled={generating}
+            />
+            Graph RAG Question Types
+          </label>
+        </div>
+
+        {/* Graph RAG config */}
+        {useGraphRag && (
+          <div className="sm:col-span-2 space-y-3 rounded-lg border border-border bg-elevated/50 p-3">
+            <p className="text-xs text-text-muted">
+              Generate relationship-aware questions using the knowledge graph. All types require a built KG.
+            </p>
+
+            {/* KG Source selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-muted">KG Source:</span>
+              <div className="flex rounded-md border border-border overflow-hidden text-xs">
+                {(["chunks", "documents"] as const).map((src) => (
+                  <button
+                    key={src}
+                    type="button"
+                    onClick={() => {
+                      setGraphRagKgSource(src);
+                      if (src === "documents") loadDocKgInfo();
+                    }}
+                    disabled={generating}
+                    className={`px-3 py-1 capitalize transition ${
+                      graphRagKgSource === src
+                        ? "bg-accent text-white"
+                        : "bg-elevated text-text-secondary hover:bg-elevated/80"
+                    }`}
+                  >
+                    {src}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Document KG status (shown only when Documents source selected) */}
+            {graphRagKgSource === "documents" && (
+              <div className="flex items-center justify-between rounded-md border border-border/60 bg-deep px-3 py-2 text-xs">
+                {docKgBuilding ? (
+                  <span className="flex items-center gap-1.5 text-text-muted">
+                    <svg className="h-3 w-3 animate-spin text-accent" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Building document KG…
+                  </span>
+                ) : docKgInfo?.exists ? (
+                  <span className={docKgInfo.chunks_stale ? "text-amber-400" : "text-green-400"}>
+                    {docKgInfo.chunks_stale
+                      ? `Document KG stale (${docKgInfo.num_nodes ?? 0} nodes)`
+                      : `Document KG ready (${docKgInfo.num_nodes ?? 0} nodes)`}
+                  </span>
+                ) : (
+                  <span className="text-text-muted">Document KG not built</span>
+                )}
+                <button
+                  type="button"
+                  disabled={generating || docKgBuilding}
+                  onClick={async () => {
+                    setDocKgBuilding(true);
+                    try {
+                      await buildKnowledgeGraph(projectId, null, overlapMaxNodes, "documents");
+                      // Poll until complete
+                      const poll = setInterval(async () => {
+                        try {
+                          const prog = await fetchKGBuildProgress(projectId, "documents");
+                          if (!prog.active) {
+                            clearInterval(poll);
+                            setDocKgBuilding(false);
+                            loadDocKgInfo();
+                          }
+                        } catch {
+                          clearInterval(poll);
+                          setDocKgBuilding(false);
+                        }
+                      }, 3000);
+                    } catch {
+                      setDocKgBuilding(false);
+                    }
+                  }}
+                  className="ml-3 rounded border border-accent/40 px-2 py-0.5 text-accent transition hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {docKgInfo?.exists ? (docKgInfo.chunks_stale ? "Rebuild" : "Rebuild") : "Build"}
+                </button>
+              </div>
+            )}
+
+            {/* Chunk KG warning when chunks source and no KG */}
+            {graphRagKgSource === "chunks" && kgInfo && !kgInfo.exists && (
+              <p className="text-xs text-amber-400">
+                No knowledge graph found — build one in the KG section above before using Graph RAG types.
+              </p>
+            )}
+            {GRAPH_RAG_CATEGORIES.map((cat) => {
+              const enabled = enabledGraphRag[cat.key] ?? false;
+              const pct = graphRagDistribution[cat.key] ?? 0;
+              return (
+                <div key={cat.key} className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(e) => {
+                          const next = { ...enabledGraphRag, [cat.key]: e.target.checked };
+                          setEnabledGraphRag(next);
+                          const enabledKeys = GRAPH_RAG_CATEGORIES
+                            .map((c) => c.key)
+                            .filter((k) => next[k]);
+                          if (enabledKeys.length > 0) {
+                            const share = Math.round(100 / enabledKeys.length);
+                            const newDist: Record<string, number> = {};
+                            enabledKeys.forEach((k, i) => {
+                              newDist[k] = i === enabledKeys.length - 1
+                                ? 100 - share * (enabledKeys.length - 1)
+                                : share;
+                            });
+                            GRAPH_RAG_CATEGORIES.forEach((c) => {
+                              if (!next[c.key]) newDist[c.key] = 0;
+                            });
+                            setGraphRagDistribution(newDist);
+                          }
+                        }}
+                        className="h-3.5 w-3.5 rounded border-border bg-input text-accent accent-accent"
+                        disabled={generating}
+                      />
+                      <div>
+                        <label className="text-xs font-medium text-text-secondary">
+                          {cat.label}
+                        </label>
+                        <p className="text-[11px] leading-tight text-text-muted">{cat.description}</p>
+                      </div>
+                    </div>
+                    {enabled && (
+                      <div className="flex shrink-0 items-baseline gap-0.5">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={pct}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => {
+                            const raw = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                            setGraphRagDistribution((prev) => {
+                              const enabledKeys = GRAPH_RAG_CATEGORIES
+                                .map((c) => c.key)
+                                .filter((k) => enabledGraphRag[k] && k !== cat.key);
+                              const remaining = 100 - raw;
+                              const distributed = redistributeEvenly(enabledKeys, remaining, prev);
+                              return { ...prev, [cat.key]: raw, ...distributed };
+                            });
+                          }}
+                          disabled={generating}
+                          className="w-10 rounded border border-border bg-input px-1 py-0.5 text-right text-xs tabular-nums text-text-primary focus:border-accent focus:outline-none"
+                        />
+                        <span className="text-xs text-text-muted">%</span>
+                      </div>
+                    )}
+                  </div>
+                  {enabled && (
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={pct}
+                      onChange={(e) => {
+                        const raw = Number(e.target.value);
+                        setGraphRagDistribution((prev) => {
+                          const enabledKeys = GRAPH_RAG_CATEGORIES
+                            .map((c) => c.key)
+                            .filter((k) => enabledGraphRag[k] && k !== cat.key);
+                          const remaining = 100 - raw;
+                          const distributed = redistributeEvenly(enabledKeys, remaining, prev);
+                          return { ...prev, [cat.key]: raw, ...distributed };
+                        });
+                      }}
+                      className="w-full accent-accent"
+                      disabled={generating}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Error */}
@@ -1306,7 +1687,11 @@ export default function TestSetGenerate({
       {/* Generate button */}
       <button
         onClick={handleGenerate}
-        disabled={generating || chunkConfigId === ""}
+        disabled={
+          generating ||
+          (chunksRequired && chunkConfigId === "") ||
+          (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))
+        }
         className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {generating ? (

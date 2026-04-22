@@ -26,6 +26,7 @@ from app.routes import (
     reports,
     custom_metrics,
     personas,
+    multi_llm_judge,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     application.include_router(reports.router)
     application.include_router(custom_metrics.router)
     application.include_router(personas.router)
+    application.include_router(multi_llm_judge.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")
@@ -91,14 +93,19 @@ def create_app() -> FastAPI:
         async def spa_fallback(path: str):
             return FileResponse(str(_frontend_dist / "index.html"))
 
-        @application.get("/")
-        async def root_redirect():
-            return RedirectResponse(url="/app/setup")
     else:
+        logger.warning("frontend/dist not found — SPA will not be served")
 
-        @application.get("/")
-        async def root_redirect_no_build():
-            return RedirectResponse(url="/app/setup")
+        @application.get("/app/{path:path}")
+        async def spa_not_built(path: str):
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Frontend not built. Run: cd frontend && npm run build"},
+            )
+
+    @application.get("/")
+    async def root_redirect():
+        return RedirectResponse(url="/app/setup")
 
     return application
 

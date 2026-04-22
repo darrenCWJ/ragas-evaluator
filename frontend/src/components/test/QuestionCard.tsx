@@ -7,6 +7,9 @@ const CATEGORY_COLORS: Record<string, string> = {
   in_knowledge_base: "bg-teal-500/15 text-teal-300",
   edge: "bg-orange-500/15 text-orange-300",
   out_of_knowledge_base: "bg-purple-500/15 text-purple-300",
+  bridge: "bg-red-500/15 text-red-300",
+  comparative: "bg-cyan-500/15 text-cyan-300",
+  community: "bg-lime-500/15 text-lime-300",
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -14,6 +17,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   in_knowledge_base: "In KB",
   edge: "Edge",
   out_of_knowledge_base: "Out of KB",
+  bridge: "Bridge",
+  comparative: "Comparative",
+  community: "Community",
+};
+
+const DIFFICULTY_COLORS: Record<string, string> = {
+  easy: "bg-green-500/15 text-green-300",
+  medium: "bg-yellow-500/15 text-yellow-300",
+  hard: "bg-red-500/15 text-red-300",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -243,6 +255,18 @@ export default function QuestionCard({
             </details>
           )}
 
+          {/* Graph path (bridge / comparative / community questions) */}
+          {!editing && q.metadata?.graph_path && Array.isArray(q.metadata.graph_path) && (q.metadata.graph_path as string[]).length > 0 && (
+            <details className="mt-2 group">
+              <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
+                <span className="ml-0.5">Graph path</span>
+              </summary>
+              <div className="mt-1.5 rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary font-mono leading-relaxed">
+                {(q.metadata.graph_path as string[]).join(" → ")}
+              </div>
+            </details>
+          )}
+
           {/* Edit mode */}
           {editing && (
             <div className="mt-3 space-y-3">
@@ -455,6 +479,15 @@ export default function QuestionCard({
                 className={`rounded-full px-2 py-0.5 font-medium ${CATEGORY_COLORS[q.category] || "bg-gray-500/15 text-gray-300"}`}
               >
                 {CATEGORY_LABELS[q.category] || q.category}
+              </span>
+            )}
+
+            {/* Difficulty badge */}
+            {(q.metadata?.difficulty as string | undefined) && (
+              <span
+                className={`rounded-full px-2 py-0.5 font-medium ${DIFFICULTY_COLORS[q.metadata!.difficulty as string] ?? "bg-gray-500/15 text-gray-300"}`}
+              >
+                {(q.metadata!.difficulty as string).charAt(0).toUpperCase() + (q.metadata!.difficulty as string).slice(1)}
               </span>
             )}
 

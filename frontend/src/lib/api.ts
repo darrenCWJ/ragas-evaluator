@@ -5,6 +5,14 @@ export interface Project {
   name: string;
   description: string;
   created_at: string;
+  judge_model_assignments: string[] | null;
+}
+
+export interface JudgeModel {
+  id: string;
+  name: string;
+  provider: "openai" | "anthropic" | "gemini";
+  available: boolean;
 }
 
 export interface Document {
@@ -192,7 +200,11 @@ async function formRequest<T>(path: string, form: FormData): Promise<T> {
     let detail = body;
     try {
       const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
+      if (parsed.detail) {
+        detail = Array.isArray(parsed.detail)
+          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join("; ")
+          : String(parsed.detail);
+      }
     } catch { /* use raw body */ }
     throw new ApiError(res.status, detail);
   }
@@ -213,7 +225,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = body;
     try {
       const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
+      if (parsed.detail) {
+        detail = Array.isArray(parsed.detail)
+          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join("; ")
+          : String(parsed.detail);
+      }
     } catch {
       // use raw body
     }
@@ -245,12 +261,37 @@ export async function fetchProjects(): Promise<Project[]> {
   return request<Project[]>("/api/projects");
 }
 
+export async function fetchProject(projectId: number): Promise<Project> {
+  return request<Project>(`/api/projects/${projectId}`);
+}
+
 export async function createProject(
   payload: CreateProjectPayload,
 ): Promise<Project> {
   return request<Project>("/api/projects", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchJudgeModels(): Promise<{ models: JudgeModel[] }> {
+  return request<{ models: JudgeModel[] }>("/api/judge-models");
+}
+
+export async function deleteProject(projectId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function updateProjectJudgeDefaults(
+  projectId: number,
+  assignments: string[] | null,
+): Promise<Project> {
+  return request<Project>(`/api/projects/${projectId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ judge_model_assignments: assignments }),
   });
 }
 
@@ -558,7 +599,7 @@ export interface TestSet {
 }
 
 export interface TestSetCreate {
-  chunk_config_id: number;
+  chunk_config_id?: number;
   name?: string;
   testset_size?: number;
   num_personas?: number;
@@ -568,6 +609,9 @@ export interface TestSetCreate {
   chunk_sample_size?: number;
   num_workers?: number;
   question_categories?: Record<string, number>;
+  graph_rag_kg_source?: string;
+  use_kg_as_source?: boolean;
+  fast_kg_mode?: boolean;
 }
 
 export interface TestQuestion {
@@ -729,7 +773,7 @@ export interface GenerationProgress {
   stage?: string;
   questions_generated?: number;
   target_size?: number;
-  status?: "generating" | "completed" | "failed";
+  status?: "generating" | "completed" | "failed" | "cancelled";
   test_set_id?: number;
   error_message?: string;
 }
@@ -747,6 +791,15 @@ export async function fetchGenerationProgress(
   return request<GenerationProgress>(
     `/api/projects/${projectId}/test-sets/generation-progress`,
   );
+}
+
+export async function cancelTestSetGeneration(
+  projectId: number,
+  testSetId: number,
+): Promise<{ status: string; test_set_id: number }> {
+  return request(`/api/projects/${projectId}/test-sets/${testSetId}/cancel`, {
+    method: "POST",
+  });
 }
 
 export async function createTestSet(
@@ -945,6 +998,31 @@ export async function cancelExperiment(
   );
 }
 
+export interface ProgressSnapshot {
+  phase: string;
+  current: number;
+  total: number;
+  question: string;
+  in_flight: string[];
+  in_flight_details: InFlightDetail[];
+  scoring_metrics: string[];
+  error: string | null;
+  result_count: number;
+}
+
+export async function fetchProgressSnapshot(
+  projectId: number,
+  experimentId: number,
+): Promise<ProgressSnapshot | null> {
+  try {
+    return await request<ProgressSnapshot>(
+      `/api/projects/${projectId}/experiments/${experimentId}/progress-snapshot`,
+    );
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchExperimentResults(
   projectId: number,
   experimentId: number,
@@ -1020,6 +1098,9 @@ export function runExperimentSSE(
   callbacks: ExperimentSSECallbacks,
   rubrics?: Record<string, string> | null,
   concurrency?: number,
+  multiLlmJudgeEvaluators?: number,
+  judgeModelAssignments?: string[],
+  judgeTemperatureAssignments?: number[],
 ): ExperimentSSEHandle {
   const controller = new AbortController();
 
@@ -1031,14 +1112,28 @@ export function runExperimentSSE(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ metrics, rubrics: rubrics ?? null, concurrency: concurrency ?? 5 }),
+          body: JSON.stringify({
+            metrics,
+            rubrics: rubrics ?? null,
+            concurrency: concurrency ?? 5,
+            multi_llm_judge_evaluators: multiLlmJudgeEvaluators ?? 5,
+            judge_model_assignments: judgeModelAssignments ?? null,
+            judge_temperature_assignments: judgeTemperatureAssignments ?? null,
+          }),
           signal: controller.signal,
         },
       );
 
       if (!runRes.ok) {
-        const body = await runRes.text().catch(() => "Unknown error");
-        callbacks.onError?.({ message: `${runRes.status}: ${body}` });
+        const body = await runRes.text().catch(() => "");
+        let message = `HTTP ${runRes.status}`;
+        try {
+          const parsed = JSON.parse(body);
+          message = parsed.detail ?? parsed.message ?? (body || message);
+        } catch {
+          if (body) message = body;
+        }
+        callbacks.onError?.({ message });
         return;
       }
 
@@ -1629,11 +1724,12 @@ export interface CustomMetric {
   id: number;
   project_id: number;
   name: string;
-  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics";
+  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics" | "criteria_judge" | "reference_judge";
   prompt: string | null;
   rubrics: Record<string, string> | null;
   min_score: number;
   max_score: number;
+  refined_prompt: string | null;
   created_at: string;
 }
 
@@ -1644,6 +1740,7 @@ export interface CustomMetricCreate {
   rubrics?: Record<string, string> | null;
   min_score?: number;
   max_score?: number;
+  refined_prompt?: string | null;
 }
 
 export async function fetchCustomMetrics(
@@ -1661,6 +1758,20 @@ export async function createCustomMetric(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
+}
+
+export async function refineMetricDescription(
+  projectId: number,
+  description: string,
+): Promise<{ refined_prompt: string }> {
+  return request<{ refined_prompt: string }>(
+    `/api/projects/${projectId}/custom-metrics/refine-description`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    },
+  );
 }
 
 export async function deleteCustomMetric(
@@ -1687,6 +1798,7 @@ export interface KnowledgeGraphInfo {
   heartbeat_stale?: boolean;
   chunks_stale?: boolean;
   chunk_config_id?: number;
+  kg_source?: string;
   last_heartbeat?: string;
   created_at?: string;
 }
@@ -1707,18 +1819,167 @@ export interface KGBuildProgress {
   total_steps?: number;
 }
 
+// --- Multi-LLM Judge Types ---
+
+export interface JudgeClaim {
+  type: "praise" | "critique";
+  response_quote: string;
+  chunk_reference: string | null;
+  chunk_quote: string | null;
+  explanation: string;
+}
+
+export interface ClaimAnnotation {
+  status: "accurate" | "inaccurate" | "unsure";
+  comment: string | null;
+  annotated_at: string;
+}
+
+export interface JudgeEvaluation {
+  id: number;
+  evaluator_index: number;
+  verdict: "positive" | "mixed" | "critical";
+  score: number;
+  reasoning: string | null;
+  claims: JudgeClaim[];
+  annotations: Record<number, ClaimAnnotation>;
+  created_at: string;
+}
+
+export interface JudgeEvaluationsResponse {
+  result_id: number;
+  evaluations: JudgeEvaluation[];
+}
+
+export interface JudgeAnnotationSampleItem {
+  result_id: number;
+  test_question_id: number;
+  question: string;
+  reference_answer: string;
+  response: string | null;
+  evaluations: JudgeEvaluation[];
+}
+
+export interface JudgeAnnotationSampleResult {
+  experiment_id: number;
+  total_results: number;
+  sample_size: number;
+  annotated_count: number;
+  sample: JudgeAnnotationSampleItem[];
+}
+
+export interface JudgeEvaluatorStats {
+  evaluator_index: number;
+  reliability: number | null;
+  accurate_claims: number;
+  inaccurate_claims: number;
+  unsure_claims: number;
+  total_claims_annotated: number;
+  verdict_counts: Record<string, number>;
+  excluded: boolean;
+}
+
+export interface JudgeReliabilityResult {
+  experiment_id: number;
+  evaluators: JudgeEvaluatorStats[];
+  excluded_indices: number[];
+  overall_reliability: number | null;
+  threshold: number;
+  annotation_progress: { annotated_evaluators: number; total_evaluators: number };
+}
+
+export interface JudgeSummaryResult {
+  result_id: number;
+  question: string;
+  response: string | null;
+  reference_answer: string;
+  evaluator_verdicts: Record<number, string>;
+  adjusted_score: number;
+}
+
+export interface JudgeSummaryResponse {
+  experiment_id: number;
+  excluded_indices: number[];
+  results: JudgeSummaryResult[];
+}
+
+// --- Multi-LLM Judge API ---
+
+export async function fetchJudgeEvaluations(
+  projectId: number,
+  experimentId: number,
+  resultId: number,
+  metricName?: string,
+): Promise<JudgeEvaluationsResponse> {
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations`;
+  return request<JudgeEvaluationsResponse>(url);
+}
+
+export async function fetchJudgeAnnotationSample(
+  projectId: number,
+  experimentId: number,
+  metricName?: string,
+): Promise<JudgeAnnotationSampleResult> {
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/judge-annotation-sample?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/judge-annotation-sample`;
+  return request<JudgeAnnotationSampleResult>(url);
+}
+
+export async function annotateJudgeClaim(
+  projectId: number,
+  experimentId: number,
+  resultId: number,
+  evaluationId: number,
+  claimIndex: number,
+  status: "accurate" | "inaccurate" | "unsure",
+  comment?: string,
+): Promise<{ evaluation_id: number; claim_index: number; status: string }> {
+  return request(
+    `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations/${evaluationId}/claims/${claimIndex}/annotate`,
+    { method: "POST", body: JSON.stringify({ status, comment: comment ?? null }) },
+  );
+}
+
+export async function fetchJudgeReliability(
+  projectId: number,
+  experimentId: number,
+  metricName?: string,
+): Promise<JudgeReliabilityResult> {
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/judge-reliability?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/judge-reliability`;
+  return request<JudgeReliabilityResult>(url);
+}
+
+export async function fetchJudgeSummary(
+  projectId: number,
+  experimentId: number,
+  metricName?: string,
+): Promise<JudgeSummaryResponse> {
+  const url = metricName
+    ? `/api/projects/${projectId}/experiments/${experimentId}/judge-summary?metric_name=${encodeURIComponent(metricName)}`
+    : `/api/projects/${projectId}/experiments/${experimentId}/judge-summary`;
+  return request<JudgeSummaryResponse>(url);
+}
+
 export async function fetchKnowledgeGraphInfo(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<KnowledgeGraphInfo> {
   return request<KnowledgeGraphInfo>(
-    `/api/projects/${projectId}/knowledge-graph`,
+    `/api/projects/${projectId}/knowledge-graph?kg_source=${encodeURIComponent(kgSource)}`,
   );
 }
 
 export async function buildKnowledgeGraph(
   projectId: number,
-  chunkConfigId: number,
+  chunkConfigId: number | null,
   overlapMaxNodes: number | null = 500,
+  kgSource: string = "chunks",
+  fastMode: boolean = false,
 ): Promise<{ status: string }> {
   return request<{ status: string }>(
     `/api/projects/${projectId}/build-knowledge-graph`,
@@ -1727,6 +1988,8 @@ export async function buildKnowledgeGraph(
       body: JSON.stringify({
         chunk_config_id: chunkConfigId,
         overlap_max_nodes: overlapMaxNodes,
+        fast_mode: fastMode || undefined,
+        kg_source: kgSource,
       }),
     },
   );
@@ -1734,26 +1997,29 @@ export async function buildKnowledgeGraph(
 
 export async function fetchKGBuildProgress(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<KGBuildProgress> {
   return request<KGBuildProgress>(
-    `/api/projects/${projectId}/knowledge-graph/progress`,
+    `/api/projects/${projectId}/knowledge-graph/progress?kg_source=${encodeURIComponent(kgSource)}`,
   );
 }
 
 export async function deleteKnowledgeGraph(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<void> {
   await request<void>(
-    `/api/projects/${projectId}/knowledge-graph`,
+    `/api/projects/${projectId}/knowledge-graph?kg_source=${encodeURIComponent(kgSource)}`,
     { method: "DELETE" },
   );
 }
 
 export async function resetKnowledgeGraph(
   projectId: number,
+  kgSource: string = "chunks",
 ): Promise<{ deleted: boolean; was_complete?: boolean }> {
   return request<{ deleted: boolean; was_complete?: boolean }>(
-    `/api/projects/${projectId}/knowledge-graph/reset`,
+    `/api/projects/${projectId}/knowledge-graph/reset?kg_source=${encodeURIComponent(kgSource)}`,
     { method: "POST" },
   );
 }
@@ -1794,6 +2060,7 @@ export interface KGListItem {
   id: number;
   project_id: number;
   project_name: string;
+  kg_source: string;
   num_nodes: number;
   num_chunks: number;
   is_complete: boolean;

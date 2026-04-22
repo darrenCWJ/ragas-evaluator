@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import {
   fetchExperiment,
   fetchExperimentResults,
+  fetchCustomMetrics,
   exportExperiment,
   ApiError,
 } from "../../lib/api";
 import type { Experiment, ExperimentResult } from "../../lib/api";
 import QuestionResultRow from "./QuestionResultRow";
+import MultiLLMJudgeDashboard from "./MultiLLMJudgeDashboard";
 import {
   humanizeMetric,
   scoreBarColor,
@@ -26,15 +28,24 @@ type LoadState =
 
 export default function ExperimentResults({ projectId, experimentId }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [criteriaMetricNames, setCriteriaMetricNames] = useState<string[]>([]);
+  // Active judge metric for the dashboard tab (undefined = built-in multi-LLM judge)
+  const [activeJudgeMetric, setActiveJudgeMetric] = useState<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const [exp, results] = await Promise.all([
+      const [exp, results, customMetrics] = await Promise.all([
         fetchExperiment(projectId, experimentId),
         fetchExperimentResults(projectId, experimentId),
+        fetchCustomMetrics(projectId),
       ]);
       setState({ status: "loaded", experiment: exp, results });
+      setCriteriaMetricNames(
+        customMetrics
+          .filter((m) => m.metric_type === "criteria_judge" || m.metric_type === "reference_judge")
+          .map((m) => m.name),
+      );
     } catch (err) {
       setState({
         status: "error",
@@ -46,6 +57,14 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Must be at top level — before any conditional returns
+  const [activeTab, setActiveTab] = useState<"results" | "judge">("results");
+  // Live judge score overrides (keyed by metric name) — updated when exclusions change
+  const [judgeScoreOverrides, setJudgeScoreOverrides] = useState<Record<string, number>>({});
+  const handleJudgeScoreUpdate = useCallback((metricKey: string, avg: number) => {
+    setJudgeScoreOverrides((prev) => ({ ...prev, [metricKey]: avg }));
+  }, []);
 
   /* ── Export handler ── */
   const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
@@ -108,6 +127,12 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }
 
   const { experiment, results } = state;
+  const hasBuiltinJudge = results.some((r) => "multi_llm_judge" in r.metrics);
+  const criteriaJudgesInResults = criteriaMetricNames.filter((n) =>
+    results.some((r) => n in r.metrics),
+  );
+  const hasJudge = hasBuiltinJudge || criteriaJudgesInResults.length > 0;
+
   const agg = experiment.aggregate_metrics;
 
   /* Compute overall score from aggregate metrics */
@@ -115,7 +140,8 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   let metricEntries: [string, number][] = [];
 
   if (agg) {
-    metricEntries = Object.entries(agg).filter(
+    const merged = { ...agg, ...judgeScoreOverrides };
+    metricEntries = Object.entries(merged).filter(
       (e): e is [string, number] => e[1] !== null,
     );
     if (metricEntries.length > 0) {
@@ -129,9 +155,30 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
     <div className="space-y-6">
       {/* ── Header ── */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-text-primary tracking-wide uppercase">
-          Results
-        </h3>
+        <div className="flex items-center gap-1 border-b border-border">
+          <button
+            onClick={() => setActiveTab("results")}
+            className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+              activeTab === "results"
+                ? "border-accent text-accent"
+                : "border-transparent text-text-muted hover:text-text-secondary"
+            }`}
+          >
+            Results
+          </button>
+          {hasJudge && (
+            <button
+              onClick={() => setActiveTab("judge")}
+              className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+                activeTab === "judge"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-text-muted hover:text-text-secondary"
+              }`}
+            >
+              Judge Reliability
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-text-muted">
             {results.length} question{results.length !== 1 ? "s" : ""} evaluated
@@ -231,20 +278,77 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
         </div>
       )}
 
-      {/* ── Empty results ── */}
-      {results.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
-          <p className="text-sm text-text-muted">
-            No per-question results available.
-          </p>
-        </div>
-      ) : (
-        /* ── Per-question results ── */
-        <div className="space-y-1.5">
-          {results.map((r) => (
-            <QuestionResultRow key={r.id} result={r} />
-          ))}
-        </div>
+      {activeTab === "results" && (
+        <>
+          {/* ── Empty results ── */}
+          {results.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
+              <p className="text-sm text-text-muted">
+                No per-question results available.
+              </p>
+            </div>
+          ) : (
+            /* ── Per-question results ── */
+            <div className="space-y-1.5">
+              {results.map((r) => (
+                <QuestionResultRow
+                  key={r.id}
+                  result={r}
+                  projectId={projectId}
+                  experimentId={experimentId}
+                  criteriaMetricNames={criteriaMetricNames}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {activeTab === "judge" && hasJudge && (
+        <>
+          {/* Selector when multiple judge metrics exist */}
+          {(hasBuiltinJudge ? 1 : 0) + criteriaJudgesInResults.length > 1 && (
+            <div className="mb-4 flex flex-wrap gap-2">
+              {hasBuiltinJudge && (
+                <button
+                  onClick={() => setActiveJudgeMetric(undefined)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                    activeJudgeMetric === undefined
+                      ? "border-accent/50 bg-accent/10 text-accent"
+                      : "border-border text-text-secondary hover:border-border-focus"
+                  }`}
+                >
+                  Multi-LLM Judge
+                </button>
+              )}
+              {criteriaJudgesInResults.map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setActiveJudgeMetric(n)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                    activeJudgeMetric === n
+                      ? "border-purple-500/50 bg-purple-500/10 text-purple-300"
+                      : "border-border text-text-secondary hover:border-border-focus"
+                  }`}
+                >
+                  {n.replace(/_/g, " ")}
+                </button>
+              ))}
+            </div>
+          )}
+          <MultiLLMJudgeDashboard
+            projectId={projectId}
+            experimentId={experimentId}
+            metricName={
+              activeJudgeMetric !== undefined
+                ? activeJudgeMetric
+                : !hasBuiltinJudge && criteriaJudgesInResults.length > 0
+                  ? criteriaJudgesInResults[0]
+                  : undefined
+            }
+            onScoreUpdate={handleJudgeScoreUpdate}
+          />
+        </>
       )}
     </div>
   );

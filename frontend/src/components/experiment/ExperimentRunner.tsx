@@ -3,12 +3,17 @@ import {
   runExperimentSSE,
   observeExperimentProgress,
   fetchExperiment,
+  fetchProgressSnapshot,
   fetchCustomMetrics,
+  fetchJudgeModels,
+  fetchProject,
+  updateProjectJudgeDefaults,
   cancelExperiment,
 } from "../../lib/api";
 import type {
   Experiment,
   CustomMetric,
+  JudgeModel,
   ExperimentSSEHandle,
   SSEStartedEvent,
   SSEProgressEvent,
@@ -83,6 +88,8 @@ const DOMAIN_METRICS = [
   "sql_semantic_equivalence",
   "datacompy_score",
 ];
+
+const JUDGE_METRICS = ["multi_llm_judge"];
 
 /** Specialized metrics that need infrastructure not yet available (multi-turn, tool calls, etc.) */
 const COMING_SOON_METRICS = [
@@ -226,17 +233,7 @@ export default function ExperimentRunner({
   })();
 
   const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
-  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(
-    () => {
-      const defaults = new Set(DEFAULT_METRICS);
-      if (!hasContexts) {
-        for (const m of CONTEXT_REQUIRED_METRICS) {
-          defaults.delete(m);
-        }
-      }
-      return defaults;
-    },
-  );
+  const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set());
   const [runState, setRunState] = useState<RunState>({ phase: "idle" });
   const [errorCount, setErrorCount] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -258,6 +255,43 @@ export default function ExperimentRunner({
   const isCsvExperiment = connectorType === "csv";
   const [concurrency, setConcurrency] = useState(isCsvExperiment ? 10 : isBotExperiment ? 2 : 5);
   const [rubrics, setRubrics] = useState<Record<string, string>>({ ...DEFAULT_RUBRICS });
+  const [judgeEvaluators, setJudgeEvaluators] = useState(5);
+
+  // Multi-model judge state — seed with fallback list so dropdowns are usable immediately
+  const FALLBACK_MODELS: JudgeModel[] = [
+    { id: "gpt-4o",                  name: "GPT-4o",                    provider: "openai",   available: true  },
+    { id: "gpt-4o-mini",             name: "GPT-4o Mini",               provider: "openai",   available: true  },
+    { id: "gpt-4.1",                 name: "GPT-4.1",                   provider: "openai",   available: true  },
+    { id: "gpt-4.1-mini",            name: "GPT-4.1 Mini",              provider: "openai",   available: true  },
+    { id: "claude-opus-4-5",         name: "Claude Opus 4.5",           provider: "anthropic",available: false },
+    { id: "claude-sonnet-4-5",       name: "Claude Sonnet 4.5",         provider: "anthropic",available: false },
+    { id: "claude-haiku-4-5",        name: "Claude Haiku 4.5",          provider: "anthropic",available: false },
+    { id: "gemini-2.0-flash",        name: "Gemini 2.0 Flash",          provider: "gemini",   available: false },
+    { id: "gemini-1.5-pro",          name: "Gemini 1.5 Pro",            provider: "gemini",   available: false },
+    { id: "azure.claude-haiku-4-5",  name: "Claude Haiku 4.5 (Azure)",  provider: "gateway",  available: false },
+    { id: "azure.claude-sonnet-4-5", name: "Claude Sonnet 4.5 (Azure)", provider: "gateway",  available: false },
+    { id: "rsn.claude-haiku-4-5",    name: "Claude Haiku 4.5 (RSN)",    provider: "gateway",  available: false },
+    { id: "rsn.claude-sonnet-4-5",   name: "Claude Sonnet 4.5 (RSN)",   provider: "gateway",  available: false },
+    { id: "rsn.claude-opus-4-5",     name: "Claude Opus 4.5 (RSN)",     provider: "gateway",  available: false },
+    { id: "gemini-2.5-flash",        name: "Gemini 2.5 Flash",          provider: "gateway",  available: false },
+    { id: "gemini-2.5-flash-lite",   name: "Gemini 2.5 Flash Lite",     provider: "gateway",  available: false },
+  ];
+  const [availableModels, setAvailableModels] = useState<JudgeModel[]>(FALLBACK_MODELS);
+  const [judgeModelSlots, setJudgeModelSlots] = useState<string[]>(["gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini"]);
+  const [judgeTempSlots, setJudgeTempSlots] = useState<number[]>([0.3, 0.525, 0.75]);
+  const [savingDefaults, setSavingDefaults] = useState(false);
+
+  // Derived: judge selected + missing key check (placed after all useState declarations)
+  const judgeSelected =
+    selectedMetrics.has("multi_llm_judge") ||
+    customMetrics.some((cm) => (cm.metric_type === "criteria_judge" || cm.metric_type === "reference_judge") && selectedMetrics.has(cm.name));
+  const missingKeyModels = judgeSelected
+    ? judgeModelSlots.filter((id) => {
+        const m = availableModels.find((am) => am.id === id);
+        return m ? !m.available : false;
+      })
+    : [];
+  const hasMissingKeys = missingKeyModels.length > 0;
 
   const updateRubric = (key: string, value: string) => {
     setRubrics((prev) => ({ ...prev, [key]: value }));
@@ -267,11 +301,28 @@ export default function ExperimentRunner({
     setRubrics({ ...DEFAULT_RUBRICS });
   };
 
-  // Load custom metrics for this project
+  // Load custom metrics, available judge models, and project judge defaults
   useEffect(() => {
     fetchCustomMetrics(projectId)
       .then(setCustomMetrics)
       .catch(() => setCustomMetrics([]));
+    fetchJudgeModels()
+      .then((data) => setAvailableModels(data.models))
+      .catch(() => setAvailableModels([]));
+    fetchProject(projectId)
+      .then((proj) => {
+        if (proj.judge_model_assignments && proj.judge_model_assignments.length > 0) {
+          setJudgeModelSlots(proj.judge_model_assignments);
+          // Restore linear temperatures for the saved slots
+          const n = proj.judge_model_assignments.length;
+          if (n === 1) {
+            setJudgeTempSlots([0.3]);
+          } else {
+            setJudgeTempSlots(Array.from({ length: n }, (_, i) => Math.round((0.3 + (0.45 / (n - 1)) * i) * 1000) / 1000));
+          }
+        }
+      })
+      .catch(() => {});
   }, [projectId]);
 
   // Auto-scroll log to bottom when new items arrive
@@ -307,10 +358,43 @@ export default function ExperimentRunner({
     // Already observing
     if (handleRef.current) return;
 
-    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "", inFlight: [], scoringMetrics: [], inFlightDetails: [] });
+    setRunState({ phase: "running", current: 0, total: 0, currentQuestion: "Reconnecting...", inFlight: [], scoringMetrics: [], inFlightDetails: [] });
     startTimer();
 
+    // Pre-populate state from snapshot so the UI shows real progress immediately
+    // instead of "Initializing..." until the first SSE event arrives.
+    fetchProgressSnapshot(projectId, experiment.id).then((snapshot) => {
+      if (!snapshot || snapshot.total === 0) return;
+      setRunState((prev) => {
+        if (prev.phase !== "running" || prev.total > 0) return prev;
+        return {
+          phase: "running",
+          current: snapshot.current,
+          total: snapshot.total,
+          currentQuestion: snapshot.question,
+          inFlight: snapshot.in_flight,
+          scoringMetrics: snapshot.scoring_metrics,
+          inFlightDetails: snapshot.in_flight_details,
+        };
+      });
+    }).catch(() => {});
+
     const handle = observeExperimentProgress(projectId, experiment.id, {
+      onStarted: (data: SSEStartedEvent) => {
+        if (data.experiment_name) {
+          setExperimentMeta({
+            name: data.experiment_name,
+            model: data.model ?? "",
+            testSet: data.test_set_name ?? "",
+          });
+        }
+        // Update total from the started event, but preserve any progress already shown
+        setRunState((prev) => ({
+          ...prev,
+          phase: "running" as const,
+          total: data.total_questions,
+        } as typeof prev));
+      },
       onProgress: (data: SSEProgressEvent) => {
         if (data.error) setErrorCount((prev) => prev + 1);
         if (data.new_completions?.length) {
@@ -434,6 +518,9 @@ export default function ExperimentRunner({
       },
       selectedMetrics.has("rubrics_score") ? rubrics : null,
       concurrency,
+      judgeModelSlots.length,
+      judgeModelSlots,
+      judgeTempSlots,
     );
 
     handleRef.current = handle;
@@ -478,7 +565,7 @@ export default function ExperimentRunner({
       {/* Idle — metric selection + run button */}
       {runState.phase === "idle" && (
         <div className="space-y-4">
-          {disabledMetrics.size > 0 && (
+          {!hasContexts && (
             <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-300/80">
               {connectorType
                 ? `The ${connectorType} connector does not return retrieved contexts — context-dependent metrics are disabled.`
@@ -549,6 +636,17 @@ export default function ExperimentRunner({
                 sql_semantic_equivalence: "no questions in this test set have reference_sql metadata",
                 datacompy_score: "no questions in this test set have reference_data metadata",
               }}
+            />
+
+            {/* Judge Metrics */}
+            <MetricGroup
+              label="Judge Metrics"
+              labelClass="text-violet-400"
+              metrics={JUDGE_METRICS}
+              selected={selectedMetrics}
+              onToggle={toggleMetric}
+              activeClass="border-violet-500/50 bg-violet-500/15 text-violet-400"
+              inactiveClass="border-border bg-card text-text-muted hover:border-violet-500/30 hover:text-text-secondary"
             />
 
             {/* Coming Soon — specialized metrics */}
@@ -653,6 +751,113 @@ export default function ExperimentRunner({
             </div>
           )}
 
+          {/* LLM Judge Settings — shown when multi_llm_judge, criteria_judge, or reference_judge is selected */}
+          {(selectedMetrics.has("multi_llm_judge") || customMetrics.some((cm) => (cm.metric_type === "criteria_judge" || cm.metric_type === "reference_judge") && selectedMetrics.has(cm.name))) && (
+            <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-4 py-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-violet-400">LLM Judge Settings</p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setSavingDefaults(true);
+                    try {
+                      await updateProjectJudgeDefaults(projectId, judgeModelSlots);
+                    } finally {
+                      setSavingDefaults(false);
+                    }
+                  }}
+                  disabled={savingDefaults}
+                  className="text-2xs text-violet-400/70 hover:text-violet-400 transition disabled:opacity-40"
+                >
+                  {savingDefaults ? "Saving..." : "Save as project default"}
+                </button>
+              </div>
+
+              {/* Per-slot model selectors */}
+              <div className="space-y-2">
+                {/* Column headers */}
+                <div className="flex items-center gap-2">
+                  <span className="w-20 shrink-0" />
+                  <span className="flex-1 text-2xs font-medium text-text-muted">Model</span>
+                  <span className="w-16 shrink-0 text-center text-2xs font-medium text-text-muted">Temp</span>
+                  {judgeModelSlots.length > 1 && <span className="w-5 shrink-0" />}
+                </div>
+                {judgeModelSlots.map((modelId, i) => {
+                  const model = availableModels.find(m => m.id === modelId);
+                  const unavailable = model ? !model.available : false;
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-2xs text-text-muted">Evaluator {i + 1}</span>
+                      <select
+                        value={modelId}
+                        onChange={(e) => {
+                          const next = [...judgeModelSlots];
+                          next[i] = e.target.value;
+                          setJudgeModelSlots(next);
+                        }}
+                        className="flex-1 rounded-lg border border-border bg-input px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-violet-500/50"
+                      >
+                        {availableModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}{!m.available ? " ⚠ No API key" : ""}
+                          </option>
+                        ))}
+                      </select>
+                      {unavailable && (
+                        <span className="shrink-0 text-2xs text-yellow-500">⚠ key missing</span>
+                      )}
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={judgeTempSlots[i] ?? 0.5}
+                        onChange={(e) => {
+                          const next = [...judgeTempSlots];
+                          next[i] = Math.min(1, Math.max(0, parseFloat(e.target.value) || 0));
+                          setJudgeTempSlots(next);
+                        }}
+                        className="w-16 shrink-0 rounded-lg border border-border bg-input px-2 py-1.5 text-center text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-violet-500/50"
+                        title="Temperature (0–1)"
+                      />
+                      {judgeModelSlots.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setJudgeModelSlots((prev) => prev.filter((_, idx) => idx !== i));
+                            setJudgeTempSlots((prev) => prev.filter((_, idx) => idx !== i));
+                          }}
+                          className="shrink-0 rounded p-1 text-text-muted hover:text-red-400 transition"
+                        >
+                          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add evaluator button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setJudgeModelSlots((prev) => [...prev, "gpt-4o-mini"]);
+                  setJudgeTempSlots((prev) => [...prev, 0.5]);
+                }}
+                className="text-2xs text-violet-400 hover:text-violet-300 transition"
+              >
+                + Add Evaluator
+              </button>
+
+              <p className="text-2xs text-text-muted">
+                Each evaluator uses a different model and temperature for diverse perspectives.
+                Human annotations drive per-evaluator reliability scoring.
+              </p>
+            </div>
+          )}
+
           {/* Concurrency control */}
           <div className="flex items-center gap-3">
             <label className="text-xs font-medium text-text-secondary">
@@ -674,13 +879,20 @@ export default function ExperimentRunner({
             </span>
           </div>
 
-          <button
-            onClick={handleRun}
-            disabled={selectedMetrics.size === 0}
-            className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Run Experiment
-          </button>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              onClick={handleRun}
+              disabled={selectedMetrics.size === 0 || hasMissingKeys}
+              className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Run Experiment
+            </button>
+            {hasMissingKeys && (
+              <p className="text-2xs text-yellow-500">
+                Missing API key for: {[...new Set(missingKeyModels)].join(", ")}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
