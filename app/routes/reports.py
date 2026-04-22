@@ -156,6 +156,36 @@ async def get_project_report(project_id: int):
             "overall_evaluator_reliability": None,
         }
 
+    exp_ids = [exp["id"] for exp in experiments]
+    bc_ids = list({exp["bot_config_id"] for exp in experiments if exp["bot_config_id"]})
+    rc_ids = list({exp["rag_config_id"] for exp in experiments if exp["rag_config_id"]})
+
+    exp_placeholders = ",".join("?" * len(exp_ids))
+    all_result_rows_raw = conn.execute(
+        f"SELECT experiment_id, metrics_json FROM experiment_results WHERE experiment_id IN ({exp_placeholders})",
+        exp_ids,
+    ).fetchall()
+    results_by_exp: dict[int, list] = {eid: [] for eid in exp_ids}
+    for rr in all_result_rows_raw:
+        results_by_exp[rr["experiment_id"]].append(rr)
+
+    bc_info: dict[int, dict] = {}
+    if bc_ids:
+        bc_placeholders = ",".join("?" * len(bc_ids))
+        for r in conn.execute(
+            f"SELECT id, name, connector_type FROM bot_configs WHERE id IN ({bc_placeholders})",
+            bc_ids,
+        ).fetchall():
+            bc_info[r["id"]] = {"name": r["name"], "connector_type": r["connector_type"]}
+
+    rc_name: dict[int, str] = {}
+    if rc_ids:
+        rc_placeholders = ",".join("?" * len(rc_ids))
+        for r in conn.execute(
+            f"SELECT id, name FROM rag_configs WHERE id IN ({rc_placeholders})", rc_ids
+        ).fetchall():
+            rc_name[r["id"]] = r["name"]
+
     # Build per-experiment detail
     experiment_reports = []
     # Accumulators for project-level rollups
@@ -169,34 +199,16 @@ async def get_project_report(project_id: int):
     bot_accum: dict[int, dict] = {}  # bot_config_id -> accumulator
 
     for exp in experiments:
-        result_rows = conn.execute(
-            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
-            (exp["id"],),
-        ).fetchall()
-
+        result_rows = results_by_exp[exp["id"]]
         aggregate = _aggregate_metrics(result_rows)
         overall = _overall_score(aggregate)
         sv = _source_verification_summary(conn, exp["id"])
         reliability = _evaluator_reliability(conn, exp["id"])
 
-        # Resolve bot or rag config name
-        bot_config_name = None
-        rag_config_name = None
-        if exp["bot_config_id"]:
-            bc = conn.execute(
-                "SELECT name, connector_type FROM bot_configs WHERE id = ?",
-                (exp["bot_config_id"],),
-            ).fetchone()
-            bot_config_name = bc["name"] if bc else None
-            connector_type = bc["connector_type"] if bc else None
-        else:
-            connector_type = None
-
-        if exp["rag_config_id"]:
-            rc = conn.execute(
-                "SELECT name FROM rag_configs WHERE id = ?", (exp["rag_config_id"],)
-            ).fetchone()
-            rag_config_name = rc["name"] if rc else None
+        bc = bc_info.get(exp["bot_config_id"]) if exp["bot_config_id"] else None
+        bot_config_name = bc["name"] if bc else None
+        connector_type = bc["connector_type"] if bc else None
+        rag_config_name = rc_name.get(exp["rag_config_id"]) if exp["rag_config_id"] else None
 
         entry = {
             "id": exp["id"],
@@ -321,25 +333,26 @@ async def get_experiment_trends(
     experiments = conn.execute(query, params).fetchall()
 
     points = []
-    for exp in experiments:
-        result_rows = conn.execute(
-            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
-            (exp["id"],),
+    if experiments:
+        exp_ids = [exp["id"] for exp in experiments]
+        placeholders = ",".join("?" * len(exp_ids))
+        result_rows_all = conn.execute(
+            f"SELECT experiment_id, metrics_json FROM experiment_results WHERE experiment_id IN ({placeholders})",
+            exp_ids,
         ).fetchall()
+        results_by_exp: dict[int, list] = {eid: [] for eid in exp_ids}
+        for rr in result_rows_all:
+            results_by_exp[rr["experiment_id"]].append(rr)
 
-        aggregate = _aggregate_metrics(result_rows)
-
-        if metric == "overall":
-            value = _overall_score(aggregate)
-        else:
-            value = aggregate.get(metric)
-
-        points.append({
-            "experiment_id": exp["id"],
-            "experiment_name": exp["name"],
-            "completed_at": exp["completed_at"],
-            "value": value,
-        })
+        for exp in experiments:
+            aggregate = _aggregate_metrics(results_by_exp[exp["id"]])
+            value = _overall_score(aggregate) if metric == "overall" else aggregate.get(metric)
+            points.append({
+                "experiment_id": exp["id"],
+                "experiment_name": exp["name"],
+                "completed_at": exp["completed_at"],
+                "value": value,
+            })
 
     return {
         "project_id": project_id,

@@ -159,6 +159,32 @@ def _compute_aggregates(conn, exp_id: int) -> dict:
     return aggregate
 
 
+def _aggregate_rows(result_rows) -> tuple[dict | None, float | None, int]:
+    """Aggregate metric scores from experiment_results rows.
+
+    Returns (aggregate_metrics, overall_score, result_count).
+    Metrics with all-null values are omitted (unlike _compute_aggregates).
+    """
+    n = len(result_rows)
+    if not result_rows:
+        return None, None, 0
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for rr in result_rows:
+        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
+        for metric_name, value in metrics.items():
+            if value is not None:
+                totals[metric_name] = totals.get(metric_name, 0.0) + value
+                counts[metric_name] = counts.get(metric_name, 0) + 1
+    aggregate: dict[str, float | None] = {}
+    for mn in totals:
+        cnt = counts[mn]
+        aggregate[mn] = round(totals[mn] / cnt, 4) if cnt > 0 else None
+    valid_scores = [v for v in aggregate.values() if v is not None]
+    overall = round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
+    return aggregate, overall, n
+
+
 # RAG config fields to compare for delta
 _RAG_CONFIG_DIFF_FIELDS = [
     "name",
@@ -368,49 +394,66 @@ async def list_experiments(project_id: int):
         (project_id,),
     ).fetchall()
 
+    if not rows:
+        return []
+
+    ts_ids = list({row["test_set_id"] for row in rows})
+    bc_ids = [row["bot_config_id"] for row in rows if row["bot_config_id"]]
+
+    ts_placeholders = ",".join("?" * len(ts_ids))
+    q_stats = conn.execute(
+        f"""
+        SELECT
+            test_set_id,
+            SUM(CASE WHEN status IN ('approved', 'edited') THEN 1 ELSE 0 END) AS approved_count,
+            MAX(CASE WHEN reference_contexts IS NOT NULL
+                          AND reference_contexts != '[]'
+                          AND reference_contexts != '' THEN 1 ELSE 0 END) AS has_ref_ctx,
+            MAX(CASE WHEN metadata_json IS NOT NULL
+                          AND metadata_json LIKE '%reference_sql%' THEN 1 ELSE 0 END) AS has_ref_sql,
+            MAX(CASE WHEN metadata_json IS NOT NULL
+                          AND metadata_json LIKE '%reference_data%' THEN 1 ELSE 0 END) AS has_ref_data
+        FROM test_questions
+        WHERE test_set_id IN ({ts_placeholders})
+        GROUP BY test_set_id
+        """,
+        ts_ids,
+    ).fetchall()
+    q_stats_by_ts = {r["test_set_id"]: r for r in q_stats}
+
+    ts_names = conn.execute(
+        f"SELECT id, name FROM test_sets WHERE id IN ({ts_placeholders})", ts_ids
+    ).fetchall()
+    ts_name_by_id = {r["id"]: r["name"] for r in ts_names}
+
+    bc_by_id: dict = {}
+    if bc_ids:
+        bc_placeholders = ",".join("?" * len(bc_ids))
+        bc_rows = conn.execute(
+            f"SELECT id, connector_type, config_json FROM bot_configs WHERE id IN ({bc_placeholders})",
+            bc_ids,
+        ).fetchall()
+        bc_by_id = {r["id"]: r for r in bc_rows}
+
     experiments = []
     for row in rows:
         exp = _parse_experiment_row(row)
-        q_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited')",
-            (row["test_set_id"],),
-        ).fetchone()["cnt"]
-        exp["approved_question_count"] = q_count
-        ts = conn.execute(
-            "SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)
-        ).fetchone()
-        exp["test_set_name"] = ts["name"] if ts else None
-        ctx_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND reference_contexts IS NOT NULL AND reference_contexts != '[]' AND reference_contexts != ''",
-            (row["test_set_id"],),
-        ).fetchone()["cnt"]
-        exp["has_reference_contexts"] = ctx_count > 0
-        # Check which domain-specific metadata fields exist in the test set
-        sql_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND metadata_json IS NOT NULL AND metadata_json LIKE '%reference_sql%'",
-            (row["test_set_id"],),
-        ).fetchone()["cnt"]
-        data_count = conn.execute(
-            "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ? AND metadata_json IS NOT NULL AND metadata_json LIKE '%reference_data%'",
-            (row["test_set_id"],),
-        ).fetchone()["cnt"]
-        exp["has_reference_sql"] = sql_count > 0
-        exp["has_reference_data"] = data_count > 0
-        # Include connector info so the frontend knows which metrics are available
-        if row["bot_config_id"]:
-            bc = conn.execute(
-                "SELECT connector_type, config_json FROM bot_configs WHERE id = ?",
-                (row["bot_config_id"],),
-            ).fetchone()
-            if bc:
-                exp["connector_type"] = bc["connector_type"]
-                bc_config = json.loads(bc["config_json"]) if bc["config_json"] else {}
-                exp["bot_returns_contexts"] = bot_config_returns_contexts(
-                    bc["connector_type"], bc_config
-                )
-            else:
-                exp["connector_type"] = None
-                exp["bot_returns_contexts"] = False
+        ts_id = row["test_set_id"]
+        stats = q_stats_by_ts.get(ts_id)
+        exp["approved_question_count"] = stats["approved_count"] if stats else 0
+        exp["test_set_name"] = ts_name_by_id.get(ts_id)
+        exp["has_reference_contexts"] = bool(stats and stats["has_ref_ctx"])
+        exp["has_reference_sql"] = bool(stats and stats["has_ref_sql"])
+        exp["has_reference_data"] = bool(stats and stats["has_ref_data"])
+
+        bc_id = row["bot_config_id"]
+        if bc_id and bc_id in bc_by_id:
+            bc = bc_by_id[bc_id]
+            bc_config = json.loads(bc["config_json"]) if bc["config_json"] else {}
+            exp["connector_type"] = bc["connector_type"]
+            exp["bot_returns_contexts"] = bot_config_returns_contexts(
+                bc["connector_type"], bc_config
+            )
         else:
             exp["connector_type"] = None
             exp["bot_returns_contexts"] = False
@@ -570,52 +613,37 @@ async def get_experiment_history(project_id: int):
         (project_id,),
     ).fetchall()
 
+    if not rows:
+        return {"experiments": []}
+
+    exp_ids = [row["id"] for row in rows]
+    rc_ids = [row["rag_config_id"] for row in rows if row["rag_config_id"]]
+
+    exp_placeholders = ",".join("?" * len(exp_ids))
+    all_results = conn.execute(
+        f"SELECT experiment_id, metrics_json FROM experiment_results WHERE experiment_id IN ({exp_placeholders})",
+        exp_ids,
+    ).fetchall()
+    results_by_exp: dict[int, list] = {eid: [] for eid in exp_ids}
+    for rr in all_results:
+        results_by_exp[rr["experiment_id"]].append(rr)
+
+    rc_name_by_id: dict[int, str] = {}
+    if rc_ids:
+        rc_placeholders = ",".join("?" * len(rc_ids))
+        rc_rows = conn.execute(
+            f"SELECT id, name FROM rag_configs WHERE id IN ({rc_placeholders})", rc_ids
+        ).fetchall()
+        rc_name_by_id = {r["id"]: r["name"] for r in rc_rows}
+
     experiments = []
     for row in rows:
         exp = _parse_experiment_row(row)
-
-        # Fetch rag_config_name
-        if row["rag_config_id"]:
-            rc = conn.execute(
-                "SELECT name FROM rag_configs WHERE id = ?", (row["rag_config_id"],)
-            ).fetchone()
-            exp["rag_config_name"] = rc["name"] if rc else None
-        else:
-            exp["rag_config_name"] = None
-
-        # Compute aggregate metrics and overall score
-        result_rows = conn.execute(
-            "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
-            (row["id"],),
-        ).fetchall()
-        exp["result_count"] = len(result_rows)
-
-        if result_rows:
-            metric_totals: dict[str, float] = {}
-            metric_counts: dict[str, int] = {}
-            for rr in result_rows:
-                metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
-                for metric_name, value in metrics.items():
-                    if value is not None:
-                        metric_totals[metric_name] = metric_totals.get(metric_name, 0.0) + value
-                        metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
-
-            aggregate: dict[str, float | None] = {}
-            for mn in metric_totals:
-                cnt = metric_counts[mn]
-                aggregate[mn] = round(metric_totals[mn] / cnt, 4) if cnt > 0 else None
-
-            exp["aggregate_metrics"] = aggregate
-
-            # Overall score = average of all non-null metric averages
-            valid_scores = [v for v in aggregate.values() if v is not None]
-            exp["overall_score"] = (
-                round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
-            )
-        else:
-            exp["aggregate_metrics"] = None
-            exp["overall_score"] = None
-
+        exp["rag_config_name"] = rc_name_by_id.get(row["rag_config_id"])
+        agg, overall, n = _aggregate_rows(results_by_exp[row["id"]])
+        exp["result_count"] = n
+        exp["aggregate_metrics"] = agg
+        exp["overall_score"] = overall
         experiments.append(exp)
 
     return {"experiments": experiments}
