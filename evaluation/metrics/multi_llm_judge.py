@@ -18,6 +18,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from config import MULTI_LLM_JUDGE_DEFAULT_EVALUATORS
+
 logger = logging.getLogger(__name__)
 
 _JUDGE_PROMPT = """\
@@ -82,7 +84,7 @@ SOURCE CHUNKS (retrieved context used by the bot):
 
 @dataclass
 class MultiLLMJudgeConfig:
-    num_evaluators: int = 5
+    num_evaluators: int = MULTI_LLM_JUDGE_DEFAULT_EVALUATORS
     model: str | None = None  # default model when model_assignments is not set
     temperature_min: float = 0.3
     temperature_max: float = 0.75

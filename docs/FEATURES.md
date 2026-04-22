@@ -97,7 +97,7 @@ What each feature does and the idea behind it.
 
 ## Multi-LLM Judge
 
-**What it does:** Run evaluation metrics across multiple LLM judges simultaneously (configurable count, default 5) rather than relying on a single model. Each judge scores independently, and the system computes a reliability score based on inter-judge agreement. Results below the reliability threshold are flagged. Individual judge verdicts include chain-of-thought reasoning for auditability.
+**What it does:** Run evaluation metrics across multiple LLM judges simultaneously (configurable count, default 3) rather than relying on a single model. Each judge scores independently, and the system computes a reliability score based on inter-judge agreement. Results below the reliability threshold are flagged. Individual judge verdicts include chain-of-thought reasoning for auditability.
 
 **Why:** Single-judge evaluation is noisy — different models have different biases and blind spots. Running multiple judges and measuring agreement gives a confidence signal alongside the score. High variance between judges reveals genuinely ambiguous or borderline cases that need human review, while high agreement gives stronger confidence in the score.
 

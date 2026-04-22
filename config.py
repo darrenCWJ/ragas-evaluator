@@ -95,7 +95,7 @@ DEFAULT_EXPERIMENT_METRICS = [
 # ---------------------------------------------------------------------------
 # Multi-LLM Judge metric
 # ---------------------------------------------------------------------------
-MULTI_LLM_JUDGE_DEFAULT_EVALUATORS = int(os.environ.get("MULTI_LLM_JUDGE_DEFAULT_EVALUATORS", "5"))
+MULTI_LLM_JUDGE_DEFAULT_EVALUATORS = int(os.environ.get("MULTI_LLM_JUDGE_DEFAULT_EVALUATORS", "3"))
 MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD = float(os.environ.get("MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD", "0.6"))
 
 # ---------------------------------------------------------------------------

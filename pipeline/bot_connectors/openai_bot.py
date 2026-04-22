@@ -12,7 +12,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from config import CONNECTOR_DEFAULT_MODELS
+from config import CONNECTOR_DEFAULT_MODELS, BOT_QUERY_TIMEOUT
 from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
@@ -31,7 +31,7 @@ class OpenAIBotConnector:
         system_prompt: str = "",
         prompt_for_sources: bool = False,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key, max_retries=1, timeout=120.0)
+        self._client = AsyncOpenAI(api_key=api_key, max_retries=1, timeout=BOT_QUERY_TIMEOUT)
         self._model = model
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources
