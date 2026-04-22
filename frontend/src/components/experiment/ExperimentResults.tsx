@@ -43,7 +43,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
       setState({ status: "loaded", experiment: exp, results });
       setCriteriaMetricNames(
         customMetrics
-          .filter((m) => m.metric_type === "criteria_judge")
+          .filter((m) => m.metric_type === "criteria_judge" || m.metric_type === "reference_judge")
           .map((m) => m.name),
       );
     } catch (err) {
@@ -60,6 +60,11 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
 
   // Must be at top level — before any conditional returns
   const [activeTab, setActiveTab] = useState<"results" | "judge">("results");
+  // Live judge score overrides (keyed by metric name) — updated when exclusions change
+  const [judgeScoreOverrides, setJudgeScoreOverrides] = useState<Record<string, number>>({});
+  const handleJudgeScoreUpdate = useCallback((metricKey: string, avg: number) => {
+    setJudgeScoreOverrides((prev) => ({ ...prev, [metricKey]: avg }));
+  }, []);
 
   /* ── Export handler ── */
   const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
@@ -135,7 +140,8 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   let metricEntries: [string, number][] = [];
 
   if (agg) {
-    metricEntries = Object.entries(agg).filter(
+    const merged = { ...agg, ...judgeScoreOverrides };
+    metricEntries = Object.entries(merged).filter(
       (e): e is [string, number] => e[1] !== null,
     );
     if (metricEntries.length > 0) {
@@ -333,7 +339,14 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
           <MultiLLMJudgeDashboard
             projectId={projectId}
             experimentId={experimentId}
-            metricName={activeJudgeMetric}
+            metricName={
+              activeJudgeMetric !== undefined
+                ? activeJudgeMetric
+                : !hasBuiltinJudge && criteriaJudgesInResults.length > 0
+                  ? criteriaJudgesInResults[0]
+                  : undefined
+            }
+            onScoreUpdate={handleJudgeScoreUpdate}
           />
         </>
       )}

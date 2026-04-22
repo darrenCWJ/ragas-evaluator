@@ -128,6 +128,7 @@ def _load_evaluations_for_result(
             "evaluator_index": ev["evaluator_index"],
             "verdict": verdict,
             "score": ev["score"],
+            "reasoning": ev["reasoning"] or None,
             "claims": claims,
             "annotations": annotations,
             "created_at": ev["created_at"],
@@ -463,7 +464,10 @@ async def get_judge_summary(
             ev["evaluator_index"]: _CRITERIA_VERDICT_MAP.get(ev["verdict"], ev["verdict"])
             for ev in eval_rows
         }
-        eval_dicts = [{"evaluator_index": ev["evaluator_index"], "score": ev["score"]} for ev in eval_rows]
+        eval_dicts = [
+            {"evaluator_index": ev["evaluator_index"], "score": ev["score"], "verdict": ev["verdict"]}
+            for ev in eval_rows
+        ]
 
         if is_criteria:
             adjusted_score = aggregate_criteria_score(eval_dicts, excluded_indices=excluded)

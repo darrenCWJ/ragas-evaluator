@@ -200,7 +200,11 @@ async function formRequest<T>(path: string, form: FormData): Promise<T> {
     let detail = body;
     try {
       const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
+      if (parsed.detail) {
+        detail = Array.isArray(parsed.detail)
+          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join("; ")
+          : String(parsed.detail);
+      }
     } catch { /* use raw body */ }
     throw new ApiError(res.status, detail);
   }
@@ -221,7 +225,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = body;
     try {
       const parsed = JSON.parse(body);
-      if (parsed.detail) detail = parsed.detail;
+      if (parsed.detail) {
+        detail = Array.isArray(parsed.detail)
+          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join("; ")
+          : String(parsed.detail);
+      }
     } catch {
       // use raw body
     }
@@ -268,6 +276,12 @@ export async function createProject(
 
 export async function fetchJudgeModels(): Promise<{ models: JudgeModel[] }> {
   return request<{ models: JudgeModel[] }>("/api/judge-models");
+}
+
+export async function deleteProject(projectId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function updateProjectJudgeDefaults(
@@ -596,6 +610,8 @@ export interface TestSetCreate {
   num_workers?: number;
   question_categories?: Record<string, number>;
   graph_rag_kg_source?: string;
+  use_kg_as_source?: boolean;
+  fast_kg_mode?: boolean;
 }
 
 export interface TestQuestion {
@@ -757,7 +773,7 @@ export interface GenerationProgress {
   stage?: string;
   questions_generated?: number;
   target_size?: number;
-  status?: "generating" | "completed" | "failed";
+  status?: "generating" | "completed" | "failed" | "cancelled";
   test_set_id?: number;
   error_message?: string;
 }
@@ -775,6 +791,15 @@ export async function fetchGenerationProgress(
   return request<GenerationProgress>(
     `/api/projects/${projectId}/test-sets/generation-progress`,
   );
+}
+
+export async function cancelTestSetGeneration(
+  projectId: number,
+  testSetId: number,
+): Promise<{ status: string; test_set_id: number }> {
+  return request(`/api/projects/${projectId}/test-sets/${testSetId}/cancel`, {
+    method: "POST",
+  });
 }
 
 export async function createTestSet(
@@ -971,6 +996,31 @@ export async function cancelExperiment(
     `/api/projects/${projectId}/experiments/${experimentId}/cancel`,
     { method: "POST" },
   );
+}
+
+export interface ProgressSnapshot {
+  phase: string;
+  current: number;
+  total: number;
+  question: string;
+  in_flight: string[];
+  in_flight_details: InFlightDetail[];
+  scoring_metrics: string[];
+  error: string | null;
+  result_count: number;
+}
+
+export async function fetchProgressSnapshot(
+  projectId: number,
+  experimentId: number,
+): Promise<ProgressSnapshot | null> {
+  try {
+    return await request<ProgressSnapshot>(
+      `/api/projects/${projectId}/experiments/${experimentId}/progress-snapshot`,
+    );
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchExperimentResults(
@@ -1674,7 +1724,7 @@ export interface CustomMetric {
   id: number;
   project_id: number;
   name: string;
-  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics" | "criteria_judge";
+  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics" | "criteria_judge" | "reference_judge";
   prompt: string | null;
   rubrics: Record<string, string> | null;
   min_score: number;
@@ -1790,6 +1840,7 @@ export interface JudgeEvaluation {
   evaluator_index: number;
   verdict: "positive" | "mixed" | "critical";
   score: number;
+  reasoning: string | null;
   claims: JudgeClaim[];
   annotations: Record<number, ClaimAnnotation>;
   created_at: string;
@@ -1928,6 +1979,7 @@ export async function buildKnowledgeGraph(
   chunkConfigId: number | null,
   overlapMaxNodes: number | null = 500,
   kgSource: string = "chunks",
+  fastMode: boolean = false,
 ): Promise<{ status: string }> {
   return request<{ status: string }>(
     `/api/projects/${projectId}/build-knowledge-graph`,
@@ -1936,6 +1988,7 @@ export async function buildKnowledgeGraph(
       body: JSON.stringify({
         chunk_config_id: chunkConfigId,
         overlap_max_nodes: overlapMaxNodes,
+        fast_mode: fastMode || undefined,
         kg_source: kgSource,
       }),
     },
@@ -2007,6 +2060,7 @@ export interface KGListItem {
   id: number;
   project_id: number;
   project_name: string;
+  kg_source: string;
   num_nodes: number;
   num_chunks: number;
   is_complete: boolean;

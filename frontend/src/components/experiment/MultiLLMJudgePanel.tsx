@@ -16,6 +16,8 @@ interface Props {
   excludedIndices?: Set<number>;
   /** For criteria_judge metrics: the metric name to filter evaluations. Omit for built-in judge. */
   metricName?: string;
+  /** Called after any annotation is saved so the parent can re-fetch scores. */
+  onAnnotationChange?: () => void;
 }
 
 type AnnotationMap = Record<number, Record<number, ClaimAnnotation>>;
@@ -37,12 +39,6 @@ const CLAIM_BADGE: Record<string, string> = {
   critique: "bg-score-low/15 text-score-low",
 };
 
-function scoreColor(score: number): string {
-  // Criteria judge scores are already 0–1; built-in are 1–10 normalised by display
-  if (score >= 0.7) return "text-score-high";
-  if (score >= 0.4) return "text-score-mid";
-  return "text-score-low";
-}
 
 /** Highlight occurrences of `quote` inside `text` using a mark span. */
 function HighlightedText({
@@ -190,11 +186,6 @@ function EvaluatorCard({
   savingKey: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  // Built-in judge: score is 1–10, normalise to 0–100%.
-  // Criteria judge: score is already 0–1 (good=1, mixed=0.5, bad=0).
-  const normScore = evaluation.score <= 1.0
-    ? (evaluation.score * 100).toFixed(0)
-    : ((evaluation.score - 1) / 9 * 100).toFixed(0);
 
   return (
     <div
@@ -234,10 +225,6 @@ function EvaluatorCard({
             Low reliability
           </span>
         )}
-
-        <span className={`ml-auto font-mono text-xs font-bold ${scoreColor(evaluation.score)}`}>
-          {normScore}%
-        </span>
       </button>
 
       {/* Claims */}
@@ -246,6 +233,16 @@ function EvaluatorCard({
       >
         <div className="overflow-hidden">
           <div className="border-t border-border/60 px-4 py-3 space-y-3">
+            {evaluation.reasoning && (
+              <div className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2">
+                <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-accent/70">
+                  Reasoning
+                </p>
+                <p className="text-xs text-text-secondary leading-relaxed">
+                  {evaluation.reasoning}
+                </p>
+              </div>
+            )}
             {evaluation.claims.length === 0 ? (
               <p className="text-xs text-text-muted italic">No claims produced by this evaluator.</p>
             ) : (
@@ -280,6 +277,7 @@ export default function MultiLLMJudgePanel({
   preloadedEvaluations,
   excludedIndices = new Set(),
   metricName,
+  onAnnotationChange,
 }: Props) {
   const [evaluations, setEvaluations] = useState<JudgeEvaluation[]>(preloadedEvaluations ?? []);
   const [annotationMap, setAnnotationMap] = useState<AnnotationMap>({});
@@ -329,6 +327,7 @@ export default function MultiLLMJudgePanel({
             },
           },
         }));
+        onAnnotationChange?.();
       } catch (e) {
         setError(`Failed to save annotation: ${e}`);
       } finally {

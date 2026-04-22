@@ -32,15 +32,25 @@ BOT RESPONSE:
 
 {context_section}
 
-Your task: Critically review the response. Identify specific claims that are \
-accurate/helpful (praise) or inaccurate/misleading/missing (critique). \
-Be concrete — quote the exact text from the response you are commenting on.
+Your task: Evaluate the response in two steps.
+
+STEP 1 — Reason first. Before producing any output, think through:
+- Did the response actually answer the question?
+- What did it do well (if anything)?
+- What specific parts are inaccurate, unhelpful, missing, or excessive?
+- Based on all of the above, what is the overall quality?
+
+STEP 2 — Produce structured output. Using your reasoning, identify 1–4 specific \
+claims. A claim is "praise" ONLY if it genuinely helps the user — not just because \
+the quote is accurate or honest. A claim is "critique" if the quote is unhelpful, \
+missing, misleading, excessive, or fails to answer the question.
 
 If source chunks are provided, reference them when a claim is supported or \
 contradicted by a chunk.
 
 Respond with ONLY valid JSON in exactly this format:
 {{
+  "reasoning": "<2-4 sentences summarising your step 1 analysis>",
   "verdict": "positive" | "mixed" | "critical",
   "score": <integer 1-10>,
   "claims": [
@@ -55,11 +65,12 @@ Respond with ONLY valid JSON in exactly this format:
 }}
 
 Rules:
+- reasoning must be written before verdict — let it drive your verdict and claim types
+- verdict and claim types must be consistent with your reasoning
 - score 1-3: mostly inaccurate or unhelpful
 - score 4-6: partially correct but notable issues
 - score 7-8: mostly good with minor issues
 - score 9-10: accurate, helpful, well-supported
-- Include 1–4 claims. Focus on the most impactful points.
 - response_quote must be a verbatim substring of the bot response.
 - chunk_quote must be a verbatim substring of that chunk (if referenced).
 """
@@ -97,7 +108,7 @@ def _build_context_section(context_dicts: list[dict]) -> str:
 
 
 def _extract_json(text: str) -> dict:
-    """Extract the first JSON object from text, handles markdown code fences."""
+    """Extract the first valid JSON object from text, handles markdown code fences."""
     text = text.strip()
     # Strip ```json ... ``` or ``` ... ``` fences
     if text.startswith("```"):
@@ -105,12 +116,21 @@ def _extract_json(text: str) -> dict:
         if text.startswith("json"):
             text = text[4:]
         text = text.strip()
-    # Find first { ... } block
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1:
-        return json.loads(text[start : end + 1])
-    return json.loads(text)
+    if start == -1:
+        return json.loads(text)
+    # Walk backwards from the last } to find the shortest valid JSON object.
+    # This handles trailing text/null-bytes after the closing brace.
+    pos = len(text) - 1
+    while pos >= start:
+        pos = text.rfind("}", start, pos + 1)
+        if pos == -1:
+            break
+        try:
+            return json.loads(text[start : pos + 1])
+        except json.JSONDecodeError:
+            pos -= 1
+    return json.loads(text[start:])
 
 
 async def _single_evaluator(
@@ -138,6 +158,8 @@ async def _single_evaluator(
         raw = result["content"]
         data = _extract_json(raw)
 
+        reasoning = str(data.get("reasoning", ""))
+
         verdict = data.get("verdict", "mixed")
         if verdict not in ("positive", "mixed", "critical"):
             verdict = "mixed"
@@ -157,6 +179,7 @@ async def _single_evaluator(
 
         return {
             "evaluator_index": evaluator_index,
+            "reasoning": reasoning,
             "verdict": verdict,
             "score": score,
             "claims": claims,
@@ -208,20 +231,22 @@ async def run_judge(
     return [r for r in results if r is not None]
 
 
+_VERDICT_SCORES: dict[str, float] = {"positive": 1.0, "mixed": 0.5, "critical": 0.0}
+
+
 def aggregate_score(evaluations: list[dict], excluded_indices: set[int] | None = None) -> float:
-    """Return mean score of non-excluded evaluators, normalised 0–1.
+    """Return mean verdict score of non-excluded evaluators (positive=1, mixed=0.5, critical=0).
 
     excluded_indices: set of evaluator_index values to skip (low reliability).
     """
     excluded = excluded_indices or set()
     active = [e for e in evaluations if e["evaluator_index"] not in excluded]
     if not active:
-        # Fall back to all evaluators if exclusions remove everything
         active = evaluations
     if not active:
         return 0.0
-    mean_score = sum(e["score"] for e in active) / len(active)
-    return round((mean_score - 1) / 9, 4)  # normalise 1–10 → 0–1
+    scores = [_VERDICT_SCORES.get(e.get("verdict", "mixed"), 0.5) for e in active]
+    return round(sum(scores) / len(scores), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -387,3 +412,158 @@ def aggregate_criteria_score(
     if not active:
         return 0.0
     return round(sum(e["score"] for e in active) / len(active), 4)
+
+
+# ---------------------------------------------------------------------------
+# Reference Judge — compares bot answer against a reference/suggested answer
+# ---------------------------------------------------------------------------
+
+_REFERENCE_JUDGE_USER = """\
+{criteria_prompt}
+
+---
+Compare the following bot response against the suggested/reference answer using the criteria above.
+
+QUESTION:
+{question}
+
+SUGGESTED ANSWER (reference):
+{reference}
+
+BOT RESPONSE:
+{response}
+
+{context_section}
+
+Respond with ONLY valid JSON in exactly this format:
+{{
+  "verdict": "good" | "mixed" | "bad",
+  "score": <number>,
+  "highlights": [
+    {{
+      "quote": "<exact substring from the bot response>",
+      "type": "supporting" | "contradicting" | "neutral",
+      "critique": "<1-2 sentences explaining how this quote relates to the reference and criteria>"
+    }}
+  ],
+  "reasoning": "<1-2 sentence overall justification comparing the bot response to the reference>"
+}}
+
+Score mapping: good = 1.0, mixed = 0.5, bad = 0.0
+Include 1-4 highlights. quote must be a verbatim substring of the bot response.
+"""
+
+
+@dataclass
+class ReferenceJudgeConfig:
+    metric_name: str
+    refined_prompt: str
+    num_evaluators: int = 3
+    model: str | None = None
+    temperature_min: float = 0.3
+    temperature_max: float = 0.75
+    model_assignments: list[str] | None = None
+    temperature_assignments: list[float] | None = None
+
+
+async def _single_reference_evaluator(
+    model: str,
+    temperature: float,
+    evaluator_index: int,
+    criteria_prompt: str,
+    question: str,
+    reference: str,
+    response: str,
+    context_section: str,
+) -> dict | None:
+    """Run one reference judge evaluator. Returns structured dict or None on failure."""
+    from pipeline.llm import chat_completion
+
+    prompt = _REFERENCE_JUDGE_USER.format(
+        criteria_prompt=criteria_prompt,
+        question=question,
+        reference=reference,
+        response=response,
+        context_section=context_section,
+    )
+    try:
+        result = await chat_completion(
+            model,
+            [{"role": "user", "content": prompt}],
+            {"temperature": temperature, "max_tokens": 800},
+        )
+        raw = result["content"]
+        data = _extract_json(raw)
+
+        verdict = data.get("verdict", "mixed")
+        if verdict not in ("good", "mixed", "bad"):
+            verdict = "mixed"
+
+        score_map = {"good": 1.0, "mixed": 0.5, "bad": 0.0}
+        score = score_map.get(verdict, 0.5)
+
+        highlights = []
+        for h in data.get("highlights", [])[:4]:
+            highlights.append({
+                "quote": str(h.get("quote", "")),
+                "type": h.get("type", "neutral") if h.get("type") in ("supporting", "contradicting", "neutral") else "neutral",
+                "critique": str(h.get("critique", "")),
+            })
+
+        return {
+            "evaluator_index": evaluator_index,
+            "verdict": verdict,
+            "score": score,
+            "highlights": highlights,
+            "reasoning": str(data.get("reasoning", "")),
+            "model": model,
+        }
+    except Exception as e:
+        logger.warning(
+            "Reference evaluator %d (model=%s, temp=%.2f) failed: %s",
+            evaluator_index, model, temperature, e, exc_info=True,
+        )
+        return None
+
+
+async def run_reference_judge(
+    config: ReferenceJudgeConfig,
+    question: str,
+    reference: str,
+    response: str,
+    context_dicts: list[dict] | None = None,
+) -> list[dict]:
+    """Run N reference judge evaluators in parallel.
+
+    Returns list of dicts: {evaluator_index, verdict, score, highlights, reasoning, model}
+    Failed evaluators are omitted.
+    """
+    from config import DEFAULT_EVAL_MODEL
+
+    context_section = _build_context_section(context_dicts or [])
+
+    if config.model_assignments:
+        models = config.model_assignments
+        n = len(models)
+    else:
+        default_model = config.model or DEFAULT_EVAL_MODEL
+        n = config.num_evaluators
+        models = [default_model] * n
+
+    if config.temperature_assignments and len(config.temperature_assignments) == n:
+        temperatures = config.temperature_assignments
+    elif n == 1:
+        temperatures = [config.temperature_min]
+    else:
+        step = (config.temperature_max - config.temperature_min) / (n - 1)
+        temperatures = [config.temperature_min + step * i for i in range(n)]
+
+    tasks = [
+        _single_reference_evaluator(
+            models[i], temperatures[i], i,
+            config.refined_prompt, question, reference, response, context_section,
+        )
+        for i in range(n)
+    ]
+    results = await asyncio.gather(*tasks)
+    return [r for r in results if r is not None]

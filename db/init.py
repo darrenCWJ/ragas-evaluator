@@ -482,6 +482,7 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN refined_prompt TEXT")
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN custom_metric_name TEXT")
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN judge_model_assignments_json TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
 
     # Backfill NULL chunk_config_id on knowledge_graphs (SQLite only — PG starts fresh)
     if not _USE_PG:

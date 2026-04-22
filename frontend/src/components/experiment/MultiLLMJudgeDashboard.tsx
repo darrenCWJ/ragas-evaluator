@@ -15,6 +15,8 @@ interface Props {
   experimentId: number;
   /** For criteria_judge metrics. Omit for the built-in judge. */
   metricName?: string;
+  /** Called with (metricKey, avgScore) whenever the live adjusted score changes. */
+  onScoreUpdate?: (metricKey: string, avgScore: number) => void;
 }
 
 const VERDICT_DOT: Record<string, string> = {
@@ -104,12 +106,14 @@ function AnnotationSampleSection({
   sample,
   excludedIndices,
   metricName,
+  onAnnotationChange,
 }: {
   projectId: number;
   experimentId: number;
   sample: JudgeAnnotationSampleItem[];
   excludedIndices: Set<number>;
   metricName?: string;
+  onAnnotationChange: () => void;
 }) {
   const [openResultId, setOpenResultId] = useState<number | null>(null);
 
@@ -168,6 +172,7 @@ function AnnotationSampleSection({
                   preloadedEvaluations={item.evaluations}
                   excludedIndices={excludedIndices}
                   metricName={metricName}
+                  onAnnotationChange={onAnnotationChange}
                 />
               </div>
             </div>
@@ -178,16 +183,33 @@ function AnnotationSampleSection({
   );
 }
 
-export default function MultiLLMJudgeDashboard({ projectId, experimentId, metricName }: Props) {
+export default function MultiLLMJudgeDashboard({ projectId, experimentId, metricName, onScoreUpdate }: Props) {
   const [reliability, setReliability] = useState<JudgeReliabilityResult | null>(null);
   const [summary, setSummary] = useState<JudgeSummaryResponse | null>(null);
   const [sampleData, setSampleData] = useState<JudgeAnnotationSampleResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "annotate">("overview");
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const handleAnnotationChange = () => setRefreshKey((k) => k + 1);
 
   useEffect(() => {
+    setRefreshKey(0);
     setLoading(true);
+  }, [projectId, experimentId, metricName]);
+
+  // Notify parent of the live adjusted score whenever summary updates
+  useEffect(() => {
+    if (!summary || !onScoreUpdate) return;
+    if (summary.results.length === 0) return;
+    const avg = summary.results.reduce((acc, r) => acc + r.adjusted_score, 0) / summary.results.length;
+    onScoreUpdate(metricName ?? "multi_llm_judge", avg);
+  }, [summary, metricName, onScoreUpdate]);
+
+  useEffect(() => {
+    const isInitialLoad = refreshKey === 0;
+    if (isInitialLoad) setLoading(true);
     setError(null);
     Promise.all([
       fetchJudgeReliability(projectId, experimentId, metricName),
@@ -200,8 +222,8 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId, metric
         setSampleData(samp);
       })
       .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [projectId, experimentId, metricName]);
+      .finally(() => { if (isInitialLoad) setLoading(false); });
+  }, [projectId, experimentId, metricName, refreshKey]);
 
   if (loading) {
     return (
@@ -224,18 +246,30 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId, metric
 
   const excludedSet = new Set(reliability.excluded_indices);
 
+  const avgScore = summary.results.length > 0
+    ? summary.results.reduce((acc, r) => acc + r.adjusted_score, 0) / summary.results.length
+    : null;
+  const avgScorePct = avgScore !== null ? Math.round(avgScore * 100) : null;
+  const avgScoreColor = avgScorePct === null
+    ? "text-text-muted"
+    : avgScorePct >= 70 ? "text-score-high" : avgScorePct >= 40 ? "text-score-mid" : "text-score-low";
+
   return (
     <div className="space-y-6">
       {/* ── Top stats ── */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Overall reliability */}
+        {/* Average judge score */}
         <div className="rounded-xl border border-border bg-card p-4">
           <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-text-muted">
-            Overall Reliability
+            Average Judge Score
           </p>
-          <ReliabilityRing value={reliability.overall_reliability} />
+          <div className={`text-4xl font-bold tabular-nums ${avgScoreColor}`}>
+            {avgScorePct !== null ? `${avgScorePct}%` : "—"}
+          </div>
           <p className="mt-1 text-2xs text-text-muted">
-            Threshold: {Math.round(reliability.threshold * 100)}%
+            {excludedSet.size > 0
+              ? `${excludedSet.size} evaluator${excludedSet.size > 1 ? "s" : ""} excluded`
+              : "across all questions"}
           </p>
         </div>
 
@@ -273,15 +307,15 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId, metric
           </p>
         </div>
 
-        {/* Questions evaluated */}
+        {/* Evaluator claim accuracy */}
         <div className="rounded-xl border border-border bg-card p-4">
           <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-text-muted">
-            Questions Evaluated
+            Evaluator Claim Accuracy
           </p>
-          <div className="text-4xl font-bold text-text-primary tabular-nums">
-            {summary.results.length}
-          </div>
-          <p className="mt-1 text-2xs text-text-muted">with judge feedback</p>
+          <ReliabilityRing value={reliability.overall_reliability} />
+          <p className="mt-1 text-2xs text-text-muted">
+            how often evaluator claims matched human review
+          </p>
         </div>
       </div>
 
@@ -348,10 +382,20 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId, metric
                       return (
                         <td
                           key={ev.evaluator_index}
-                          className="px-3 py-2.5 text-center"
+                          className={`px-3 py-2.5 text-center ${ev.excluded ? "opacity-40" : ""}`}
                         >
                           {verdict ? (
-                            <VerdictDot verdict={verdict} />
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-2xs font-medium border ${
+                                verdict === "positive"
+                                  ? "bg-score-high/10 text-score-high border-score-high/30"
+                                  : verdict === "mixed"
+                                  ? "bg-score-mid/10 text-score-mid border-score-mid/30"
+                                  : "bg-score-low/10 text-score-low border-score-low/30"
+                              }`}
+                            >
+                              {verdict === "positive" ? "Good" : verdict === "mixed" ? "Mixed" : "Bad"}
+                            </span>
                           ) : (
                             <span className="text-text-muted">—</span>
                           )}
@@ -397,6 +441,7 @@ export default function MultiLLMJudgeDashboard({ projectId, experimentId, metric
                   sample={sampleData.sample}
                   excludedIndices={excludedSet}
                   metricName={metricName}
+                  onAnnotationChange={handleAnnotationChange}
                 />
               </>
             )}

@@ -17,6 +17,13 @@ interface Props {
 
 type Rating = "accurate" | "partially_accurate" | "inaccurate";
 
+const CORRECTNESS_METRICS = new Set([
+  "factual_correctness",
+  "faithfulness",
+  "answer_relevancy",
+  "semantic_similarity",
+]);
+
 const RATING_OPTIONS: { value: Rating; label: string; color: string }[] = [
   { value: "accurate", label: "Accurate", color: "text-score-high" },
   { value: "partially_accurate", label: "Partial", color: "text-yellow-400" },
@@ -182,19 +189,28 @@ export default function HumanAnnotationPanel({ projectId, experimentId }: Props)
               </div>
             </div>
 
-            {/* Evaluator scores */}
-            {Object.keys(item.metrics).length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(item.metrics).map(([name, value]) => (
-                  <span
-                    key={name}
-                    className="rounded bg-elevated px-2 py-0.5 text-xs text-text-muted"
-                  >
-                    {name}: {(value * 100).toFixed(0)}%
-                  </span>
-                ))}
-              </div>
-            )}
+            {/* Correctness metric scores — only the 4 used for agreement comparison */}
+            {(() => {
+              const relevant = Object.entries(item.metrics).filter(([name]) => CORRECTNESS_METRICS.has(name));
+              if (relevant.length === 0) return null;
+              return (
+                <div>
+                  <p className="mb-1 text-xs text-text-muted">
+                    Automated scores used for agreement comparison:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {relevant.map(([name, value]) => (
+                      <span
+                        key={name}
+                        className="rounded bg-elevated px-2 py-0.5 text-xs text-text-muted"
+                      >
+                        {name.replace(/_/g, " ")}: {(value * 100).toFixed(0)}%
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Rating buttons */}
             <div className="flex items-center gap-2">
