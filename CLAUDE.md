@@ -59,14 +59,23 @@ frontend/ → React 18 + TypeScript + Vite + Tailwind SPA
 
 ## Database
 
-- SQLite at `data/ragas.db` (created on first run via `db/init.py`)
-- WAL mode enabled
+- **Local / self-hosted**: SQLite at `data/ragas.db` (created on first run via `db/init.py`), WAL mode enabled
+- **Server / production**: PostgreSQL via `DATABASE_URL` env var (e.g. Neon) — auto-detected in `db/init.py`
 - Schema and all migrations in `db/init.py` — no separate migration files
 - Query functions also live in `db/init.py` (single-module data layer)
+
+## Deployment Modes
+
+- **Self-host**: `docker compose up --build` — serves on `PORT` (default 8000), SQLite storage in `./data/`
+- **Server (Northflank + Neon)**: Dockerfile exposes port 3000, `PORT` set by platform, `DATABASE_URL` points to Neon PostgreSQL
+- **Local dev**: `uvicorn main:app --reload` + `cd frontend && npm run dev` (Vite on :5173)
 
 ## Environment Variables
 
 - `OPENAI_API_KEY` (required) — OpenAI API access
+- `RAGAS_API_KEY` (optional but recommended) — Bearer token auth; without it all endpoints are public
+- `DATABASE_URL` (optional) — PostgreSQL connection string; defaults to SQLite if unset
+- `PORT` (optional) — server port; defaults to 3000 in Dockerfile, 8000 in docker-compose
 - `CORS_ORIGINS` (optional) — comma-separated allowed origins (default: `localhost:3000,localhost:5173`)
 - See `.env.example` for full list: storage paths, default models, timeouts, batch sizes, suggestion thresholds
 

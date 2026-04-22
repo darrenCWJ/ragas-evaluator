@@ -38,11 +38,11 @@ Rather than treating evaluation as a one-off check, the system enables an **iter
           |                  |                  |
   +-------+-------+  +------+------+  +--------+--------+
   |   Pipeline    |  |  Evaluation |  |    Database     |
-  | chunking      |  | 20+ metrics |  | SQLite (WAL)   |
-  | embedding     |  | scoring     |  | projects       |
-  | retrieval     |  | suggestions |  | configs        |
-  | generation    |  | test gen    |  | experiments    |
-  | bot connectors|  | custom      |  | personas       |
+  | chunking      |  | 20+ metrics |  | SQLite (local) |
+  | embedding     |  | scoring     |  | PostgreSQL     |
+  | retrieval     |  | suggestions |  | projects       |
+  | generation    |  | test gen    |  | configs        |
+  | bot connectors|  | custom      |  | experiments    |
   | multi-LLM     |  | annotations |  | annotations    |
   +---------------+  +-------------+  +----------------+
 ```
@@ -114,49 +114,62 @@ Each suggestion maps to a specific config field and can be applied directly from
 ## Key Features
 
 - **Persona-based test generation** — auto-generate diverse personas with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
-- **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP) with a unified evaluation framework.
+- **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
+- **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously and compute a reliability score based on inter-judge agreement. Flags results where judges disagree.
 - **Source verification** — automatically check bot-cited URLs for reachability and content alignment.
 - **Human annotation** — sample experiment results for human review and compute evaluator accuracy against ground truth.
 - **Custom metrics** — define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics) without code changes.
 - **Experiment comparison & reporting** — per-metric deltas, experiment lineage tracking, project-level reports by bot type, CSV export.
 
-## Setup
+## Deployment
 
-### Prerequisites
+### Option A — Self-hosting (Docker, recommended)
 
-- Python 3.11+
-- Node.js 18+ (for frontend)
-- OpenAI API key
+```bash
+cp .env.example .env
+# Required: add OPENAI_API_KEY
+# Recommended: set RAGAS_API_KEY to a strong random secret to protect endpoints
+docker compose up --build
+```
 
-### Backend
+App available at `http://localhost:8000`. Data (SQLite DB, vector store, uploaded docs) is persisted in `./data/`. To use a different port, set `PORT=9000` in your `.env`.
+
+### Option B — Server deployment (Northflank + Neon)
+
+Set these environment variables on your platform:
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | Required — OpenAI API access |
+| `DATABASE_URL` | PostgreSQL connection string (e.g. Neon) |
+| `RAGAS_API_KEY` | Strong secret to protect all API endpoints |
+| `PORT` | Set automatically by Northflank |
+
+The Dockerfile builds the frontend and starts the app on `$PORT` (defaults to `3000`).
+
+### Option C — Local development (no Docker)
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env
-# Add your OPENAI_API_KEY to .env
+cp .env.example .env  # add OPENAI_API_KEY
+
+# Backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# Frontend (separate terminal)
+cd frontend && npm install && npm run dev  # dev server on :5173
 ```
 
-### Frontend
+### Authentication
+
+Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
 
 ```bash
-cd frontend
-npm install
-npm run build
+# Generate a strong secret
+openssl rand -hex 32
 ```
 
-### Run
-
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-The app serves the built frontend as a SPA at `http://localhost:8000`.
-
-### Docker
-
-```bash
-docker compose up --build
-```
+Once set, all API requests require: `Authorization: Bearer <your-key>`
 
 ## Project Structure
 
@@ -209,7 +222,7 @@ docker compose up --build
 | Layer | Technology |
 |-------|-----------|
 | Backend | FastAPI, Uvicorn |
-| Database | SQLite (WAL mode) |
+| Database | SQLite (local / self-hosted), PostgreSQL (Neon / server) |
 | LLM | OpenAI, Anthropic, Google GenAI (multi-provider) |
 | Evaluation | Ragas 0.4+ |
 | Embeddings | OpenAI text-embedding-3-small, SentenceTransformers |
@@ -217,3 +230,4 @@ docker compose up --build
 | Sparse search | BM25 (rank-bm25) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
 | PDF parsing | pypdf |
+| Containerisation | Docker (multi-stage build), docker compose |

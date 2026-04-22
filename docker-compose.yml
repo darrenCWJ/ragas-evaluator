@@ -2,10 +2,13 @@ services:
   app:
     build: .
     ports:
+      # Default port is 8000. Override by setting PORT= in your .env file.
       - "${PORT:-8000}:${PORT:-8000}"
     env_file: .env
     environment:
       - PORT=${PORT:-8000}
     volumes:
+      # Persists SQLite DB, ChromaDB vector store, BM25 indices, and uploaded documents.
+      # Use a named volume or external mount in production to prevent data loss on container rebuild.
       - ./data:/app/data
     restart: unless-stopped
