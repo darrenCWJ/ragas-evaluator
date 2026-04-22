@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 import random
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 

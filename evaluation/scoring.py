@@ -166,7 +166,10 @@ def setup_scorers(
         try:
             custom_scorers[cfg.name] = (cfg, custom_metric.create_scorer(cfg, llm))
         except Exception as e:
-            logger.warning("Failed to create custom scorer '%s': %s", cfg.name, e)
+            logger.error(
+                "Failed to create custom scorer '%s' — metric will be skipped this run: %s",
+                cfg.name, e, exc_info=True,
+            )
 
     return scorers, custom_scorers, llm
 
@@ -285,12 +288,12 @@ async def _score_builtin(
         return name, val
     except asyncio.TimeoutError:
         from config import METRIC_SCORING_TIMEOUT
-        logger.warning("Metric %s timed out after %.0fs", name, METRIC_SCORING_TIMEOUT)
+        logger.warning("Metric %s timed out after %.0fs (scored as None)", name, METRIC_SCORING_TIMEOUT)
         if on_done:
             on_done(name)
         return name, None
     except Exception as e:
-        logger.warning("Metric %s failed: %s", name, e)
+        logger.error("Metric %s raised unexpected error (scored as None): %s", name, e, exc_info=True)
         if on_done:
             on_done(name)
         return name, None

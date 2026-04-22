@@ -33,6 +33,8 @@ GEMINI_PREFIXES = ("gemini-",)
 # Module-level clients (connection reuse)
 # ---------------------------------------------------------------------------
 _openai_client: AsyncOpenAI | None = None
+_anthropic_client = None   # anthropic.AsyncAnthropic | None
+_gemini_client = None      # google.genai.Client | None
 
 
 def _get_openai_client() -> AsyncOpenAI:
@@ -51,6 +53,49 @@ async def close_openai_client() -> None:
     if _openai_client is not None:
         await _openai_client.close()
         _openai_client = None
+
+
+def _get_anthropic_client():
+    global _anthropic_client
+    if _anthropic_client is None:
+        from config import ANTHROPIC_API_KEY
+        import anthropic as _anthropic
+        _anthropic_client = _anthropic.AsyncAnthropic(
+            api_key=ANTHROPIC_API_KEY,
+            max_retries=1,
+            timeout=60.0,
+        )
+    return _anthropic_client
+
+
+async def close_anthropic_client() -> None:
+    """Close module-level Anthropic client. Call during app shutdown."""
+    global _anthropic_client
+    if _anthropic_client is not None:
+        await _anthropic_client.close()
+        _anthropic_client = None
+
+
+def _get_gemini_client():
+    global _gemini_client
+    if _gemini_client is None:
+        from config import GOOGLE_API_KEY
+        from google import genai
+        _gemini_client = genai.Client(api_key=GOOGLE_API_KEY)
+    return _gemini_client
+
+
+async def close_gemini_client() -> None:
+    """Close module-level Gemini client. Call during app shutdown."""
+    global _gemini_client
+    if _gemini_client is not None:
+        try:
+            close_fn = getattr(_gemini_client, "close", None)
+            if close_fn is not None:
+                await close_fn()
+        except Exception:
+            pass
+        _gemini_client = None
 
 
 def _is_openai_model(model: str) -> bool:
@@ -158,7 +203,7 @@ async def _anthropic_completion(
     conversation = [m for m in messages if m["role"] != "system"]
     system_text = "\n\n".join(system_parts) if system_parts else _anthropic.NOT_GIVEN
 
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _get_anthropic_client()
     try:
         response = await client.messages.create(
             model=model,
@@ -229,7 +274,7 @@ async def _gemini_completion(
                 )
             )
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
+    client = _get_gemini_client()
     try:
         response = await client.aio.models.generate_content(
             model=model,

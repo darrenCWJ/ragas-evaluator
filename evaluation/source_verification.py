@@ -85,7 +85,7 @@ async def verify_citation(
             citation_index=citation_index,
             title=title,
             url=url,
-            status="hallucinated",
+            status="unverifiable",
             details=f"Request error: {type(exc).__name__}",
         )
 

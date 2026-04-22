@@ -23,7 +23,7 @@ from app.models import (
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
 )
-from config import TESTGEN_SUBPROCESS_TIMEOUT, KG_SUBPROCESS_TIMEOUT
+from config import TESTGEN_SUBPROCESS_TIMEOUT, KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE
 import db.init
 from db.init import NOW_SQL, json_extract_sql
 
@@ -93,7 +93,14 @@ async def generate_testset(req: TestGenRequest):
 
 @router.post("/upload-document")
 async def upload_document(file: UploadFile = File(...)):
-    content = await file.read()
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in file:
+        total += len(chunk)
+        if total > MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=413, detail="File exceeds 50MB size limit")
+        chunks.append(chunk)
+    content = b"".join(chunks)
     text = content.decode("utf-8", errors="ignore")
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     return {

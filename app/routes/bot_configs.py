@@ -34,14 +34,18 @@ def bot_config_returns_contexts(connector_type: str, config_json: dict) -> bool:
 
 def _parse_bot_config_row(row) -> dict:
     config = json.loads(row["config_json"]) if row["config_json"] else {}
+    safe_config = {
+        k: ("***" if k == "api_key" and v else v)
+        for k, v in config.items()
+    }
     return {
         "id": row["id"],
         "project_id": row["project_id"],
         "name": row["name"],
         "connector_type": row["connector_type"],
-        "config_json": config,
+        "config_json": safe_config,
         "prompt_for_sources": bool(row["prompt_for_sources"]),
-        "returns_contexts": bot_config_returns_contexts(row["connector_type"], config),
+        "returns_contexts": bot_config_returns_contexts(row["connector_type"], safe_config),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

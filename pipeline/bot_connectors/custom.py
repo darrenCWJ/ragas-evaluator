@@ -10,10 +10,12 @@ Lets users point the evaluator at any HTTP API by providing:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import jsonpath_ng.ext as jp
@@ -24,6 +26,37 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 60.0
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*question\s*\}\}")
+
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),   # link-local / AWS metadata
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+
+def _validate_endpoint_url(url: str) -> None:
+    """Raise ValueError if the URL targets a private/internal address."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Endpoint URL must use http or https scheme, got: {parsed.scheme!r}")
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise ValueError("Endpoint URL must include a hostname")
+    if hostname.lower() in ("localhost", "0.0.0.0"):
+        raise ValueError(f"Endpoint URL hostname {hostname!r} is not allowed")
+    try:
+        addr = ipaddress.ip_address(hostname)
+        for net in _PRIVATE_NETWORKS:
+            if addr in net:
+                raise ValueError(f"Endpoint URL targets a private/internal address: {hostname}")
+    except ValueError as e:
+        if "is not allowed" in str(e) or "private" in str(e) or "scheme" in str(e) or "hostname" in str(e):
+            raise
+        # Not an IP address — hostname DNS resolution happens at request time; allow it
 
 
 class CustomBotConnector:
@@ -40,6 +73,7 @@ class CustomBotConnector:
         *,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
+        _validate_endpoint_url(endpoint_url)
         self._endpoint_url = endpoint_url
         self._http_method = http_method.upper()
         self._headers = headers or {}

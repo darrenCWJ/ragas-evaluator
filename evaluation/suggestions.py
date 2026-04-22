@@ -85,17 +85,6 @@ def generate_suggestions(
             "suggested_value": "multi_step",
         })
 
-    answer_correctness = aggregate_metrics.get("answer_correctness")
-    if answer_correctness is not None and answer_correctness < 0.5:
-        suggestions.append({
-            "category": "generation",
-            "signal": f"answer_correctness avg {answer_correctness:.2f}",
-            "suggestion": "Low correctness — verify reference answers are accurate, then review retrieval quality",
-            "priority": _priority(answer_correctness),
-            "config_field": None,
-            "suggested_value": None,
-        })
-
     # --- Embedding rules (cross-metric) ---
     if (
         context_recall is not None

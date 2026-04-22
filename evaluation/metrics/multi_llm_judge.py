@@ -17,7 +17,6 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -234,9 +233,11 @@ async def run_judge(
 _VERDICT_SCORES: dict[str, float] = {"positive": 1.0, "mixed": 0.5, "critical": 0.0}
 
 
-def aggregate_score(evaluations: list[dict], excluded_indices: set[int] | None = None) -> float:
+def aggregate_score(evaluations: list[dict], excluded_indices: set[int] | None = None) -> float | None:
     """Return mean verdict score of non-excluded evaluators (positive=1, mixed=0.5, critical=0).
 
+    Returns None when all evaluators failed (empty list), so callers can distinguish
+    total failure from a genuinely low score.
     excluded_indices: set of evaluator_index values to skip (low reliability).
     """
     excluded = excluded_indices or set()
@@ -244,7 +245,7 @@ def aggregate_score(evaluations: list[dict], excluded_indices: set[int] | None =
     if not active:
         active = evaluations
     if not active:
-        return 0.0
+        return None
     scores = [_VERDICT_SCORES.get(e.get("verdict", "mixed"), 0.5) for e in active]
     return round(sum(scores) / len(scores), 4)
 
@@ -403,14 +404,17 @@ async def run_criteria_judge(
 def aggregate_criteria_score(
     evaluations: list[dict],
     excluded_indices: set[int] | None = None,
-) -> float:
-    """Return mean score (0–1) of non-excluded criteria judge evaluators."""
+) -> float | None:
+    """Return mean score (0–1) of non-excluded criteria judge evaluators.
+
+    Returns None when all evaluators failed (empty list).
+    """
     excluded = excluded_indices or set()
     active = [e for e in evaluations if e["evaluator_index"] not in excluded]
     if not active:
         active = evaluations
     if not active:
-        return 0.0
+        return None
     return round(sum(e["score"] for e in active) / len(active), 4)
 
 

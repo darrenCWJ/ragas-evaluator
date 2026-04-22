@@ -1,6 +1,10 @@
 """Pydantic models and shared constants for the API."""
 
+import re
+
 from pydantic import BaseModel, Field, field_validator
+
+_LLM_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:\-/]{0,127}$")
 
 from config import (
     ALLOWED_FILE_TYPES,
@@ -253,6 +257,16 @@ class RagConfigCreate(BaseModel):
     max_steps: int = 3
     reranker_model: str | None = None
     reranker_top_k: int | None = None
+
+    @field_validator("llm_model")
+    @classmethod
+    def validate_llm_model(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError(
+                "llm_model must be 1-128 characters containing only letters, digits, "
+                "dots, colons, hyphens, underscores, or forward slashes"
+            )
+        return v
 
     @field_validator("search_type")
     @classmethod

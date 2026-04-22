@@ -31,7 +31,7 @@ class OpenAIBotConnector:
         system_prompt: str = "",
         prompt_for_sources: bool = False,
     ) -> None:
-        self._client = AsyncOpenAI(api_key=api_key)
+        self._client = AsyncOpenAI(api_key=api_key, max_retries=1, timeout=120.0)
         self._model = model
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources

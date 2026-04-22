@@ -8,10 +8,13 @@ A thin ``_PgConnection`` / ``_PgCursor`` wrapper makes the PostgreSQL
 connection behave like ``sqlite3`` so every route module works unchanged.
 """
 
+import logging
 import sqlite3
 from typing import Any
 
 from config import DATABASE_PATH, DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Detect backend
@@ -88,8 +91,9 @@ class _PgConnection:
                 cur.execute("SAVEPOINT _sp")
                 cur.execute(stmt)
                 cur.execute("RELEASE SAVEPOINT _sp")
-            except Exception:
+            except Exception as _stmt_err:
                 cur.execute("ROLLBACK TO SAVEPOINT _sp")
+                logger.warning("executescript: statement rolled back: %s — %s", stmt[:120], _stmt_err)
         self._conn.commit()
 
     def executemany(self, sql: str, seq_of_params) -> None:
@@ -428,8 +432,9 @@ def _add_column_if_missing(
         try:
             conn.execute(alter_sql)
             conn.commit()
-        except sqlite3.OperationalError:
-            pass  # Column already exists
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
 
 
 def _make_pg_connection() -> _PgConnection:
@@ -523,16 +528,30 @@ def get_db() -> sqlite3.Connection | _PgConnection:
 
     if _USE_PG:
         # Neon serverless closes idle connections — reconnect transparently
+        needs_reconnect = False
         try:
             if _connection._conn.closed:
-                raise Exception("closed")
-            _connection._conn.cursor().execute("SELECT 1")
-        except Exception:
+                needs_reconnect = True
+            else:
+                cur = _connection._conn.cursor()
+                try:
+                    cur.execute("SELECT 1")
+                finally:
+                    cur.close()
+        except Exception as _health_err:
+            logger.warning("PG health check failed, reconnecting: %s", _health_err)
+            needs_reconnect = True
+
+        if needs_reconnect:
             try:
                 _connection.close()
             except Exception:
                 pass
-            _connection = _make_pg_connection()
+            try:
+                _connection = _make_pg_connection()
+            except Exception as _reconnect_err:
+                logger.error("PG reconnect failed: %s", _reconnect_err)
+                raise
 
     return _connection
 

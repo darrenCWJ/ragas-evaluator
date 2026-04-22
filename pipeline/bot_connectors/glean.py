@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from pipeline.bot_connectors.base import BotResponse, Citation
+from pipeline.bot_connectors.custom import _validate_endpoint_url
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class GleanBotConnector:
         agent_id: str | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
+        _validate_endpoint_url(base_url)
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._agent_id = agent_id

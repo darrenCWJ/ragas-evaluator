@@ -14,6 +14,7 @@ from pipeline.llm import chat_completion
 from pipeline.reranker import rerank
 from pipeline.vectorstore import search as vector_search
 from pipeline.bm25 import load_index, search_bm25, get_index_path
+from config import CONTEXT_CHAR_BUDGET
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,6 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant. Answer the user's question based only on the "
     "provided context. If the context doesn't contain enough information, say so."
 )
-
-CONTEXT_CHAR_BUDGET = 100_000
 
 
 def _build_context_text(contexts: list[dict]) -> str:
@@ -130,7 +129,7 @@ async def _retrieve_hybrid(query: str, config_row, conn) -> list[dict]:
         index, texts, metadatas = load_index(index_path)
         sparse_results = search_bm25(index, texts, metadatas, query, top_k)
     except FileNotFoundError:
-        pass
+        logger.warning("BM25 index not found at %s, sparse leg skipped", index_path)
 
     # Reciprocal Rank Fusion
     RRF_K = 60

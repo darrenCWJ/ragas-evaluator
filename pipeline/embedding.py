@@ -14,6 +14,28 @@ from config import EMBEDDING_BATCH_SIZE
 
 BATCH_SIZE = EMBEDDING_BATCH_SIZE
 
+# Module-level OpenAI client for embedding (connection reuse)
+_openai_embed_client: AsyncOpenAI | None = None
+
+
+def _get_openai_embed_client() -> AsyncOpenAI:
+    global _openai_embed_client
+    if _openai_embed_client is None:
+        _openai_embed_client = AsyncOpenAI(
+            max_retries=1,
+            timeout=60.0,
+        )
+    return _openai_embed_client
+
+
+async def close_openai_embed_client() -> None:
+    """Close module-level embedding OpenAI client. Call during app shutdown."""
+    global _openai_embed_client
+    if _openai_embed_client is not None:
+        await _openai_embed_client.close()
+        _openai_embed_client = None
+
+
 # Lazy cache for sentence-transformers models (audit fix — avoids re-loading per request)
 _st_models: dict = {}
 
@@ -31,7 +53,7 @@ async def _embed_openai(texts: list[str], model_name: str, params: dict) -> list
     if not texts:
         return []
 
-    client = AsyncOpenAI()
+    client = _get_openai_embed_client()
     all_embeddings: list[list[float]] = []
 
     for i in range(0, len(texts), BATCH_SIZE):

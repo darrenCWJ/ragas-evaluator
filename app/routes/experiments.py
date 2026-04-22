@@ -798,10 +798,9 @@ async def run_experiment(
         )
 
     # Build set of valid metric names (built-in + custom for this project)
-    conn_check = db.init.get_db()
     custom_names = {
         r["name"]
-        for r in conn_check.execute(
+        for r in conn.execute(
             "SELECT name FROM custom_metrics WHERE project_id = ?", (project_id,)
         ).fetchall()
     }
@@ -845,8 +844,7 @@ async def run_experiment(
     }
 
     async def _run_background():
-        run_conn = db.init.get_db()
-        run_conn.row_factory = sqlite3.Row
+        run_conn = db.init.get_thread_db()
         completed_count = 0
         tasks: list[asyncio.Task] = []
 
@@ -1466,8 +1464,13 @@ async def run_experiment(
                         (datetime.now().isoformat(), experiment_id),
                     )
                     run_conn.commit()
-            except Exception:
-                pass  # Best-effort cleanup
+            except Exception as _cleanup_err:
+                logger.warning(
+                    "Experiment %d: cleanup status-update failed: %s",
+                    experiment_id, _cleanup_err,
+                )
+            finally:
+                run_conn.close()
 
     task = asyncio.create_task(_run_background())
     _background_tasks[experiment_id] = task
@@ -1544,7 +1547,6 @@ async def experiment_progress(project_id: int, experiment_id: int):
     async def _observe():
         prev_current = -1
         prev_items_sent = 0
-        prev_scoring = []
         sent_started = False
         while True:
             prog = _experiment_progress.get(experiment_id)

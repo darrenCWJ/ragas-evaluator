@@ -69,7 +69,7 @@ ALLOWED_FILE_TYPES = {".txt", ".pdf", ".docx"}
 # ---------------------------------------------------------------------------
 # LLM temperature defaults (not env-configurable — these are tuned values)
 # ---------------------------------------------------------------------------
-TESTGEN_TOPIC_TEMPERATURE: int | float = 0
+TESTGEN_TOPIC_TEMPERATURE: float = 0.0
 TESTGEN_PERSONA_TEMPERATURE: float = 0.7
 TESTGEN_QUESTION_TEMPERATURE: float = 0.8
 
@@ -112,3 +112,8 @@ VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sp
 VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
 VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
 MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", "0"))
+
+# ---------------------------------------------------------------------------
+# RAG context budget
+# ---------------------------------------------------------------------------
+CONTEXT_CHAR_BUDGET = int(os.environ.get("CONTEXT_CHAR_BUDGET", "100000"))
