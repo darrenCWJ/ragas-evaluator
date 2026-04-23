@@ -10,6 +10,7 @@ connection behave like ``sqlite3`` so every route module works unchanged.
 
 import logging
 import sqlite3
+import threading
 from typing import Any
 
 from config import DATABASE_PATH, DATABASE_URL
@@ -520,8 +521,26 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     return conn
 
 
+_thread_local = threading.local()
+
+
 def get_db() -> sqlite3.Connection | _PgConnection:
     global _connection
+
+    if threading.current_thread() is not threading.main_thread():
+        if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
+            _thread_local.conn = get_thread_db()
+        elif _USE_PG:
+            try:
+                if _thread_local.conn._conn.closed:
+                    raise Exception("closed")
+                cur = _thread_local.conn._conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+            except Exception:
+                _thread_local.conn = get_thread_db()
+        return _thread_local.conn
+
     if _connection is None:
         _connection = init_db()
         return _connection

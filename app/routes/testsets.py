@@ -22,7 +22,7 @@ from app.models import (
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
 )
-from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE
+from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_THREAD_MODE
 import db.init
 from db.init import NOW_SQL, json_extract_sql
 
@@ -1161,6 +1161,39 @@ _SUBPROCESS_PREAMBLE = (
 )
 
 
+def _run_kg_in_thread(
+    project_id: int,
+    kg_source: str,
+    chunk_config_id: int | None,
+    overlap_max_nodes: int | None,
+    fast_mode: bool,
+) -> None:
+    """Run KG build in a thread, reusing main process ragas imports (memory-efficient)."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        logger.info("KG thread build starting: project=%d source=%s", project_id, kg_source)
+        from evaluation.metrics.testgen import set_progress, clear_progress
+        set_progress(project_id, {"stage": "building_knowledge_graph", "kg_building": True}, kg_source=kg_source)
+        if kg_source == "documents":
+            from evaluation.metrics.testgen import build_kg_standalone_from_documents
+            build_kg_standalone_from_documents(project_id=project_id, overlap_max_nodes=overlap_max_nodes)
+        else:
+            from evaluation.metrics.testgen import build_kg_standalone
+            build_kg_standalone(chunk_config_id=chunk_config_id, project_id=project_id,
+                                overlap_max_nodes=overlap_max_nodes, fast_mode=fast_mode)
+        logger.info("KG thread build completed: project=%d source=%s", project_id, kg_source)
+    except Exception as exc:
+        logger.exception("KG thread build failed: project=%d: %s", project_id, exc)
+    finally:
+        from evaluation.metrics.testgen import clear_progress
+        clear_progress(project_id, kg_source=kg_source)
+        loop.close()
+        with _kg_lock:
+            _active_kg_builds.pop((project_id, kg_source), None)
+
+
 def _run_kg_subprocess(
     project_id: int,
     script: str,
@@ -1246,23 +1279,16 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                 )
             _active_kg_builds[(project_id, "documents")] = True
 
-        overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
-        script = (
-            _SUBPROCESS_PREAMBLE +
-            "import sys, os; "
-            "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
-            "from evaluation.metrics.testgen import build_kg_standalone_from_documents; "
-            "result = build_kg_standalone_from_documents("
-            "project_id=int(sys.argv[2])"
-            f"{overlap_arg}); "
-            "print('KG_BUILD_OK')"
-        )
-        thread = threading.Thread(
-            target=_run_kg_subprocess,
-            args=(project_id, script, [str(project_id)], "KG_BUILD_OK", "building_knowledge_graph", "documents"),
-            daemon=True,
-        )
-        thread.start()
+        if KG_THREAD_MODE:
+            threading.Thread(target=_run_kg_in_thread,
+                args=(project_id, "documents", None, req.overlap_max_nodes, False), daemon=True).start()
+        else:
+            overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
+            script = (_SUBPROCESS_PREAMBLE + "import sys, os; os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
+                f"from evaluation.metrics.testgen import build_kg_standalone_from_documents; "
+                f"build_kg_standalone_from_documents(project_id=int(sys.argv[2]){overlap_arg}); print('KG_BUILD_OK')")
+            threading.Thread(target=_run_kg_subprocess,
+                args=(project_id, script, [str(project_id)], "KG_BUILD_OK", "building_knowledge_graph", "documents"), daemon=True).start()
     else:
         # Chunk-based KG (default)
         if req.chunk_config_id is None:
@@ -1276,30 +1302,20 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 
         with _kg_lock:
             if _active_kg_builds.get((project_id, "chunks")):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Knowledge graph build already in progress",
-                )
+                raise HTTPException(status_code=409, detail="Knowledge graph build already in progress")
             _active_kg_builds[(project_id, "chunks")] = True
 
-        overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
-        fast_arg = f", fast_mode={req.fast_mode}" if req.fast_mode else ""
-        script = (
-            _SUBPROCESS_PREAMBLE +
-            "import sys, os; "
-            "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
-            "from evaluation.metrics.testgen import build_kg_standalone; "
-            "result = build_kg_standalone("
-            "chunk_config_id=int(sys.argv[2]), project_id=int(sys.argv[3])"
-            f"{overlap_arg}{fast_arg}); "
-            "print('KG_BUILD_OK')"
-        )
-        thread = threading.Thread(
-            target=_run_kg_subprocess,
-            args=(project_id, script, [str(req.chunk_config_id), str(project_id)], "KG_BUILD_OK", "building_knowledge_graph", "chunks"),
-            daemon=True,
-        )
-        thread.start()
+        if KG_THREAD_MODE:
+            threading.Thread(target=_run_kg_in_thread,
+                args=(project_id, "chunks", req.chunk_config_id, req.overlap_max_nodes, req.fast_mode), daemon=True).start()
+        else:
+            overlap_arg = f", overlap_max_nodes={req.overlap_max_nodes}" if req.overlap_max_nodes is not None else ", overlap_max_nodes=None"
+            fast_arg = f", fast_mode={req.fast_mode}" if req.fast_mode else ""
+            script = (_SUBPROCESS_PREAMBLE + "import sys, os; os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
+                f"from evaluation.metrics.testgen import build_kg_standalone; "
+                f"build_kg_standalone(chunk_config_id=int(sys.argv[2]), project_id=int(sys.argv[3]){overlap_arg}{fast_arg}); print('KG_BUILD_OK')")
+            threading.Thread(target=_run_kg_subprocess,
+                args=(project_id, script, [str(req.chunk_config_id), str(project_id)], "KG_BUILD_OK", "building_knowledge_graph", "chunks"), daemon=True).start()
 
     return {"status": "building", "project_id": project_id, "kg_source": req.kg_source}
 

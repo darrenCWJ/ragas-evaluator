@@ -125,3 +125,7 @@ MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", "0")
 # RAG context budget
 # ---------------------------------------------------------------------------
 CONTEXT_CHAR_BUDGET = int(os.environ.get("CONTEXT_CHAR_BUDGET", "100000"))
+
+# Set KG_THREAD_MODE=true to run KG builds in a thread instead of a subprocess.
+# Use this in memory-constrained environments to avoid reimporting ragas.
+KG_THREAD_MODE: bool = os.environ.get("KG_THREAD_MODE", "").lower() in ("1", "true", "yes")
