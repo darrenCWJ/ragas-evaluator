@@ -29,14 +29,9 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
             detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_FILE_TYPES))}",
         )
 
-    chunks: list[bytes] = []
-    total = 0
-    async for chunk in file:
-        total += len(chunk)
-        if total > MAX_UPLOAD_SIZE:
-            raise HTTPException(status_code=413, detail="File exceeds 50MB size limit")
-        chunks.append(chunk)
-    content_bytes = b"".join(chunks)
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="File exceeds 50MB size limit")
 
     if ext == ".txt":
         text = content_bytes.decode("utf-8", errors="ignore")
