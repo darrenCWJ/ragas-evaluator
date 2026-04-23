@@ -527,6 +527,8 @@ _thread_local = threading.local()
 def get_db() -> sqlite3.Connection | _PgConnection:
     global _connection
 
+    # Background threads get their own isolated connection so the main
+    # server connection is never shared across threads.
     if threading.current_thread() is not threading.main_thread():
         if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
             _thread_local.conn = get_thread_db()

@@ -126,6 +126,14 @@ MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", "0")
 # ---------------------------------------------------------------------------
 CONTEXT_CHAR_BUDGET = int(os.environ.get("CONTEXT_CHAR_BUDGET", "100000"))
 
+# ---------------------------------------------------------------------------
+# Worker service
+# ---------------------------------------------------------------------------
+# When set, KG builds are offloaded to a dedicated worker service instead of
+# running in the main server process.
+# Example: http://kg-worker:3000
+KG_WORKER_URL: str | None = os.environ.get("KG_WORKER_URL") or None
+
 # Set KG_THREAD_MODE=true to run KG builds in a thread instead of a subprocess.
 # Use this in memory-constrained environments to avoid reimporting ragas.
 KG_THREAD_MODE: bool = os.environ.get("KG_THREAD_MODE", "").lower() in ("1", "true", "yes")

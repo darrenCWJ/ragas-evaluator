@@ -15,7 +15,9 @@ import hashlib
 import json as _json
 import logging
 import math
+import os
 import signal
+import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -96,6 +98,8 @@ _progress: dict[tuple[int, str], dict] = {}
 def set_progress(project_id: int, data: dict, kg_source: str = "chunks") -> None:
     with _progress_lock:
         _progress[(project_id, kg_source)] = data
+    if os.environ.get("KG_PROGRESS_PIPE"):
+        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **data}), flush=True)
 
 
 def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> None:
@@ -103,6 +107,11 @@ def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> Non
         key = (project_id, kg_source)
         if key in _progress:
             _progress[key].update(fields)
+            snapshot = dict(_progress[key])
+        else:
+            snapshot = fields
+    if os.environ.get("KG_PROGRESS_PIPE"):
+        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **snapshot}), flush=True)
 
 
 def get_progress(project_id: int, kg_source: str = "chunks") -> dict | None:
@@ -675,7 +684,7 @@ def _apply_transform_batched(
     """
     from ragas.run_config import RunConfig
 
-    needs_llm = isinstance(transform, (HeadlinesExtractor, KeyphrasesExtractor, SummaryExtractor, CustomNodeFilter, ThemesExtractor, NERExtractor))
+    needs_llm = isinstance(transform, (HeadlinesExtractor, KeyphrasesExtractor, SummaryExtractor, CustomNodeFilter, ThemesExtractor, NERExtractor, CombinedNodeExtractor, EmbeddingExtractor))
 
     # OverlapScoreBuilder is O(n² × k²) — cap node count to avoid multi-hour runs.
     # With k=10 keyphrases per node, approximate time estimates:
