@@ -22,7 +22,7 @@ from app.models import (
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
 )
-from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URL, KG_THREAD_MODE
+from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URL, KG_WORKER_URLS, KG_THREAD_MODE
 import db.init
 from db.init import NOW_SQL, json_extract_sql
 
@@ -1150,6 +1150,10 @@ async def delete_knowledge_graph(project_id: int, kg_source: str = "chunks"):
 _active_kg_builds: dict[tuple[int, str], bool] = {}
 _kg_lock = threading.Lock()
 
+# Track which worker URL accepted each project's KG build for correct progress routing.
+# Lost on main-app restart — progress endpoint falls back to trying all workers.
+_project_worker: dict[tuple[int, str], str] = {}
+
 # Prepended to every KG subprocess script to suppress BrokenPipeError noise.
 # When the parent closes stdout after reading KG_BUILD_OK, Python's shutdown
 # would normally print "Exception ignored while flushing sys.stdout: BrokenPipeError".
@@ -1331,8 +1335,8 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
     """Start building a knowledge graph in the background."""
     logger.info("KG generate clicked: project=%d source=%s fast=%s", project_id, req.kg_source, req.fast_mode)
 
-    # Offload to worker service if configured
-    if KG_WORKER_URL:
+    # Offload to worker service(s) if configured
+    if KG_WORKER_URLS:
         import httpx
         payload = {
             "project_id": project_id,
@@ -1341,18 +1345,24 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
             "overlap_max_nodes": req.overlap_max_nodes,
             "fast_mode": req.fast_mode,
         }
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(f"{KG_WORKER_URL.rstrip('/')}/build-kg", json=payload)
-                resp.raise_for_status()
-                logger.info("KG build delegated to worker: %s", KG_WORKER_URL)
-                return resp.json()
-        except httpx.HTTPStatusError as e:
-            detail = e.response.text[:200] if e.response else str(e)
-            raise HTTPException(status_code=e.response.status_code, detail=detail)
-        except Exception as e:
-            logger.error("Worker request failed: %s", e)
-            raise HTTPException(status_code=502, detail=f"Worker unreachable: {e}")
+        key = (project_id, req.kg_source)
+        async with httpx.AsyncClient(timeout=10) as client:
+            for worker_url in KG_WORKER_URLS:
+                try:
+                    resp = await client.post(f"{worker_url}/build-kg", json=payload)
+                    if resp.status_code == 202:
+                        _project_worker[key] = worker_url
+                        logger.info("KG build delegated to worker: %s", worker_url)
+                        return resp.json()
+                    if resp.status_code == 409:
+                        raise HTTPException(status_code=409, detail=resp.json().get("detail", "Build already in progress"))
+                    # 503 = worker at capacity, try next
+                    logger.debug("Worker %s at capacity, trying next", worker_url)
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.warning("Worker %s unreachable: %s", worker_url, e)
+        raise HTTPException(status_code=503, detail="All KG workers busy or unreachable — try again shortly")
 
     conn = db.init.get_db()
     project = conn.execute(
@@ -1419,19 +1429,28 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
     """Poll knowledge graph build progress."""
     from evaluation.metrics.testgen import get_progress, get_kg_info
 
-    # When using worker, proxy progress directly from the worker
-    if KG_WORKER_URL:
+    # When using worker(s), proxy progress — try the known worker first, then others
+    if KG_WORKER_URLS:
         import httpx
+        key = (project_id, kg_source)
+        known = _project_worker.get(key)
+        candidates = ([known] + [u for u in KG_WORKER_URLS if u != known]) if known else KG_WORKER_URLS
         try:
             async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(
-                    f"{KG_WORKER_URL.rstrip('/')}/progress/{project_id}",
-                    params={"kg_source": kg_source},
-                )
-                if resp.status_code == 200:
-                    return resp.json()
+                for worker_url in candidates:
+                    try:
+                        resp = await client.get(
+                            f"{worker_url}/progress/{project_id}",
+                            params={"kg_source": kg_source},
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get("active") or data.get("status"):
+                                return data
+                    except Exception:
+                        continue
         except Exception:
-            pass  # fall through to local DB check on worker unreachable
+            pass  # fall through to local DB check on all workers unreachable
 
     # Check if a build thread is actively running
     with _kg_lock:

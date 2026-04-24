@@ -74,6 +74,11 @@ TESTGEN_PERSONA_TEMPERATURE: float = 0.7
 TESTGEN_QUESTION_TEMPERATURE: float = 0.8
 
 # ---------------------------------------------------------------------------
+# KG build concurrency
+# ---------------------------------------------------------------------------
+MAX_CONCURRENT_KG_BUILDS = int(os.environ.get("MAX_CONCURRENT_KG_BUILDS", "1"))
+
+# ---------------------------------------------------------------------------
 # Batch sizes
 # ---------------------------------------------------------------------------
 EMBEDDING_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "100"))
@@ -105,12 +110,6 @@ ALLOW_PRIVATE_ENDPOINTS = os.environ.get("ALLOW_PRIVATE_ENDPOINTS", "false").low
 # ---------------------------------------------------------------------------
 MULTI_LLM_JUDGE_DEFAULT_EVALUATORS = int(os.environ.get("MULTI_LLM_JUDGE_DEFAULT_EVALUATORS", "3"))
 MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD = float(os.environ.get("MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD", "0.6"))
-MULTI_LLM_JUDGE_TEMP_MIN = float(os.environ.get("MULTI_LLM_JUDGE_TEMP_MIN", "0.3"))
-MULTI_LLM_JUDGE_TEMP_MAX = float(os.environ.get("MULTI_LLM_JUDGE_TEMP_MAX", "0.75"))
-_raw_model_assignments = os.environ.get("MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS", "").strip()
-MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS: list[str] | None = (
-    [m.strip() for m in _raw_model_assignments.split(",") if m.strip()] or None
-)
 
 # ---------------------------------------------------------------------------
 # Third-party LLM provider API keys (used by judge multi-model routing)
@@ -131,18 +130,3 @@ MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", "0")
 # RAG context budget
 # ---------------------------------------------------------------------------
 CONTEXT_CHAR_BUDGET = int(os.environ.get("CONTEXT_CHAR_BUDGET", "100000"))
-
-# ---------------------------------------------------------------------------
-# Worker service
-# ---------------------------------------------------------------------------
-# When set, KG builds are offloaded to dedicated worker service(s).
-# Single worker:  KG_WORKER_URL=http://kg-worker:3000
-# Multiple workers: KG_WORKER_URLS=http://kg-worker-1:3000,http://kg-worker-2:3000
-# (KG_WORKER_URL is kept for backward compatibility)
-_kg_worker_raw = os.environ.get("KG_WORKER_URLS") or os.environ.get("KG_WORKER_URL") or ""
-KG_WORKER_URLS: list[str] = [u.strip().rstrip("/") for u in _kg_worker_raw.split(",") if u.strip()]
-KG_WORKER_URL: str | None = KG_WORKER_URLS[0] if KG_WORKER_URLS else None
-
-# Set KG_THREAD_MODE=true to run KG builds in a thread instead of a subprocess.
-# Use this in memory-constrained environments to avoid reimporting ragas.
-KG_THREAD_MODE: bool = os.environ.get("KG_THREAD_MODE", "").lower() in ("1", "true", "yes")

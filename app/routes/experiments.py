@@ -1389,6 +1389,7 @@ async def run_experiment(
                             )
                     # --- End Reference Judges block ---
                 else:
+                    run_conn = db.init.reconnect_if_needed(run_conn)
                     run_conn.execute(
                         """INSERT INTO experiment_results
                            (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)

@@ -63,8 +63,8 @@ class _PgConnection:
         self._conn = pg_conn
 
     def execute(self, sql: str, params: tuple = ()) -> _PgCursor:
-        # Escape literal % (e.g. LIKE '%foo%') before introducing %s placeholders
-        pg_sql = sql.replace("%", "%%").replace("?", "%s")
+        # Replace SQLite ? placeholders with psycopg2 %s
+        pg_sql = sql.replace("?", "%s")
 
         # Append RETURNING id to INSERTs so lastrowid works
         stripped = pg_sql.strip().upper()
@@ -490,7 +490,6 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN custom_metric_name TEXT")
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN judge_model_assignments_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
-    _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN few_shot_examples_json TEXT")
 
     # Backfill NULL chunk_config_id on knowledge_graphs (SQLite only — PG starts fresh)
     if not _USE_PG:
@@ -594,30 +593,3 @@ def get_thread_db() -> sqlite3.Connection | _PgConnection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
-
-
-def reconnect_if_needed(
-    conn: sqlite3.Connection | _PgConnection,
-) -> sqlite3.Connection | _PgConnection:
-    """Return conn if healthy; replace with a fresh connection if dead.
-
-    SQLite connections don't time out so this is a no-op for them.
-    Neon/PostgreSQL closes idle connections after ~5 minutes, which can
-    kill long-running experiment background tasks mid-flight.
-    """
-    if not _USE_PG:
-        return conn
-    try:
-        if conn._conn.closed:  # type: ignore[union-attr]
-            raise Exception("closed")
-        cur = conn._conn.cursor()  # type: ignore[union-attr]
-        cur.execute("SELECT 1")
-        cur.close()
-        return conn
-    except Exception:
-        logger.warning("Thread DB connection dead — reconnecting")
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return get_thread_db()
