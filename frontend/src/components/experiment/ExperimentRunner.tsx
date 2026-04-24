@@ -154,7 +154,7 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
     "Compares structured/tabular data between response and reference using row-level or column-level matching.",
   // Judge Metrics
   multi_llm_judge:
-    "Runs multiple LLMs independently as judges (at varying temperatures) and aggregates their verdicts. Each evaluator produces a reasoning, verdict (positive/mixed/critical), score (1–10), and claim-level quotes linking the response to source chunks. The final score is the mean verdict across all evaluators.",
+    "Runs multiple LLMs independently as judges and aggregates their verdicts. Each evaluator produces a reasoning, verdict (positive/mixed/critical), score (1–10), and claim-level quotes linking the response to source chunks. The final score is the mean verdict across all evaluators.",
 };
 
 interface MetricGroupProps {
