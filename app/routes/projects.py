@@ -112,9 +112,15 @@ async def update_project(project_id: int, req: ProjectUpdate):
 
 @router.get("/judge-models")
 async def list_judge_models():
-    """Return all judge-eligible models with API key availability."""
+    """Return judge-eligible models plus env-var defaults for the UI."""
     from pipeline.llm import get_available_judge_models
-    return {"models": get_available_judge_models()}
+    from config import MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS, MULTI_LLM_JUDGE_TEMP_MIN, MULTI_LLM_JUDGE_TEMP_MAX
+    return {
+        "models": await get_available_judge_models(),
+        "default_model_assignments": MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS,
+        "temp_min": MULTI_LLM_JUDGE_TEMP_MIN,
+        "temp_max": MULTI_LLM_JUDGE_TEMP_MAX,
+    }
 
 
 @router.delete("/projects/{project_id}")

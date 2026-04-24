@@ -899,6 +899,9 @@ async def run_experiment(
                 ).fetchone()
                 if proj_row and proj_row["judge_model_assignments_json"]:
                     judge_assignments = json.loads(proj_row["judge_model_assignments_json"])
+            if not judge_assignments:
+                from config import MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS
+                judge_assignments = MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS
 
             # Validate judge model API key availability before starting
             judge_is_selected = (
@@ -909,21 +912,24 @@ async def run_experiment(
                 )
             )
             if judge_is_selected and judge_assignments:
-                from pipeline.llm import JUDGE_MODELS, get_available_judge_models
-                availability = {m["id"]: m["available"] for m in get_available_judge_models()}
-                model_info = {m["id"]: m for m in JUDGE_MODELS}
+                from pipeline.llm import get_available_judge_models
+                known_models = {m["id"]: m for m in await get_available_judge_models()}
                 _PROVIDER_KEY = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY"}
-                missing = []
+                unknown, missing_key = [], []
                 for mid in dict.fromkeys(judge_assignments):  # deduplicate, preserve order
-                    if not availability.get(mid, False):
-                        provider = model_info.get(mid, {}).get("provider", "unknown")
+                    if mid not in known_models:
+                        unknown.append(mid)
+                    elif not known_models[mid]["available"]:
+                        provider = known_models[mid].get("provider", "unknown")
                         key_name = _PROVIDER_KEY.get(provider, f"{provider.upper()}_API_KEY")
-                        missing.append(f"{mid} (needs {key_name})")
-                if missing:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Missing API keys for judge models: {', '.join(missing)}",
-                    )
+                        missing_key.append(f"{mid} (needs {key_name})")
+                errors = []
+                if unknown:
+                    errors.append(f"Unrecognised judge models: {', '.join(unknown)}")
+                if missing_key:
+                    errors.append(f"Missing API keys for judge models: {', '.join(missing_key)}")
+                if errors:
+                    raise HTTPException(status_code=400, detail=" | ".join(errors))
 
             # Load custom metrics for this project
             custom_rows = all_custom_rows
@@ -936,6 +942,7 @@ async def run_experiment(
                     continue
                 if cr["metric_type"] == "criteria_judge":
                     refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
+                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr.keys() and cr["few_shot_examples_json"] else None
                     if refined:
                         criteria_judge_configs.append(
                             _multi_llm_judge_module.CriteriaJudgeConfig(
@@ -944,10 +951,12 @@ async def run_experiment(
                                 num_evaluators=len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators,
                                 model_assignments=judge_assignments,
                                 temperature_assignments=req.judge_temperature_assignments,
+                                few_shot_examples=few_shot,
                             )
                         )
                 elif cr["metric_type"] == "reference_judge":
                     refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
+                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr.keys() and cr["few_shot_examples_json"] else None
                     if refined:
                         reference_judge_configs.append(
                             _multi_llm_judge_module.ReferenceJudgeConfig(
@@ -956,6 +965,7 @@ async def run_experiment(
                                 num_evaluators=len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators,
                                 model_assignments=judge_assignments,
                                 temperature_assignments=req.judge_temperature_assignments,
+                                few_shot_examples=few_shot,
                             )
                         )
                 else:
@@ -1247,6 +1257,7 @@ async def run_experiment(
                 question_text = result["question_text"]
 
                 if result["error"] is None:
+                    run_conn = db.init.reconnect_if_needed(run_conn)
                     cur = run_conn.execute(
                         """INSERT INTO experiment_results
                            (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)

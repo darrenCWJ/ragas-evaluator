@@ -498,6 +498,7 @@ class CustomMetricCreate(BaseModel):
     min_score: int = 1
     max_score: int = 5
     refined_prompt: str | None = None
+    few_shot_examples: list[dict] | None = None
 
     @field_validator("name")
     @classmethod

@@ -42,6 +42,7 @@ Write the LLM evaluation system prompt for this metric."""
 
 
 def _parse_custom_metric_row(row) -> dict:
+    keys = row.keys()
     return {
         "id": row["id"],
         "project_id": row["project_id"],
@@ -51,7 +52,8 @@ def _parse_custom_metric_row(row) -> dict:
         "rubrics": json.loads(row["rubrics_json"]) if row["rubrics_json"] else None,
         "min_score": row["min_score"],
         "max_score": row["max_score"],
-        "refined_prompt": row["refined_prompt"] if "refined_prompt" in row.keys() else None,
+        "refined_prompt": row["refined_prompt"] if "refined_prompt" in keys else None,
+        "few_shot_examples": json.loads(row["few_shot_examples_json"]) if "few_shot_examples_json" in keys and row["few_shot_examples_json"] else None,
         "created_at": row["created_at"],
     }
 
@@ -125,8 +127,8 @@ async def create_custom_metric(project_id: int, req: CustomMetricCreate):
 
     cursor = conn.execute(
         """INSERT INTO custom_metrics
-           (project_id, name, metric_type, prompt, rubrics_json, min_score, max_score, refined_prompt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           (project_id, name, metric_type, prompt, rubrics_json, min_score, max_score, refined_prompt, few_shot_examples_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             project_id,
             req.name,
@@ -136,6 +138,7 @@ async def create_custom_metric(project_id: int, req: CustomMetricCreate):
             req.min_score,
             req.max_score,
             req.refined_prompt,
+            json.dumps(req.few_shot_examples) if req.few_shot_examples else None,
         ),
     )
     conn.commit()
@@ -144,6 +147,40 @@ async def create_custom_metric(project_id: int, req: CustomMetricCreate):
         "SELECT * FROM custom_metrics WHERE id = ?", (cursor.lastrowid,)
     ).fetchone()
     return _parse_custom_metric_row(row)
+
+
+@router.put("/projects/{project_id}/custom-metrics/{metric_id}")
+async def update_custom_metric(project_id: int, metric_id: int, req: CustomMetricCreate):
+    conn = db.init.get_db()
+    row = conn.execute(
+        "SELECT * FROM custom_metrics WHERE id = ? AND project_id = ?",
+        (metric_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom metric not found")
+
+    conn.execute(
+        """UPDATE custom_metrics
+           SET metric_type = ?, prompt = ?, rubrics_json = ?, min_score = ?, max_score = ?,
+               refined_prompt = ?, few_shot_examples_json = ?
+           WHERE id = ?""",
+        (
+            req.metric_type,
+            req.prompt,
+            json.dumps(req.rubrics) if req.rubrics else None,
+            req.min_score,
+            req.max_score,
+            req.refined_prompt,
+            json.dumps(req.few_shot_examples) if req.few_shot_examples else None,
+            metric_id,
+        ),
+    )
+    conn.commit()
+
+    updated = conn.execute(
+        "SELECT * FROM custom_metrics WHERE id = ?", (metric_id,)
+    ).fetchone()
+    return _parse_custom_metric_row(updated)
 
 
 @router.delete("/projects/{project_id}/custom-metrics/{metric_id}")

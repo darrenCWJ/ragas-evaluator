@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import {
   fetchCustomMetrics,
   createCustomMetric,
+  updateCustomMetric,
   deleteCustomMetric,
   refineMetricDescription,
 } from "../../lib/api";
-import type { CustomMetric } from "../../lib/api";
+import type { CustomMetric, FewShotExample } from "../../lib/api";
 
 interface Props {
   projectId: number;
@@ -90,6 +91,7 @@ export default function CustomMetricBuilder({ projectId }: Props) {
   const [metrics, setMetrics] = useState<CustomMetric[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
 
   // Form state
@@ -107,6 +109,10 @@ export default function CustomMetricBuilder({ projectId }: Props) {
   const [refinedPrompt, setRefinedPrompt] = useState("");
   const [isRefining, setIsRefining] = useState(false);
   const [refineError, setRefineError] = useState<string | null>(null);
+
+  // Few-shot examples state (criteria/reference judge only)
+  const EMPTY_EXAMPLE: FewShotExample = { question: "", response: "", verdict: "good", score: undefined, reasoning: "" };
+  const [fewShotExamples, setFewShotExamples] = useState<FewShotExample[]>([]);
 
   const loadMetrics = () => {
     setLoading(true);
@@ -143,6 +149,24 @@ export default function CustomMetricBuilder({ projectId }: Props) {
     setDescription("");
     setRefinedPrompt("");
     setRefineError(null);
+    setFewShotExamples([]);
+    setEditingId(null);
+  };
+
+  const handleEdit = (m: CustomMetric) => {
+    setEditingId(m.id);
+    setName(m.name);
+    setMetricType(m.metric_type);
+    setPrompt(m.prompt ?? "");
+    setMinScore(m.min_score);
+    setMaxScore(m.max_score);
+    setRubrics(m.rubrics ?? {});
+    setDescription("");
+    setRefinedPrompt(m.refined_prompt ?? "");
+    setRefineError(null);
+    setFewShotExamples(m.few_shot_examples ?? []);
+    setError(null);
+    setShowForm(true);
   };
 
   const handleRefine = async () => {
@@ -165,24 +189,30 @@ export default function CustomMetricBuilder({ projectId }: Props) {
     setError(null);
 
     try {
-      if (isAiJudge) {
-        await createCustomMetric(projectId, {
-          name: name.trim(),
-          metric_type: metricType,
-          prompt: description.trim() || undefined,
-          refined_prompt: refinedPrompt.trim(),
-          min_score: 0,
-          max_score: 1,
-        });
+      const validExamples = fewShotExamples.filter(e => e.question.trim() && e.response.trim());
+      const payload = isAiJudge
+        ? {
+            name: name.trim(),
+            metric_type: metricType,
+            prompt: description.trim() || undefined,
+            refined_prompt: refinedPrompt.trim(),
+            min_score: 0,
+            max_score: 1,
+            few_shot_examples: validExamples.length > 0 ? validExamples : null,
+          }
+        : {
+            name: name.trim(),
+            metric_type: metricType,
+            prompt: metricType === "rubrics" || metricType === "instance_rubrics" ? undefined : prompt,
+            rubrics: metricType === "rubrics" ? rubrics : undefined,
+            min_score: minScore,
+            max_score: maxScore,
+          };
+
+      if (editingId !== null) {
+        await updateCustomMetric(projectId, editingId, payload);
       } else {
-        await createCustomMetric(projectId, {
-          name: name.trim(),
-          metric_type: metricType,
-          prompt: metricType === "rubrics" || metricType === "instance_rubrics" ? undefined : prompt,
-          rubrics: metricType === "rubrics" ? rubrics : undefined,
-          min_score: minScore,
-          max_score: maxScore,
-        });
+        await createCustomMetric(projectId, payload);
       }
       resetForm();
       setShowForm(false);
@@ -279,6 +309,11 @@ export default function CustomMetricBuilder({ projectId }: Props) {
                   {(m.metric_type === "criteria_judge" || m.metric_type === "reference_judge") && (
                     <span className="text-[10px] text-text-muted">good / mixed / bad</span>
                   )}
+                  {(m.metric_type === "criteria_judge" || m.metric_type === "reference_judge") && m.few_shot_examples && m.few_shot_examples.length > 0 && (
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-400">
+                      {m.few_shot_examples.length} example{m.few_shot_examples.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
                 </div>
                 {(m.metric_type === "criteria_judge" || m.metric_type === "reference_judge") && m.refined_prompt && (
                   <p className="mt-0.5 truncate text-xs text-text-muted">
@@ -291,16 +326,27 @@ export default function CustomMetricBuilder({ projectId }: Props) {
                   </p>
                 )}
               </div>
-              <button
-                onClick={() => handleDelete(m.id)}
-                disabled={deleting === m.id}
-                className="ml-2 rounded p-1 text-text-muted transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
-                title="Delete metric"
-              >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="ml-2 flex items-center gap-1 shrink-0">
+                <button
+                  onClick={() => handleEdit(m)}
+                  className="rounded p-1 text-text-muted transition hover:bg-accent/10 hover:text-accent"
+                  title="Edit metric"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => handleDelete(m.id)}
+                  disabled={deleting === m.id}
+                  className="rounded p-1 text-text-muted transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                  title="Delete metric"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -312,7 +358,10 @@ export default function CustomMetricBuilder({ projectId }: Props) {
 
       {/* Create form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="space-y-4 border-t border-border/50 pt-4">
+        <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4 border-t border-border/50 pt-4">
+          {editingId !== null && (
+            <p className="text-xs font-medium text-accent">Editing: {name}</p>
+          )}
           {/* Name */}
           <div>
             <label className="mb-1.5 block text-xs font-medium text-text-secondary">
@@ -321,16 +370,21 @@ export default function CustomMetricBuilder({ projectId }: Props) {
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""))}
+              onChange={(e) => !editingId && setName(e.target.value.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""))}
               placeholder="e.g. helpfulness, tone_check"
+              readOnly={editingId !== null}
               className={`w-full rounded-lg border bg-input px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 ${
-                name && !nameValid
-                  ? "border-red-500/50 focus:ring-red-500/50"
-                  : "border-border focus:ring-purple-500/50"
+                editingId !== null
+                  ? "cursor-not-allowed opacity-60 border-border"
+                  : name && !nameValid
+                    ? "border-red-500/50 focus:ring-red-500/50"
+                    : "border-border focus:ring-purple-500/50"
               }`}
             />
             <p className="mt-1 text-[10px] text-text-muted">
-              Lowercase with underscores. This becomes the metric key in results.
+              {editingId !== null
+                ? "Name cannot be changed — existing experiment results reference it."
+                : "Lowercase with underscores. This becomes the metric key in results."}
             </p>
           </div>
 
@@ -519,6 +573,156 @@ export default function CustomMetricBuilder({ projectId }: Props) {
                   </p>
                 </div>
               )}
+
+              {/* Few-shot examples */}
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="text-xs font-medium text-text-secondary">
+                    Few-shot Examples
+                    <span className="ml-1.5 text-[10px] text-text-muted font-normal">(optional — max 5)</span>
+                  </label>
+                  {fewShotExamples.length < 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setFewShotExamples((prev) => [...prev, { ...EMPTY_EXAMPLE }])}
+                      className="text-[10px] text-purple-400 hover:text-purple-300 transition"
+                    >
+                      + Add Example
+                    </button>
+                  )}
+                </div>
+
+                {/* How-it-works hint */}
+                <div className="mb-3 rounded-lg border border-border/50 bg-elevated/40 px-3 py-2.5 space-y-1.5">
+                  <p className="text-[10px] font-medium text-text-secondary">How the evaluator sees your examples</p>
+                  {isCriteriaJudge ? (
+                    <pre className="whitespace-pre-wrap font-mono text-[9px] leading-relaxed text-text-muted">{`--- Example 1 ---
+QUESTION: What is your refund policy?
+
+BOT RESPONSE: We don't offer refunds.
+
+Expected output:
+{ "verdict": "bad", "score": 0.0, "highlights": [],
+  "reasoning": "Terse and unhelpful — no policy detail." }`}</pre>
+                  ) : (
+                    <pre className="whitespace-pre-wrap font-mono text-[9px] leading-relaxed text-text-muted">{`--- Example 1 ---
+QUESTION: What is your refund policy?
+
+SUGGESTED ANSWER (reference): Refunds within 30 days with receipt.
+
+BOT RESPONSE: We don't offer refunds.
+
+Expected output:
+{ "verdict": "bad", "score": 0.0, "highlights": [],
+  "reasoning": "Contradicts the reference — refunds are available." }`}</pre>
+                  )}
+                  <p className="text-[9px] text-text-muted">
+                    {isCriteriaJudge
+                      ? "The evaluator sees your criteria prompt, then these examples, then the real question + bot response to judge."
+                      : "The evaluator sees your criteria prompt, then these examples (with reference answers), then the real question + reference + bot response to judge."}
+                  </p>
+                </div>
+
+                {fewShotExamples.length === 0 && (
+                  <p className="text-[10px] text-text-muted">
+                    No examples yet. Add real question/response pairs you already know the correct verdict for.
+                  </p>
+                )}
+
+                <div className="space-y-3">
+                  {fewShotExamples.map((ex, i) => (
+                    <div key={i} className="rounded-lg border border-purple-500/20 bg-purple-500/5 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-medium text-purple-400">Example {i + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => setFewShotExamples((prev) => prev.filter((_, idx) => idx !== i))}
+                          className="text-text-muted hover:text-red-400 transition"
+                        >
+                          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[10px] text-text-muted">
+                          Question <span className="text-text-muted/40">— the user's question</span>
+                        </label>
+                        <textarea
+                          value={ex.question}
+                          onChange={(e) => setFewShotExamples((prev) => prev.map((item, idx) => idx === i ? { ...item, question: e.target.value } : item))}
+                          rows={2}
+                          placeholder={isCriteriaJudge ? "e.g. What is your refund policy?" : "e.g. How long is the warranty?"}
+                          className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                        />
+                      </div>
+
+                      {isReferenceJudge && (
+                        <div>
+                          <label className="mb-1 block text-[10px] text-text-muted">
+                            Suggested Answer <span className="text-text-muted/40">— the correct/reference answer</span>
+                          </label>
+                          <textarea
+                            value={ex.reference ?? ""}
+                            onChange={(e) => setFewShotExamples((prev) => prev.map((item, idx) => idx === i ? { ...item, reference: e.target.value } : item))}
+                            rows={2}
+                            placeholder="e.g. Warranty covers 2 years from purchase date including parts and labour."
+                            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                          />
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="mb-1 block text-[10px] text-text-muted">
+                          Bot Response <span className="text-text-muted/40">— what the bot actually said</span>
+                        </label>
+                        <textarea
+                          value={ex.response}
+                          onChange={(e) => setFewShotExamples((prev) => prev.map((item, idx) => idx === i ? { ...item, response: e.target.value } : item))}
+                          rows={2}
+                          placeholder={isCriteriaJudge ? "e.g. We don't offer refunds." : "e.g. I'm not sure about the warranty details."}
+                          className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                        />
+                      </div>
+
+                      <div className="flex gap-3 items-end">
+                        <div className="flex-1">
+                          <label className="mb-1 block text-[10px] text-text-muted">
+                            Expected Verdict <span className="text-text-muted/40">— what the correct judgment is</span>
+                          </label>
+                          <select
+                            value={ex.verdict}
+                            onChange={(e) => setFewShotExamples((prev) => prev.map((item, idx) => idx === i ? { ...item, verdict: e.target.value } : item))}
+                            className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                          >
+                            <option value="good">good — clearly meets criteria</option>
+                            <option value="mixed">mixed — partially meets criteria</option>
+                            <option value="bad">bad — fails criteria</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[10px] text-text-muted">
+                          Reasoning <span className="text-text-muted/40">(optional) — appears in the expected output shown to evaluators</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={ex.reasoning ?? ""}
+                          onChange={(e) => setFewShotExamples((prev) => prev.map((item, idx) => idx === i ? { ...item, reasoning: e.target.value } : item))}
+                          placeholder={
+                            ex.verdict === "good" ? "e.g. Directly answers the question with accurate detail."
+                            : ex.verdict === "bad" ? "e.g. Ignores the question entirely / contradicts the reference."
+                            : "e.g. Partially correct but missing key information."
+                          }
+                          className="w-full rounded border border-border bg-input px-2 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
@@ -536,7 +740,7 @@ export default function CustomMetricBuilder({ projectId }: Props) {
               disabled={!canSubmit}
               className="rounded-lg bg-purple-600 px-4 py-2 text-xs font-medium text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {submitting ? "Creating..." : "Create Metric"}
+              {submitting ? (editingId !== null ? "Saving..." : "Creating...") : (editingId !== null ? "Save Changes" : "Create Metric")}
             </button>
             <button
               type="button"

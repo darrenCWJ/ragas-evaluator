@@ -14,6 +14,7 @@ import type {
   Experiment,
   CustomMetric,
   JudgeModel,
+  JudgeModelsResponse,
   ExperimentSSEHandle,
   SSEStartedEvent,
   SSEProgressEvent,
@@ -259,22 +260,15 @@ export default function ExperimentRunner({
 
   // Multi-model judge state — seed with fallback list so dropdowns are usable immediately
   const FALLBACK_MODELS: JudgeModel[] = [
-    { id: "gpt-4o",                  name: "GPT-4o",                    provider: "openai",   available: true  },
-    { id: "gpt-4o-mini",             name: "GPT-4o Mini",               provider: "openai",   available: true  },
-    { id: "gpt-4.1",                 name: "GPT-4.1",                   provider: "openai",   available: true  },
-    { id: "gpt-4.1-mini",            name: "GPT-4.1 Mini",              provider: "openai",   available: true  },
-    { id: "claude-opus-4-5",         name: "Claude Opus 4.5",           provider: "anthropic",available: false },
-    { id: "claude-sonnet-4-5",       name: "Claude Sonnet 4.5",         provider: "anthropic",available: false },
-    { id: "claude-haiku-4-5",        name: "Claude Haiku 4.5",          provider: "anthropic",available: false },
-    { id: "gemini-2.0-flash",        name: "Gemini 2.0 Flash",          provider: "gemini",   available: false },
-    { id: "gemini-1.5-pro",          name: "Gemini 1.5 Pro",            provider: "gemini",   available: false },
-    { id: "azure.claude-haiku-4-5",  name: "Claude Haiku 4.5 (Azure)",  provider: "gateway",  available: false },
-    { id: "azure.claude-sonnet-4-5", name: "Claude Sonnet 4.5 (Azure)", provider: "gateway",  available: false },
-    { id: "rsn.claude-haiku-4-5",    name: "Claude Haiku 4.5 (RSN)",    provider: "gateway",  available: false },
-    { id: "rsn.claude-sonnet-4-5",   name: "Claude Sonnet 4.5 (RSN)",   provider: "gateway",  available: false },
-    { id: "rsn.claude-opus-4-5",     name: "Claude Opus 4.5 (RSN)",     provider: "gateway",  available: false },
-    { id: "gemini-2.5-flash",        name: "Gemini 2.5 Flash",          provider: "gateway",  available: false },
-    { id: "gemini-2.5-flash-lite",   name: "Gemini 2.5 Flash Lite",     provider: "gateway",  available: false },
+    { id: "gpt-4o",          name: "GPT-4o",          provider: "openai",    available: true  },
+    { id: "gpt-4o-mini",     name: "GPT-4o Mini",     provider: "openai",    available: true  },
+    { id: "gpt-4.1",         name: "GPT-4.1",         provider: "openai",    available: true  },
+    { id: "gpt-4.1-mini",    name: "GPT-4.1 Mini",    provider: "openai",    available: true  },
+    { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "anthropic", available: false },
+    { id: "claude-sonnet-4-5",name:"Claude Sonnet 4.5",provider: "anthropic",available: false },
+    { id: "claude-haiku-4-5",name: "Claude Haiku 4.5",provider: "anthropic", available: false },
+    { id: "gemini-2.0-flash",name: "Gemini 2.0 Flash",provider: "gemini",    available: false },
+    { id: "gemini-1.5-pro",  name: "Gemini 1.5 Pro",  provider: "gemini",    available: false },
   ];
   const [availableModels, setAvailableModels] = useState<JudgeModel[]>(FALLBACK_MODELS);
   const [judgeModelSlots, setJudgeModelSlots] = useState<string[]>(["gpt-4o-mini", "gpt-4o-mini", "gpt-4o-mini"]);
@@ -306,23 +300,32 @@ export default function ExperimentRunner({
     fetchCustomMetrics(projectId)
       .then(setCustomMetrics)
       .catch(() => setCustomMetrics([]));
-    fetchJudgeModels()
-      .then((data) => setAvailableModels(data.models))
-      .catch(() => setAvailableModels([]));
-    fetchProject(projectId)
-      .then((proj) => {
-        if (proj.judge_model_assignments && proj.judge_model_assignments.length > 0) {
-          setJudgeModelSlots(proj.judge_model_assignments);
-          // Restore linear temperatures for the saved slots
-          const n = proj.judge_model_assignments.length;
-          if (n === 1) {
-            setJudgeTempSlots([0.3]);
-          } else {
-            setJudgeTempSlots(Array.from({ length: n }, (_, i) => Math.round((0.3 + (0.45 / (n - 1)) * i) * 1000) / 1000));
-          }
-        }
-      })
-      .catch(() => {});
+
+    // Load judge models + env-var defaults, then overlay project-level saved defaults
+    Promise.all([
+      fetchJudgeModels().catch((): JudgeModelsResponse => ({ models: [], default_model_assignments: null, temp_min: 0.3, temp_max: 0.75 })),
+      fetchProject(projectId).catch(() => null),
+    ]).then(([judgeData, proj]) => {
+      setAvailableModels(judgeData.models.length > 0 ? judgeData.models : FALLBACK_MODELS);
+
+      // Priority: project saved > env-var defaults > hardcoded fallback
+      const savedAssignments = proj?.judge_model_assignments;
+      const assignments = (savedAssignments && savedAssignments.length > 0)
+        ? savedAssignments
+        : judgeData.default_model_assignments ?? null;
+
+      if (assignments && assignments.length > 0) {
+        setJudgeModelSlots(assignments);
+        const tMin = judgeData.temp_min;
+        const tMax = judgeData.temp_max;
+        const n = assignments.length;
+        setJudgeTempSlots(
+          n === 1
+            ? [tMin]
+            : Array.from({ length: n }, (_, i) => Math.round((tMin + ((tMax - tMin) / (n - 1)) * i) * 1000) / 1000)
+        );
+      }
+    });
   }, [projectId]);
 
   // Auto-scroll log to bottom when new items arrive

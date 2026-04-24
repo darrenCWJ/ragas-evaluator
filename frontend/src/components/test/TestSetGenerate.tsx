@@ -217,6 +217,18 @@ export default function TestSetGenerate({
     loadDocKgInfo();
   }, [loadSavedPersonas, loadKgInfo, loadDocKgInfo]);
 
+  // On mount: check if a generation is already running and reconnect to it
+  useEffect(() => {
+    fetchGenerationProgress(projectId).then((p) => {
+      if (p.active || p.status === "generating") {
+        setGenerating(true);
+        setProgress(p);
+        if (p.test_set_id) setActiveTestSetId(p.test_set_id);
+      }
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
   // Poll KG build progress
   useEffect(() => {
     if (!kgBuilding) return;

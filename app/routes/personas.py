@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -13,7 +15,44 @@ from pydantic import BaseModel
 import db.init
 from config import PERSONA_SUBPROCESS_TIMEOUT
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api", tags=["personas"])
+
+# In-memory registry for long-running full-mode persona generation.
+# project_id → {"status": "generating"|"completed"|"error", "personas": [...], "detail": ""}
+_persona_tasks: dict[int, dict] = {}
+_persona_task_lock = threading.Lock()
+
+
+def _run_persona_subprocess(
+    project_id: int,
+    chunks_path: str,
+    num_personas: int,
+    project_dir: str,
+    script: str,
+) -> None:
+    """Run in a daemon thread — writes result into _persona_tasks when done."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, project_dir, chunks_path, str(num_personas), str(project_id)],
+            stdout=subprocess.PIPE,
+            stderr=None,
+            text=True,
+            timeout=PERSONA_SUBPROCESS_TIMEOUT,
+            env={**__import__("os").environ},
+        )
+        if result.returncode != 0:
+            raise RuntimeError("KG persona generation subprocess exited non-zero (check server logs)")
+        personas = json.loads(result.stdout.strip().split("\n")[-1])
+        with _persona_task_lock:
+            _persona_tasks[project_id] = {"status": "completed", "personas": personas}
+    except Exception as exc:
+        logger.error("Full persona generation failed for project %d: %s", project_id, exc)
+        with _persona_task_lock:
+            _persona_tasks[project_id] = {"status": "error", "detail": str(exc)}
+    finally:
+        Path(chunks_path).unlink(missing_ok=True)
 
 
 class PersonaCreate(BaseModel):
@@ -90,7 +129,7 @@ async def save_personas_bulk(project_id: int, personas: list[PersonaCreate]):
         raise HTTPException(status_code=404, detail="Project not found")
 
     saved = []
-    with conn:
+    try:
         for p in personas:
             cursor = conn.execute(
                 "INSERT INTO personas (project_id, name, role_description, question_style) VALUES (?, ?, ?, ?)",
@@ -102,6 +141,10 @@ async def save_personas_bulk(project_id: int, personas: list[PersonaCreate]):
                 "role_description": p.role_description,
                 "question_style": p.question_style,
             })
+        conn.commit()
+    except Exception:
+        conn.commit()  # leave connection in clean state
+        raise
     return {"personas": saved}
 
 
@@ -180,8 +223,13 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
     chunks = [r["content"] for r in chunk_rows]
 
     if req.mode == "full":
-        # Run in a subprocess to avoid event-loop deadlocks between
-        # FastAPI's asyncio loop and Ragas's internal asyncio.run().
+        # Check for a task already running for this project
+        with _persona_task_lock:
+            existing = _persona_tasks.get(project_id)
+            if existing and existing["status"] == "generating":
+                raise HTTPException(status_code=409, detail="Persona generation already in progress for this project")
+            _persona_tasks[project_id] = {"status": "generating"}
+
         script = (
             "import json, sys, os; "
             "os.chdir(sys.argv[1]); sys.path.insert(0, sys.argv[1]); "
@@ -193,35 +241,21 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
             "print(json.dumps(_enrich_with_question_styles(personas)))"
         )
 
-        # Write chunks to a temp file to avoid arg-length limits.
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(chunks, f)
             chunks_path = f.name
 
         project_dir = str(Path(__file__).resolve().parents[2])
 
-        def _run_subprocess():
-            try:
-                result = subprocess.run(
-                    [sys.executable, "-c", script, project_dir, chunks_path, str(req.num_personas), str(project_id)],
-                    stdout=subprocess.PIPE,
-                    stderr=None,  # inherit — tqdm progress bars appear in server terminal
-                    text=True,
-                    timeout=PERSONA_SUBPROCESS_TIMEOUT,
-                    env={**__import__("os").environ},
-                )
-                if result.returncode != 0:
-                    raise RuntimeError("KG persona generation failed (check server logs)")
-                return json.loads(result.stdout.strip().split("\n")[-1])
-            finally:
-                Path(chunks_path).unlink(missing_ok=True)
-
-        personas_list = await asyncio.get_running_loop().run_in_executor(
-            None, _run_subprocess,
+        t = threading.Thread(
+            target=_run_persona_subprocess,
+            args=(project_id, chunks_path, req.num_personas, project_dir, script),
+            daemon=True,
         )
-        return {"personas": personas_list}
+        t.start()
+
+        # Return immediately — client polls /generate-personas/status
+        return {"status": "generating"}
     else:
         from evaluation.metrics.testgen import generate_personas_fast
 
@@ -232,4 +266,24 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
                 num_personas=req.num_personas,
             ),
         )
-        return {"personas": personas}
+        return {"status": "completed", "personas": personas}
+
+
+@router.get("/projects/{project_id}/generate-personas/status")
+async def get_persona_generation_status(project_id: int):
+    """Poll for the result of a full-mode persona generation task.
+
+    Returns:
+      {"status": "generating"}                         — still running
+      {"status": "completed", "personas": [...]}       — done (entry cleared after read)
+      {"status": "error", "detail": "..."}             — failed
+    """
+    with _persona_task_lock:
+        task = _persona_tasks.get(project_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="No persona generation task found for this project")
+    if task["status"] == "completed":
+        # Clear after read so a new generation can start cleanly
+        with _persona_task_lock:
+            _persona_tasks.pop(project_id, None)
+    return task

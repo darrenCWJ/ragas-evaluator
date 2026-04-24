@@ -11,8 +11,15 @@ export interface Project {
 export interface JudgeModel {
   id: string;
   name: string;
-  provider: "openai" | "anthropic" | "gemini";
+  provider: "openai" | "anthropic" | "gemini" | "gateway";
   available: boolean;
+}
+
+export interface JudgeModelsResponse {
+  models: JudgeModel[];
+  default_model_assignments: string[] | null;
+  temp_min: number;
+  temp_max: number;
 }
 
 export interface Document {
@@ -274,8 +281,8 @@ export async function createProject(
   });
 }
 
-export async function fetchJudgeModels(): Promise<{ models: JudgeModel[] }> {
-  return request<{ models: JudgeModel[] }>("/api/judge-models");
+export async function fetchJudgeModels(): Promise<JudgeModelsResponse> {
+  return request<JudgeModelsResponse>("/api/judge-models");
 }
 
 export async function deleteProject(projectId: number): Promise<void> {
@@ -754,18 +761,33 @@ export async function generatePersonas(
   mode: "fast" | "full" = "fast",
   signal?: AbortSignal,
 ): Promise<{ name: string; role_description: string; question_style: string }[]> {
-  const data = await request<{
-    personas: { name: string; role_description: string; question_style: string }[];
-  }>(`/api/projects/${projectId}/generate-personas`, {
+  type PersonaResult = { name: string; role_description: string; question_style: string };
+  type StartResponse = { status: string; personas?: PersonaResult[] };
+
+  const start = await request<StartResponse>(`/api/projects/${projectId}/generate-personas`, {
     method: "POST",
-    body: JSON.stringify({
-      chunk_config_id: chunkConfigId,
-      num_personas: numPersonas,
-      mode,
-    }),
+    body: JSON.stringify({ chunk_config_id: chunkConfigId, num_personas: numPersonas, mode }),
     signal,
   });
-  return data.personas;
+
+  // Fast mode returns personas immediately
+  if (start.personas) return start.personas;
+
+  // Full mode: poll until completed or error
+  const sleep = (ms: number) => new Promise<void>((res, rej) => {
+    const t = setTimeout(res, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(t); rej(new DOMException("Aborted", "AbortError")); });
+  });
+
+  while (true) {
+    await sleep(4000);
+    const poll = await request<{ status: string; personas?: PersonaResult[]; detail?: string }>(
+      `/api/projects/${projectId}/generate-personas/status`,
+      { signal },
+    );
+    if (poll.status === "completed" && poll.personas) return poll.personas;
+    if (poll.status === "error") throw new Error(poll.detail ?? "Persona generation failed");
+  }
 }
 
 export interface GenerationProgress {
@@ -1720,6 +1742,15 @@ export async function fetchProjectReport(
 
 // --- Custom Metrics API ---
 
+export interface FewShotExample {
+  question: string;
+  response: string;
+  verdict: string;
+  reference?: string;
+  score?: number;
+  reasoning?: string;
+}
+
 export interface CustomMetric {
   id: number;
   project_id: number;
@@ -1730,6 +1761,7 @@ export interface CustomMetric {
   min_score: number;
   max_score: number;
   refined_prompt: string | null;
+  few_shot_examples: FewShotExample[] | null;
   created_at: string;
 }
 
@@ -1741,6 +1773,7 @@ export interface CustomMetricCreate {
   min_score?: number;
   max_score?: number;
   refined_prompt?: string | null;
+  few_shot_examples?: FewShotExample[] | null;
 }
 
 export async function fetchCustomMetrics(
@@ -1755,6 +1788,18 @@ export async function createCustomMetric(
 ): Promise<CustomMetric> {
   return request<CustomMetric>(`/api/projects/${projectId}/custom-metrics`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateCustomMetric(
+  projectId: number,
+  metricId: number,
+  data: CustomMetricCreate,
+): Promise<CustomMetric> {
+  return request<CustomMetric>(`/api/projects/${projectId}/custom-metrics/${metricId}`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });

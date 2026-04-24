@@ -307,38 +307,90 @@ async def _gemini_completion(
 # ---------------------------------------------------------------------------
 
 JUDGE_MODELS = [
-    {"id": "gpt-4o",                    "name": "GPT-4o",                     "provider": "openai"},
-    {"id": "gpt-4o-mini",               "name": "GPT-4o Mini",                "provider": "openai"},
-    {"id": "gpt-4.1",                   "name": "GPT-4.1",                    "provider": "openai"},
-    {"id": "gpt-4.1-mini",              "name": "GPT-4.1 Mini",               "provider": "openai"},
-    {"id": "claude-opus-4-5",           "name": "Claude Opus 4.5",            "provider": "anthropic"},
-    {"id": "claude-sonnet-4-5",         "name": "Claude Sonnet 4.5",          "provider": "anthropic"},
-    {"id": "claude-haiku-4-5",          "name": "Claude Haiku 4.5",           "provider": "anthropic"},
-    {"id": "gemini-2.0-flash",          "name": "Gemini 2.0 Flash",           "provider": "gemini"},
-    {"id": "gemini-1.5-pro",            "name": "Gemini 1.5 Pro",             "provider": "gemini"},
-    # Gateway models (available when OPENAI_BASE_URL is set)
-    {"id": "azure.claude-haiku-4-5",    "name": "Claude Haiku 4.5 (Azure)",   "provider": "gateway"},
-    {"id": "azure.claude-sonnet-4-5",   "name": "Claude Sonnet 4.5 (Azure)",  "provider": "gateway"},
-    {"id": "rsn.claude-haiku-4-5",      "name": "Claude Haiku 4.5 (RSN)",     "provider": "gateway"},
-    {"id": "rsn.claude-sonnet-4-5",     "name": "Claude Sonnet 4.5 (RSN)",    "provider": "gateway"},
-    {"id": "rsn.claude-opus-4-5",       "name": "Claude Opus 4.5 (RSN)",      "provider": "gateway"},
-    {"id": "gemini-2.5-flash",          "name": "Gemini 2.5 Flash",           "provider": "gateway"},
-    {"id": "gemini-2.5-flash-lite",     "name": "Gemini 2.5 Flash Lite",      "provider": "gateway"},
+    {"id": "gpt-4o",          "name": "GPT-4o",          "provider": "openai"},
+    {"id": "gpt-4o-mini",     "name": "GPT-4o Mini",     "provider": "openai"},
+    {"id": "gpt-4.1",         "name": "GPT-4.1",         "provider": "openai"},
+    {"id": "gpt-4.1-mini",    "name": "GPT-4.1 Mini",    "provider": "openai"},
+    {"id": "claude-opus-4-5", "name": "Claude Opus 4.5", "provider": "anthropic"},
+    {"id": "claude-sonnet-4-5","name": "Claude Sonnet 4.5","provider": "anthropic"},
+    {"id": "claude-haiku-4-5","name": "Claude Haiku 4.5","provider": "anthropic"},
+    {"id": "gemini-2.0-flash","name": "Gemini 2.0 Flash","provider": "gemini"},
+    {"id": "gemini-1.5-pro",  "name": "Gemini 1.5 Pro",  "provider": "gemini"},
 ]
 
+async def _fetch_gateway_judge_models() -> list[dict]:
+    """Discover available models in gateway mode.
 
-def get_available_judge_models() -> list[dict]:
-    """Return all judge models annotated with API key availability."""
+    Resolution order:
+    1. GATEWAY_MODELS_URL — call a custom endpoint that returns an OpenAI-compatible
+       models list (for gateways whose /models is at a non-standard path).
+    2. Standard GET /models on the configured OPENAI_BASE_URL.
+    3. GATEWAY_JUDGE_MODELS env var — comma-separated model IDs (static fallback).
+    4. Empty list if nothing is configured or all fetches fail.
+    """
+    import httpx
+
+    has_key = bool(os.environ.get("OPENAI_API_KEY"))
+
+    # --- try live endpoint first (custom URL or standard /models) ---
+    urls_to_try: list[str] = []
+    custom_url = os.environ.get("GATEWAY_MODELS_URL", "").strip()
+    if custom_url:
+        urls_to_try.append(custom_url)
+    base_url = os.environ.get("OPENAI_BASE_URL", "").rstrip("/")
+    if base_url:
+        urls_to_try.append(f"{base_url}/models")
+
+    headers = {}
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    for url in urls_to_try:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("data") or data.get("models") or []
+                if items:
+                    return [
+                        {"id": m.get("id", m) if isinstance(m, dict) else m,
+                         "name": m.get("id", m) if isinstance(m, dict) else m,
+                         "provider": "gateway",
+                         "available": has_key}
+                        for m in items
+                        if (m.get("id") if isinstance(m, dict) else m)
+                    ]
+        except Exception:
+            pass
+
+    # --- static fallback via env var ---
+    static = os.environ.get("GATEWAY_JUDGE_MODELS", "").strip()
+    if static:
+        return [
+            {"id": mid, "name": mid, "provider": "gateway", "available": has_key}
+            for mid in (m.strip() for m in static.split(","))
+            if mid
+        ]
+
+    return []
+
+
+async def get_available_judge_models() -> list[dict]:
+    """Return judge models annotated with API key availability.
+
+    In gateway mode, only gateway models are returned (standard model IDs may
+    not be supported by the gateway endpoint).
+    """
     has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
     if _LLM_GATEWAY_MODE:
-        # Gateway covers all models with the single OPENAI_API_KEY
-        return [{**m, "available": has_openai_key} for m in JUDGE_MODELS]
+        return await _fetch_gateway_judge_models()
 
     availability = {
         "openai":    has_openai_key,
         "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "gemini":    bool(os.environ.get("GOOGLE_API_KEY")),
-        "gateway":   False,  # gateway models unavailable without OPENAI_BASE_URL
     }
     return [{**m, "available": availability[m["provider"]]} for m in JUDGE_MODELS]
 

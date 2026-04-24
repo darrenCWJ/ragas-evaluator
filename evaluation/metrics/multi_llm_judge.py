@@ -18,13 +18,27 @@ import json
 import logging
 from dataclasses import dataclass
 
-from config import MULTI_LLM_JUDGE_DEFAULT_EVALUATORS
+from config import (
+    MULTI_LLM_JUDGE_DEFAULT_EVALUATORS,
+    MULTI_LLM_JUDGE_TEMP_MIN,
+    MULTI_LLM_JUDGE_TEMP_MAX,
+)
 
 logger = logging.getLogger(__name__)
 
+_FEW_SHOT_ITEM_TEMPLATE = """\
+--- Example {n} ---
+QUESTION: {question}
+{reference_line}
+BOT RESPONSE: {response}
+
+Expected output:
+{output}
+"""
+
 _JUDGE_PROMPT = """\
 You are an expert evaluator reviewing a chatbot response for accuracy and helpfulness.
-
+{few_shot_section}
 QUESTION:
 {question}
 
@@ -86,13 +100,41 @@ SOURCE CHUNKS (retrieved context used by the bot):
 class MultiLLMJudgeConfig:
     num_evaluators: int = MULTI_LLM_JUDGE_DEFAULT_EVALUATORS
     model: str | None = None  # default model when model_assignments is not set
-    temperature_min: float = 0.3
-    temperature_max: float = 0.75
+    temperature_min: float = MULTI_LLM_JUDGE_TEMP_MIN
+    temperature_max: float = MULTI_LLM_JUDGE_TEMP_MAX
     model_assignments: list[str] | None = None
     temperature_assignments: list[float] | None = None
+    few_shot_examples: list[dict] | None = None
     # When model_assignments / temperature_assignments are set:
     #   - len overrides num_evaluators
     #   - evaluator i uses model_assignments[i] and temperature_assignments[i]
+
+
+def _build_few_shot_section(examples: list[dict] | None, judge_type: str = "judge") -> str:
+    """Format few-shot calibration examples to inject before the actual evaluation task."""
+    if not examples:
+        return ""
+    parts = ["\nEXAMPLES (use these to calibrate your evaluation):\n"]
+    for i, ex in enumerate(examples[:5]):
+        question = str(ex.get("question", "")).strip()
+        response = str(ex.get("response", "")).strip()
+        verdict = str(ex.get("verdict", "mixed"))
+        reasoning = str(ex.get("reasoning", "")).strip()
+        reference = str(ex.get("reference", "")).strip()
+        if not question or not response:
+            continue
+        reference_line = f"\nSUGGESTED ANSWER (reference): {reference}\n" if reference else ""
+        if judge_type == "judge":
+            score = int(ex.get("score", 5))
+            output = json.dumps({"reasoning": reasoning, "verdict": verdict, "score": score, "claims": []}, indent=2)
+        else:
+            score_map = {"good": 1.0, "mixed": 0.5, "bad": 0.0}
+            output = json.dumps({"verdict": verdict, "score": score_map.get(verdict, 0.5), "highlights": [], "reasoning": reasoning}, indent=2)
+        parts.append(_FEW_SHOT_ITEM_TEMPLATE.format(n=i + 1, question=question, reference_line=reference_line, response=response, output=output))
+    if len(parts) == 1:
+        return ""
+    parts.append("--- End of examples ---\n")
+    return "\n" + "".join(parts)
 
 
 def _build_context_section(context_dicts: list[dict]) -> str:
@@ -141,11 +183,13 @@ async def _single_evaluator(
     question: str,
     response: str,
     context_section: str,
+    few_shot_examples: list[dict] | None = None,
 ) -> dict | None:
     """Run one evaluator call. Returns structured dict or None on failure."""
     from pipeline.llm import chat_completion
 
     prompt = _JUDGE_PROMPT.format(
+        few_shot_section=_build_few_shot_section(few_shot_examples, "judge"),
         question=question,
         response=response,
         context_section=context_section,
@@ -225,7 +269,7 @@ async def run_judge(
         temperatures = [config.temperature_min + step * i for i in range(n)]
 
     tasks = [
-        _single_evaluator(models[i], temperatures[i], i, question, response, context_section)
+        _single_evaluator(models[i], temperatures[i], i, question, response, context_section, config.few_shot_examples)
         for i in range(n)
     ]
     results = await asyncio.gather(*tasks)
@@ -258,7 +302,7 @@ def aggregate_score(evaluations: list[dict], excluded_indices: set[int] | None =
 
 _CRITERIA_JUDGE_USER = """\
 {criteria_prompt}
-
+{few_shot_section}
 ---
 Evaluate the following chatbot response using the criteria above.
 
@@ -295,12 +339,13 @@ quote must be a verbatim substring of the bot response.
 class CriteriaJudgeConfig:
     metric_name: str
     refined_prompt: str
-    num_evaluators: int = 3
+    num_evaluators: int = MULTI_LLM_JUDGE_DEFAULT_EVALUATORS
     model: str | None = None
-    temperature_min: float = 0.3
-    temperature_max: float = 0.75
+    temperature_min: float = MULTI_LLM_JUDGE_TEMP_MIN
+    temperature_max: float = MULTI_LLM_JUDGE_TEMP_MAX
     model_assignments: list[str] | None = None
     temperature_assignments: list[float] | None = None
+    few_shot_examples: list[dict] | None = None
 
 
 async def _single_criteria_evaluator(
@@ -311,12 +356,14 @@ async def _single_criteria_evaluator(
     question: str,
     response: str,
     context_section: str,
+    few_shot_examples: list[dict] | None = None,
 ) -> dict | None:
     """Run one criteria judge evaluator. Returns structured dict or None on failure."""
     from pipeline.llm import chat_completion
 
     prompt = _CRITERIA_JUDGE_USER.format(
         criteria_prompt=criteria_prompt,
+        few_shot_section=_build_few_shot_section(few_shot_examples, "criteria"),
         question=question,
         response=response,
         context_section=context_section,
@@ -395,7 +442,7 @@ async def run_criteria_judge(
     tasks = [
         _single_criteria_evaluator(
             models[i], temperatures[i], i,
-            config.refined_prompt, question, response, context_section,
+            config.refined_prompt, question, response, context_section, config.few_shot_examples,
         )
         for i in range(n)
     ]
@@ -426,7 +473,7 @@ def aggregate_criteria_score(
 
 _REFERENCE_JUDGE_USER = """\
 {criteria_prompt}
-
+{few_shot_section}
 ---
 Compare the following bot response against the suggested/reference answer using the criteria above.
 
@@ -464,12 +511,13 @@ Include 1-4 highlights. quote must be a verbatim substring of the bot response.
 class ReferenceJudgeConfig:
     metric_name: str
     refined_prompt: str
-    num_evaluators: int = 3
+    num_evaluators: int = MULTI_LLM_JUDGE_DEFAULT_EVALUATORS
     model: str | None = None
-    temperature_min: float = 0.3
-    temperature_max: float = 0.75
+    temperature_min: float = MULTI_LLM_JUDGE_TEMP_MIN
+    temperature_max: float = MULTI_LLM_JUDGE_TEMP_MAX
     model_assignments: list[str] | None = None
     temperature_assignments: list[float] | None = None
+    few_shot_examples: list[dict] | None = None
 
 
 async def _single_reference_evaluator(
@@ -481,12 +529,14 @@ async def _single_reference_evaluator(
     reference: str,
     response: str,
     context_section: str,
+    few_shot_examples: list[dict] | None = None,
 ) -> dict | None:
     """Run one reference judge evaluator. Returns structured dict or None on failure."""
     from pipeline.llm import chat_completion
 
     prompt = _REFERENCE_JUDGE_USER.format(
         criteria_prompt=criteria_prompt,
+        few_shot_section=_build_few_shot_section(few_shot_examples, "criteria"),
         question=question,
         reference=reference,
         response=response,
@@ -567,7 +617,7 @@ async def run_reference_judge(
     tasks = [
         _single_reference_evaluator(
             models[i], temperatures[i], i,
-            config.refined_prompt, question, reference, response, context_section,
+            config.refined_prompt, question, reference, response, context_section, config.few_shot_examples,
         )
         for i in range(n)
     ]

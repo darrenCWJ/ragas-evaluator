@@ -105,6 +105,12 @@ ALLOW_PRIVATE_ENDPOINTS = os.environ.get("ALLOW_PRIVATE_ENDPOINTS", "false").low
 # ---------------------------------------------------------------------------
 MULTI_LLM_JUDGE_DEFAULT_EVALUATORS = int(os.environ.get("MULTI_LLM_JUDGE_DEFAULT_EVALUATORS", "3"))
 MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD = float(os.environ.get("MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD", "0.6"))
+MULTI_LLM_JUDGE_TEMP_MIN = float(os.environ.get("MULTI_LLM_JUDGE_TEMP_MIN", "0.3"))
+MULTI_LLM_JUDGE_TEMP_MAX = float(os.environ.get("MULTI_LLM_JUDGE_TEMP_MAX", "0.75"))
+_raw_model_assignments = os.environ.get("MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS", "").strip()
+MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS: list[str] | None = (
+    [m.strip() for m in _raw_model_assignments.split(",") if m.strip()] or None
+)
 
 # ---------------------------------------------------------------------------
 # Third-party LLM provider API keys (used by judge multi-model routing)
