@@ -12,3 +12,27 @@ services:
       # Use a named volume or external mount in production to prevent data loss on container rebuild.
       - ./data:/app/data
     restart: unless-stopped
+    depends_on:
+      - worker
+
+  # Knowledge Graph Worker — handles memory-intensive KG construction.
+  # To disable: remove this service and unset KG_WORKER_URL in .env
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    ports:
+      - "${WORKER_PORT:-3000}:${WORKER_PORT:-3000}"
+    env_file: .env
+    environment:
+      - PORT=${WORKER_PORT:-3000}
+    volumes:
+      # Shares database storage with main app.
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${WORKER_PORT:-3000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

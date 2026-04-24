@@ -1,5 +1,5 @@
-| [README](README.md) | [Features Guide](docs/FEATURES.md) |
-|---|---|
+| [README](README.md) | [Features Guide](docs/FEATURES.md) | [Workflow Guide](docs/WORKFLOW.md) |
+|---|---|---|
 
 # RAG Evaluator
 
@@ -45,7 +45,16 @@ Rather than treating evaluation as a one-off check, the system enables an **iter
   | bot connectors|  | custom      |  | experiments    |
   | multi-LLM     |  | annotations |  | annotations    |
   +---------------+  +-------------+  +----------------+
+          |
+  +-------+-------+
+  |  KG Worker    |  (optional separate service)
+  | build-kg      |  POST /build-kg
+  | progress      |  GET  /progress/{project_id}
+  | kg store      |  DELETE /kg/{project_id}
+  +---------------+
 ```
+
+The **KG Worker** is an optional sidecar service that offloads memory-intensive knowledge graph construction from the main app. The main app delegates via HTTP (`KG_WORKER_URL`) and polls for progress. Without a worker, KG builds run in-process.
 
 ### Suggestion Engine
 
@@ -134,6 +143,8 @@ docker compose up --build
 
 App available at `http://localhost:8000`. Data (SQLite DB, vector store, uploaded docs) is persisted in `./data/`. To use a different port, set `PORT=9000` in your `.env`.
 
+The docker-compose stack includes the **KG Worker** service. To disable it, remove the `worker` service from `docker-compose.yml` and unset `KG_WORKER_URL` in your `.env`.
+
 ### Option B — Server deployment (Northflank + Neon)
 
 Set these environment variables on your platform:
@@ -144,8 +155,9 @@ Set these environment variables on your platform:
 | `DATABASE_URL` | PostgreSQL connection string (e.g. Neon) |
 | `RAGAS_API_KEY` | Strong secret to protect all API endpoints |
 | `PORT` | Set automatically by Northflank |
+| `KG_WORKER_URL` | Optional — URL of the deployed KG worker (e.g. `https://kg-worker.example.com`) |
 
-The Dockerfile builds the frontend and starts the app on `$PORT` (defaults to `3000`).
+The Dockerfile builds the frontend and starts the app on `$PORT` (defaults to `3000`). Deploy the worker separately using `worker/Dockerfile` and point `KG_WORKER_URL` at it.
 
 ### Option C — Local development (no Docker)
 
@@ -155,6 +167,11 @@ cp .env.example .env  # add OPENAI_API_KEY
 
 # Backend
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# Worker (optional — separate terminal)
+cd worker && pip install -r requirements.txt
+cp .env.example .env  # add OPENAI_API_KEY
+uvicorn main:app --host 0.0.0.0 --port 3000 --reload
 
 # Frontend (separate terminal)
 cd frontend && npm install && npm run dev  # dev server on :5173
@@ -214,7 +231,16 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 │   ├── scoring.py           # Metric orchestration
 │   ├── suggestions.py       # Rule-based suggestion engine
 │   └── testgen.py           # Synthetic test generation (persona-based)
-├── db/                      # SQLite database layer
+├── worker/                  # KG Worker service (separate FastAPI app)
+│   ├── main.py              # Worker app entrypoint
+│   ├── routes.py            # 5 endpoints: /build-kg, /progress, /kg, /clear-build, /health
+│   ├── config.py            # Worker config (concurrency, timeouts, paths)
+│   ├── db/init.py           # Worker DB layer (KG tables, progress tracking)
+│   ├── evaluation/metrics/testgen.py  # KG build functions (build_kg_standalone, etc.)
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   └── .env.example
+├── db/                      # Main app database layer
 │   └── init.py              # Schema, migrations, queries
 ├── frontend/                # React + TypeScript + Tailwind SPA
 │   └── src/

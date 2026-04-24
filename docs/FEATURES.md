@@ -49,9 +49,33 @@ What each feature does and the idea behind it.
 
 ## Test Set Generation
 
-**What it does:** Generate test questions from documents using LLM-based synthesis. Supports multiple personas (different user types), custom personas, query distribution control, and adjustable size (1-400 questions). Questions go through an approval workflow: pending, approved, rejected, edited.
+**What it does:** Generate test questions from documents using LLM-based synthesis. Two generation paths:
 
-**Why:** Reliable evaluation needs high-quality test sets. LLM generation with personas ensures diversity of question styles. The approval workflow lets you filter out bad questions before they pollute experiment results.
+- **Direct generation** — produces questions immediately from chunks or documents without pre-building a knowledge graph. Fast, lower quality.
+- **KG-based generation** — first builds a knowledge graph (entity/relationship extraction) from chunks or raw documents, then generates questions grounded in the graph. Slower but higher diversity and factual coverage.
+
+Supports multiple personas (different user types), custom personas, query distribution control, and adjustable size (1–400 questions). Questions go through an approval workflow: pending, approved, rejected, edited.
+
+**Why:** Reliable evaluation needs high-quality test sets. KG-based generation ensures factual grounding and reduces question repetition by using the graph as a structured source of truth. The approval workflow lets you filter out bad questions before they pollute experiment results.
+
+---
+
+## Knowledge Graph (KG) Worker
+
+**What it does:** Builds a knowledge graph from project chunks or raw documents as a preparatory step for KG-based test generation. The graph stores entities, relationships, and community summaries. Building is offloaded to the optional **KG Worker** service (`worker/`) to avoid blocking the main app.
+
+The worker exposes 5 endpoints:
+| Endpoint | Description |
+|---|---|
+| `POST /build-kg` | Start an async KG build (returns 202) |
+| `GET /progress/{project_id}` | Poll build progress and stage |
+| `DELETE /kg/{project_id}` | Delete a stored KG |
+| `POST /clear-build/{project_id}` | Clear a stale build lock after a crash |
+| `GET /health` | Health check |
+
+KG source can be `chunks` (uses a specific chunk config) or `documents` (uses raw uploaded documents).
+
+**Why:** KG construction is memory-intensive and can take minutes for large document sets. Running it in a separate service prevents it from impacting the main app's responsiveness. Multiple worker instances can be deployed behind `KG_WORKER_URLS` for parallel builds across projects.
 
 ---
 
