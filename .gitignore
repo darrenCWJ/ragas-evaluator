@@ -51,3 +51,7 @@ tests/fixtures/
 # Dev test data files
 test_data_full.csv
 test_data_no_sources.csv
+
+# Local dev/demo scripts
+seed_results.py
+screenshots/
