@@ -20,13 +20,13 @@ async def health_check():
 
         conn = db.init.get_db()
         conn.execute("SELECT 1")
-        return {"status": "ok", "version": "0.4.1-alpha", "database": "connected"}
+        return {"status": "ok", "version": "0.6.0-alpha", "database": "connected"}
     except Exception:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "degraded",
-                "version": "0.4.1-alpha",
+                "version": "0.6.0-alpha",
                 "database": "disconnected",
             },
         )
