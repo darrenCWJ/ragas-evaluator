@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from config import (
+    APP_VERSION,
     CONNECTOR_DEFAULT_MODELS,
     DEFAULT_EVAL_EMBEDDING,
     DEFAULT_EVAL_MODEL,
@@ -20,13 +21,13 @@ async def health_check():
 
         conn = db.init.get_db()
         conn.execute("SELECT 1")
-        return {"status": "ok", "version": "0.6.0-alpha", "database": "connected"}
+        return {"status": "ok", "version": APP_VERSION, "database": "connected"}
     except Exception:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "degraded",
-                "version": "0.6.0-alpha",
+                "version": APP_VERSION,
                 "database": "disconnected",
             },
         )
