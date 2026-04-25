@@ -1,0 +1,172 @@
+[
+  {
+    "id": "all_positive",
+    "description": "All three evaluators give positive verdict; expected mean score is 1.0",
+    "type": "aggregate_score",
+    "evaluations": [
+      {
+        "evaluator_index": 0,
+        "verdict": "positive",
+        "score": 1.0,
+        "reasoning": "The answer is accurate and complete.",
+        "claims": [],
+        "model": "gpt-4o"
+      },
+      {
+        "evaluator_index": 1,
+        "verdict": "positive",
+        "score": 1.0,
+        "reasoning": "Fully addresses the question.",
+        "claims": [],
+        "model": "claude-3-5-sonnet-20241022"
+      },
+      {
+        "evaluator_index": 2,
+        "verdict": "positive",
+        "score": 1.0,
+        "reasoning": "Well-sourced and correct.",
+        "claims": [],
+        "model": "gemini-1.5-pro"
+      }
+    ],
+    "excluded_indices": [],
+    "expected_min": 0.9,
+    "expected_max": 1.0
+  },
+  {
+    "id": "all_critical",
+    "description": "All three evaluators give critical verdict; expected mean score is 0.0",
+    "type": "aggregate_score",
+    "evaluations": [
+      {
+        "evaluator_index": 0,
+        "verdict": "critical",
+        "score": 0.0,
+        "reasoning": "The answer is factually wrong.",
+        "claims": [],
+        "model": "gpt-4o"
+      },
+      {
+        "evaluator_index": 1,
+        "verdict": "critical",
+        "score": 0.0,
+        "reasoning": "Completely misses the question.",
+        "claims": [],
+        "model": "claude-3-5-sonnet-20241022"
+      },
+      {
+        "evaluator_index": 2,
+        "verdict": "critical",
+        "score": 0.0,
+        "reasoning": "Contains harmful misinformation.",
+        "claims": [],
+        "model": "gemini-1.5-pro"
+      }
+    ],
+    "excluded_indices": [],
+    "expected_min": 0.0,
+    "expected_max": 0.1
+  },
+  {
+    "id": "mixed_verdicts",
+    "description": "One positive (1.0), one mixed (0.5), one critical (0.0); expected mean is ~0.5",
+    "type": "aggregate_score",
+    "evaluations": [
+      {
+        "evaluator_index": 0,
+        "verdict": "positive",
+        "score": 1.0,
+        "reasoning": "Answer is correct.",
+        "claims": [],
+        "model": "gpt-4o"
+      },
+      {
+        "evaluator_index": 1,
+        "verdict": "mixed",
+        "score": 0.5,
+        "reasoning": "Partially answers the question.",
+        "claims": [],
+        "model": "claude-3-5-sonnet-20241022"
+      },
+      {
+        "evaluator_index": 2,
+        "verdict": "critical",
+        "score": 0.0,
+        "reasoning": "Missing key information.",
+        "claims": [],
+        "model": "gemini-1.5-pro"
+      }
+    ],
+    "excluded_indices": [],
+    "expected_min": 0.45,
+    "expected_max": 0.55
+  },
+  {
+    "id": "with_excluded",
+    "description": "Three evaluators: one positive, two critical; the two critical ones are excluded; expected score ~1.0",
+    "type": "aggregate_score",
+    "evaluations": [
+      {
+        "evaluator_index": 0,
+        "verdict": "positive",
+        "score": 1.0,
+        "reasoning": "Accurate and helpful.",
+        "claims": [],
+        "model": "gpt-4o"
+      },
+      {
+        "evaluator_index": 1,
+        "verdict": "critical",
+        "score": 0.0,
+        "reasoning": "Unreliable evaluator flagged.",
+        "claims": [],
+        "model": "claude-3-5-sonnet-20241022"
+      },
+      {
+        "evaluator_index": 2,
+        "verdict": "critical",
+        "score": 0.0,
+        "reasoning": "Another unreliable evaluator.",
+        "claims": [],
+        "model": "gemini-1.5-pro"
+      }
+    ],
+    "excluded_indices": [1, 2],
+    "expected_min": 0.9,
+    "expected_max": 1.0
+  },
+  {
+    "id": "all_criteria_good",
+    "description": "Criteria judge with all three evaluators scoring 1.0 (good); expected mean is 1.0",
+    "type": "aggregate_criteria_score",
+    "evaluations": [
+      {
+        "evaluator_index": 0,
+        "verdict": "good",
+        "score": 1.0,
+        "highlights": ["Meets all criteria"],
+        "reasoning": "Fully satisfies the stated criteria.",
+        "model": "gpt-4o"
+      },
+      {
+        "evaluator_index": 1,
+        "verdict": "good",
+        "score": 1.0,
+        "highlights": ["Clear and concise"],
+        "reasoning": "Criteria are well met.",
+        "model": "claude-3-5-sonnet-20241022"
+      },
+      {
+        "evaluator_index": 2,
+        "verdict": "good",
+        "score": 1.0,
+        "highlights": ["No issues found"],
+        "reasoning": "Response aligns with all requirements.",
+        "model": "gemini-1.5-pro"
+      }
+    ],
+    "excluded_indices": [],
+    "expected_min": 0.9,
+    "expected_max": 1.0
+  }
+]
