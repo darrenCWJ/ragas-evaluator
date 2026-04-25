@@ -5,8 +5,15 @@ the app works out-of-the-box in development but can be reconfigured for
 production via ``.env`` or container environment.
 """
 
+import json
 import os
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Version — single source of truth is frontend/package.json
+# ---------------------------------------------------------------------------
+_pkg = Path(__file__).parent / "frontend" / "package.json"
+APP_VERSION: str = json.loads(_pkg.read_text(encoding="utf-8")).get("version", "unknown") if _pkg.exists() else "unknown"
 
 # ---------------------------------------------------------------------------
 # Storage paths
