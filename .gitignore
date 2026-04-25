@@ -46,7 +46,6 @@ graphify-out/
 # Test artifacts
 ragas_test.db
 *.db
-tests/fixtures/
 
 # Dev test data files
 test_data_full.csv
