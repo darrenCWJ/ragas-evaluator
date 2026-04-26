@@ -147,7 +147,7 @@ CONTEXT_CHAR_BUDGET = int(os.environ.get("CONTEXT_CHAR_BUDGET", "100000"))
 # Multiple workers: KG_WORKER_URLS=http://kg-worker-1:3000,http://kg-worker-2:3000
 # (KG_WORKER_URL is kept for backward compatibility)
 _kg_worker_raw = os.environ.get("KG_WORKER_URLS") or os.environ.get("KG_WORKER_URL") or ""
-KG_WORKER_URLS: list[str] = [u.strip().rstrip("/") for u in _kg_worker_raw.split(",") if u.strip()]
+KG_WORKER_URLS: list[str] = [u.strip().rstrip("/") for u in _kg_worker_raw.split(",") if u.strip()]  # lgtm[py/unused-global-variable]
 
 # Set KG_THREAD_MODE=true to run KG builds in a thread instead of a subprocess.
 # Use this in memory-constrained environments to avoid reimporting ragas.
