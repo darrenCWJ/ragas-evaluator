@@ -158,7 +158,7 @@ async def update_persona(project_id: int, persona_id: int, req: PersonaUpdate):
     if row is None:
         raise HTTPException(status_code=404, detail="Persona not found")
 
-    # Map allowed Pydantic fields to their column names (whitelist).
+    _SAFE_COLUMNS = {"name", "role_description", "question_style"}
     allowed_columns = {
         "name": req.name,
         "role_description": req.role_description,
@@ -167,9 +167,10 @@ async def update_persona(project_id: int, persona_id: int, req: PersonaUpdate):
     updates = []
     values = []
     for col, val in allowed_columns.items():
-        if val is not None:
-            updates.append(f"{col} = ?")
-            values.append(val)
+        if col not in _SAFE_COLUMNS or val is None:
+            continue
+        updates.append(f"{col} = ?")
+        values.append(val)
 
     if updates:
         values.append(persona_id)
