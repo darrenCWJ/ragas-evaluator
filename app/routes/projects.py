@@ -6,15 +6,9 @@ import json
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
 
-from app.models import (
-    ApiConfigCreate,
-    ProjectCreate,
-    ProjectUpdate,
-    MAX_BASELINE_CSV_SIZE,
-    MAX_BASELINE_ROWS,
-)
-import db.init
-from db.init import NOW_SQL, is_integrity_error
+from app.models import ApiConfigCreate, ProjectCreate, ProjectUpdate
+from config import MAX_BASELINE_CSV_SIZE, MAX_BASELINE_ROWS
+from db.init import get_db, NOW_SQL, is_integrity_error
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -24,7 +18,7 @@ router = APIRouter(prefix="/api", tags=["projects"])
 
 @router.post("/projects", status_code=201)
 async def create_project(req: ProjectCreate):
-    conn = db.init.get_db()
+    conn = get_db()
     try:
         cursor = conn.execute(
             "INSERT INTO projects (name, description) VALUES (?, ?)",
@@ -51,7 +45,7 @@ def _format_project(row) -> dict:
 
 @router.get("/projects")
 async def list_projects():
-    conn = db.init.get_db()
+    conn = get_db()
     rows = conn.execute(
         "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects"
     ).fetchall()
@@ -60,7 +54,7 @@ async def list_projects():
 
 @router.get("/projects/{project_id}")
 async def get_project(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     row = conn.execute(
         "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
         (project_id,),
@@ -74,7 +68,7 @@ async def get_project(project_id: int):
 async def update_project(project_id: int, req: ProjectUpdate):
     if req.name is None and req.description is None and req.judge_model_assignments is None:
         raise HTTPException(status_code=400, detail="No fields to update")
-    conn = db.init.get_db()
+    conn = get_db()
     existing = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -125,7 +119,7 @@ async def list_judge_models():
 
 @router.delete("/projects/{project_id}")
 async def delete_project(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     existing = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -164,7 +158,7 @@ def _parse_csv_text(content: bytes) -> tuple[str, csv.DictReader]:
 @router.post("/projects/{project_id}/baselines/preview-csv")
 async def preview_baseline_csv(project_id: int, file: UploadFile = File(...)):
     """Return CSV headers and first 5 rows so the frontend can show column mapping."""
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -203,7 +197,7 @@ async def upload_baseline_csv(
       - reference_answer_col: the expected/ground-truth answer (optional — defaults to answer_col)
       - context_col: source data / context (optional)
     """
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -286,7 +280,7 @@ async def upload_baseline_csv(
 
 @router.get("/projects/{project_id}/baselines")
 async def list_baselines(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -316,7 +310,7 @@ async def list_baselines(project_id: int):
 
 @router.delete("/projects/{project_id}/baselines/{baseline_id}")
 async def delete_baseline(project_id: int, baseline_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     existing = conn.execute(
         "SELECT id FROM external_baselines WHERE id = ? AND project_id = ?",
         (baseline_id, project_id),
@@ -330,7 +324,7 @@ async def delete_baseline(project_id: int, baseline_id: int):
 
 @router.delete("/projects/{project_id}/baselines")
 async def clear_baselines(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -354,7 +348,7 @@ def _redact_key(key: str | None) -> str | None:
 
 @router.post("/projects/{project_id}/api-config", status_code=201)
 async def save_api_config(project_id: int, payload: ApiConfigCreate):
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -398,7 +392,7 @@ async def save_api_config(project_id: int, payload: ApiConfigCreate):
 
 @router.get("/projects/{project_id}/api-config")
 async def get_api_config(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     row = conn.execute(
         "SELECT id, project_id, endpoint_url, api_key, headers_json, created_at, updated_at FROM api_configs WHERE project_id = ?",
         (project_id,),
@@ -420,7 +414,7 @@ async def get_api_config(project_id: int):
 
 @router.delete("/projects/{project_id}/api-config")
 async def delete_api_config(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
     existing = conn.execute(
         "SELECT id FROM api_configs WHERE project_id = ?", (project_id,)
     ).fetchone()

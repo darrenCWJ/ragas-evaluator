@@ -290,10 +290,9 @@ export default function ExperimentSuggestions({
           </p>
           <button
             onClick={handleGenerate}
-            disabled={generating}
             className="mt-4 rounded-lg bg-accent/15 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
           >
-            {generating ? "Generating..." : "Generate Suggestions"}
+            Generate Suggestions
           </button>
         </div>
       )}

@@ -158,19 +158,17 @@ async def update_persona(project_id: int, persona_id: int, req: PersonaUpdate):
     if row is None:
         raise HTTPException(status_code=404, detail="Persona not found")
 
-    _SAFE_COLUMNS = {"name", "role_description", "question_style"}
-    allowed_columns = {
-        "name": req.name,
-        "role_description": req.role_description,
-        "question_style": req.question_style,
-    }
     updates = []
     values = []
-    for col, val in allowed_columns.items():
-        if col not in _SAFE_COLUMNS or val is None:
-            continue
-        updates.append(f"{col} = ?")
-        values.append(val)
+    if req.name is not None:
+        updates.append("name = ?")
+        values.append(req.name)
+    if req.role_description is not None:
+        updates.append("role_description = ?")
+        values.append(req.role_description)
+    if req.question_style is not None:
+        updates.append("question_style = ?")
+        values.append(req.question_style)
 
     if updates:
         values.append(persona_id)

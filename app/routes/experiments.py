@@ -11,11 +11,8 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.models import (
-    ExperimentCreate,
-    ExperimentRunRequest,
-    DEFAULT_EXPERIMENT_METRICS,
-)
+from app.models import ExperimentCreate, ExperimentRunRequest
+from config import DEFAULT_EXPERIMENT_METRICS
 from dataclasses import asdict
 
 from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
@@ -850,7 +847,7 @@ async def run_experiment(
         conn.commit()
         logger.info(
             "Experiment %d re-run: deleted %d partial results from prior attempt",
-            experiment_id,
+            int(experiment_id),
             deleted.rowcount,
         )
 
@@ -981,9 +978,6 @@ async def run_experiment(
             # Filter selected_metrics to only built-in ones for setup_scorers
             # multi_llm_judge, criteria_judge, and reference_judge metrics are excluded
             # from setup_scorers — handled separately below.
-            criteria_names = {cfg.metric_name for cfg in criteria_judge_configs}
-            reference_names = {cfg.metric_name for cfg in reference_judge_configs}
-            judge_custom_names = criteria_names | reference_names
             builtin_selected = [
                 m for m in selected_metrics
                 if m in ALL_METRICS and m != "multi_llm_judge"
@@ -1000,20 +994,20 @@ async def run_experiment(
                 )
                 logger.info(
                     "Experiment %d: multi_llm_judge enabled with %d evaluators, %d assignments",
-                    experiment_id, n_evaluators, len(judge_assignments) if judge_assignments else 0,
+                    int(experiment_id), n_evaluators, len(judge_assignments) if judge_assignments else 0,
                 )
 
             # Setup scorers — skip entirely when no built-in or custom metrics
             # are selected (e.g. only multi_llm_judge). Calling setup_scorers([])
             # or setup_scorers(None) falls back to ALL_METRICS inside that
             # function, so we must guard the call here instead.
-            logger.info("Experiment %d: setting up scorers (%d built-in selected)", experiment_id, len(builtin_selected))
+            logger.info("Experiment %d: setting up scorers (%d built-in selected)", int(experiment_id), len(builtin_selected))
             scorers, custom_scorers, llm = setup_scorers(
                 builtin_selected,   # [] → no built-in metrics (fixed in scoring.py)
                 custom_configs,
                 rubrics=req.rubrics,
             )
-            logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
+            logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", int(experiment_id), len(scorers), len(custom_scorers or {}))
 
             # Transition from setup → running
             _experiment_progress[experiment_id] = {
@@ -1094,7 +1088,7 @@ async def run_experiment(
                         if is_csv:
                             # Look up the bot's actual answer from external_baselines;
                             # reference_answer (ground truth) comes from test_questions.
-                            logger.info("CSV experiment %d: processing q%d", experiment_id, qid)
+                            logger.info("CSV experiment %d: processing q%d", int(experiment_id), int(qid))
                             csv_match = csv_answer_lookup.get(question_text.strip().lower())
                             if csv_match:
                                 generated_answer = csv_match["answer"]
@@ -1225,7 +1219,7 @@ async def run_experiment(
                         })
 
                     except Exception as e:
-                        logger.warning("Experiment %d question %d failed", experiment_id, qid, exc_info=True)
+                        logger.warning("Experiment %d question %d failed", int(experiment_id), int(qid), exc_info=True)
                         await progress_queue.put({
                             "idx": idx, "qid": qid, "question_text": question_text,
                             "generated_answer": None,
@@ -1303,7 +1297,7 @@ async def run_experiment(
                         except Exception as _judge_err:
                             logger.warning(
                                 "Experiment %d: multi_llm_judge failed for result %d",
-                                experiment_id, result_row_id,
+                                int(experiment_id), int(result_row_id),
                                 exc_info=True,
                             )
                     # --- End Multi-LLM Judge block ---
@@ -1342,7 +1336,7 @@ async def run_experiment(
                         except Exception as _cj_err:
                             logger.warning(
                                 "Experiment %d: criteria_judge failed for result %d",
-                                experiment_id, result_row_id,
+                                int(experiment_id), int(result_row_id),
                                 exc_info=True,
                             )
                     # --- End Criteria Judges block ---
@@ -1382,7 +1376,7 @@ async def run_experiment(
                         except Exception as _rj_err:
                             logger.warning(
                                 "Experiment %d: reference_judge failed for result %d",
-                                experiment_id, result_row_id,
+                                int(experiment_id), int(result_row_id),
                                 exc_info=True,
                             )
                     # --- End Reference Judges block ---
@@ -1459,7 +1453,7 @@ async def run_experiment(
                 }
 
         except Exception as e:
-            logger.error("Experiment %d fatal error", experiment_id, exc_info=True)
+            logger.error("Experiment %d fatal error", int(experiment_id), exc_info=True)
             _experiment_progress[experiment_id] = {
                 "phase": "error", "current": 0, "total": 0,
                 "question": "", "error": str(e), "result_count": 0,
@@ -1490,7 +1484,7 @@ async def run_experiment(
             except Exception as _cleanup_err:
                 logger.warning(
                     "Experiment %d: cleanup status-update failed",
-                    experiment_id,
+                    int(experiment_id),
                     exc_info=True,
                 )
             finally:
@@ -1569,7 +1563,6 @@ async def experiment_progress(project_id: int, experiment_id: int):
     obs_test_set = obs_meta["test_set_name"] if obs_meta else ""
 
     async def _observe():
-        prev_current = -1
         prev_items_sent = 0
         sent_started = False
         while True:
@@ -1653,7 +1646,7 @@ async def reset_experiment(project_id: int, experiment_id: int):
     conn.commit()
     logger.info(
         "Experiment %d reset: deleted %d partial results",
-        experiment_id,
+        int(experiment_id),
         deleted.rowcount,
     )
 

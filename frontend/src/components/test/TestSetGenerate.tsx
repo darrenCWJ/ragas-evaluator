@@ -863,7 +863,7 @@ export default function TestSetGenerate({
                       setError("Failed to delete knowledge graph");
                     }
                   }}
-                  disabled={generating || kgBuilding}
+                  disabled={kgBuilding}
                   className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40"
                 >
                   Delete
@@ -1186,7 +1186,7 @@ export default function TestSetGenerate({
                     ? "bg-accent text-white"
                     : "border border-border text-text-muted hover:border-accent hover:text-accent"
                 }`}
-                disabled={generating || generatingPersonas}
+                disabled={generatingPersonas}
               >
                 Fast
               </button>
@@ -1198,7 +1198,7 @@ export default function TestSetGenerate({
                     ? "bg-accent text-white"
                     : "border border-border text-text-muted hover:border-accent hover:text-accent"
                 }`}
-                disabled={generating || generatingPersonas}
+                disabled={generatingPersonas}
               >
                 Full (Knowledge Graph)
               </button>
@@ -1214,7 +1214,7 @@ export default function TestSetGenerate({
                     { name: "", role_description: "", question_style: "" },
                   ])
                 }
-                disabled={generating || generatingPersonas || customPersonas.length >= (Number(numPersonas) || 1)}
+                disabled={generatingPersonas || customPersonas.length >= (Number(numPersonas) || 1)}
                 className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
               >
                 + Add Persona
@@ -1227,7 +1227,7 @@ export default function TestSetGenerate({
               <button
                 type="button"
                 onClick={handleAutoGeneratePersonas}
-                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
+                disabled={generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
                 className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {generatingPersonas
@@ -1240,7 +1240,7 @@ export default function TestSetGenerate({
                 <button
                   type="button"
                   onClick={handleSavePersonas}
-                  disabled={savingPersonas || generating}
+                  disabled={savingPersonas}
                   className="rounded-md border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {savingPersonas ? "Saving…" : "Save Personas"}
@@ -1250,7 +1250,7 @@ export default function TestSetGenerate({
                 <button
                   type="button"
                   onClick={() => setShowSavedPersonas(!showSavedPersonas)}
-                  disabled={generating || generatingPersonas || savedPersonas.length === 0}
+                  disabled={generatingPersonas || savedPersonas.length === 0}
                   className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Load Saved{savedPersonas.length > 0 && ` (${savedPersonas.length})`}
@@ -1559,7 +1559,7 @@ export default function TestSetGenerate({
                 )}
                 <button
                   type="button"
-                  disabled={generating || docKgBuilding}
+                  disabled={docKgBuilding}
                   onClick={async () => {
                     setDocKgBuilding(true);
                     try {
@@ -1700,38 +1700,12 @@ export default function TestSetGenerate({
       <button
         onClick={handleGenerate}
         disabled={
-          generating ||
           (chunksRequired && chunkConfigId === "") ||
           (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))
         }
         className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {generating ? (
-          <span className="flex items-center gap-2">
-            <svg
-              className="h-4 w-4 animate-spin"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-              />
-            </svg>
-            Generating… this may take a few minutes
-          </span>
-        ) : (
-          "Generate Test Set"
-        )}
+        Generate Test Set
       </button>
     </div>
   );

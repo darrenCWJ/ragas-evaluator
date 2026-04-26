@@ -81,7 +81,7 @@ def _start_server(tmp_dir, port):
         time.sleep(0.5)
     out = proc.stdout.read().decode() if proc.stdout else ""
     proc.kill()
-    pytest.fail(f"Server on port {port} did not start.\n{out}")
+    raise AssertionError(f"Server on port {port} did not start.\n{out}")
 
 
 def _stop_server(proc):

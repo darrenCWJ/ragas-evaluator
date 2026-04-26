@@ -13,7 +13,6 @@ from pipeline.rag import (
     single_shot_query,
     multi_step_query,
     CONTEXT_CHAR_BUDGET,
-    DEFAULT_SYSTEM_PROMPT,
 )
 
 
