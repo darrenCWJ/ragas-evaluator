@@ -6,7 +6,6 @@ import threading
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import db.init
 from config import MAX_CONCURRENT_KG_BUILDS
 
 logger = logging.getLogger(__name__)

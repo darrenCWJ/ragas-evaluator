@@ -1,6 +1,5 @@
 """Shared fixtures for all tests."""
 
-import os
 from unittest.mock import patch
 
 import pytest
@@ -12,12 +11,11 @@ def tmp_db(tmp_path):
     db_path = tmp_path / "test.db"
     # Patch DATABASE_PATH so init_db writes to our temp location
     with patch("db.init.DATABASE_PATH", db_path):
-        from db.init import init_db, _connection
         import db.init as db_module
 
         # Reset global connection
         db_module._connection = None
-        conn = init_db()
+        conn = db_module.init_db()
         yield conn
         conn.close()
         db_module._connection = None

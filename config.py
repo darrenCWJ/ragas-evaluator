@@ -13,7 +13,7 @@ from pathlib import Path
 # Version — single source of truth is frontend/package.json
 # ---------------------------------------------------------------------------
 _pkg = Path(__file__).parent / "frontend" / "package.json"
-APP_VERSION: str = json.loads(_pkg.read_text(encoding="utf-8")).get("version", "unknown") if _pkg.exists() else "unknown"
+APP_VERSION: str = json.loads(_pkg.read_text(encoding="utf-8")).get("version", "unknown") if _pkg.exists() else "unknown"  # lgtm[py/unused-global-variable]
 
 # ---------------------------------------------------------------------------
 # Storage paths
@@ -33,7 +33,7 @@ DEFAULT_EVAL_MAX_TOKENS = int(os.environ.get("DEFAULT_EVAL_MAX_TOKENS", "16384")
 # ---------------------------------------------------------------------------
 # Bot connector default models
 # ---------------------------------------------------------------------------
-CONNECTOR_DEFAULT_MODELS: dict[str, str] = {
+CONNECTOR_DEFAULT_MODELS: dict[str, str] = {  # lgtm[py/unused-global-variable]
     "openai": os.environ.get("DEFAULT_OPENAI_MODEL", "gpt-4o-mini"),
     "claude": os.environ.get("DEFAULT_CLAUDE_MODEL", "claude-sonnet-4-20250514"),
     "deepseek": os.environ.get("DEFAULT_DEEPSEEK_MODEL", "deepseek-chat"),
@@ -61,7 +61,7 @@ PERSONA_SUBPROCESS_TIMEOUT = int(os.environ.get("PERSONA_SUBPROCESS_TIMEOUT", "3
 # KG builds can run for many hours with large overlap_max_nodes (O(n²) cost).
 # Default 24 h. Set KG_SUBPROCESS_TIMEOUT=0 in .env to disable the timeout.
 _kg_timeout_raw = os.environ.get("KG_SUBPROCESS_TIMEOUT", "86400")
-KG_SUBPROCESS_TIMEOUT: "int | None" = None if _kg_timeout_raw == "0" else int(_kg_timeout_raw)
+KG_SUBPROCESS_TIMEOUT: "int | None" = None if _kg_timeout_raw == "0" else int(_kg_timeout_raw)  # lgtm[py/unused-global-variable]
 SOURCE_VERIFY_FETCH_TIMEOUT = int(os.environ.get("SOURCE_VERIFY_FETCH_TIMEOUT", "15"))
 
 # ---------------------------------------------------------------------------
@@ -76,9 +76,9 @@ ALLOWED_FILE_TYPES = {".txt", ".pdf", ".docx"}
 # ---------------------------------------------------------------------------
 # LLM temperature defaults (not env-configurable — these are tuned values)
 # ---------------------------------------------------------------------------
-TESTGEN_TOPIC_TEMPERATURE: float = 0.0
-TESTGEN_PERSONA_TEMPERATURE: float = 0.7
-TESTGEN_QUESTION_TEMPERATURE: float = 0.8
+TESTGEN_TOPIC_TEMPERATURE: float = 0.0  # lgtm[py/unused-global-variable]
+TESTGEN_PERSONA_TEMPERATURE: float = 0.7  # lgtm[py/unused-global-variable]
+TESTGEN_QUESTION_TEMPERATURE: float = 0.8  # lgtm[py/unused-global-variable]
 
 # ---------------------------------------------------------------------------
 # Batch sizes
@@ -115,7 +115,7 @@ MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD = float(os.environ.get("MULTI_LLM_JUDGE_RE
 MULTI_LLM_JUDGE_TEMP_MIN = float(os.environ.get("MULTI_LLM_JUDGE_TEMP_MIN", "0.3"))
 MULTI_LLM_JUDGE_TEMP_MAX = float(os.environ.get("MULTI_LLM_JUDGE_TEMP_MAX", "0.75"))
 _raw_model_assignments = os.environ.get("MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS", "").strip()
-MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS: list[str] | None = (
+MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS: list[str] | None = (  # lgtm[py/unused-global-variable]
     [m.strip() for m in _raw_model_assignments.split(",") if m.strip()] or None
 )
 
@@ -148,8 +148,7 @@ CONTEXT_CHAR_BUDGET = int(os.environ.get("CONTEXT_CHAR_BUDGET", "100000"))
 # (KG_WORKER_URL is kept for backward compatibility)
 _kg_worker_raw = os.environ.get("KG_WORKER_URLS") or os.environ.get("KG_WORKER_URL") or ""
 KG_WORKER_URLS: list[str] = [u.strip().rstrip("/") for u in _kg_worker_raw.split(",") if u.strip()]
-KG_WORKER_URL: str | None = KG_WORKER_URLS[0] if KG_WORKER_URLS else None
 
 # Set KG_THREAD_MODE=true to run KG builds in a thread instead of a subprocess.
 # Use this in memory-constrained environments to avoid reimporting ragas.
-KG_THREAD_MODE: bool = os.environ.get("KG_THREAD_MODE", "").lower() in ("1", "true", "yes")
+KG_THREAD_MODE: bool = os.environ.get("KG_THREAD_MODE", "").lower() in ("1", "true", "yes")  # lgtm[py/unused-global-variable]

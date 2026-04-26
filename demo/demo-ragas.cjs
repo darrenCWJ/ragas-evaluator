@@ -148,36 +148,6 @@ async function seedProject(page, targetPath) {
   }
 }
 
-// clickProjectInDropdown: reliably selects a project by name from the open dropdown
-async function clickProjectInDropdown(page, name) {
-  // Use Playwright's hasText filter which does contains-matching
-  const btn = page.locator('button').filter({ hasText: name });
-  // Exclude the main project selector toggle button (shows full project name as toggle)
-  // The dropdown item button has a specific class structure
-  const count = await btn.count();
-  for (let i = 0; i < count; i++) {
-    const b = btn.nth(i);
-    const text = (await b.textContent() || '').trim();
-    // The dropdown item button contains the name + optional description; skip the selector toggle
-    if (text.startsWith(name) || text.includes(name)) {
-      const box = await b.boundingBox();
-      if (box) {
-        await b.click();
-        return true;
-      }
-    }
-  }
-  // Fallback: evaluate click on the inner name div
-  await page.evaluate(n => {
-    const divs = [...document.querySelectorAll('div.truncate.font-medium')];
-    const match = divs.find(d => d.textContent && d.textContent.trim() === n);
-    if (match) {
-      const btn = match.closest('button');
-      if (btn) btn.click();
-    }
-  }, name);
-  return false;
-}
 
 // ── rehearsal ─────────────────────────────────────────────────────────────────
 

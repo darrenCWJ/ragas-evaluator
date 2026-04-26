@@ -18,7 +18,6 @@ import math
 import os
 import random
 import signal
-import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -58,7 +57,7 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, NOW_SQL
+from db.init import get_db, get_thread_db, NOW_SQL
 
 
 logger = logging.getLogger(__name__)
@@ -575,8 +574,7 @@ def save_kg_to_db(
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    import db.init as _db
-    conn = _db.get_thread_db()
+    conn = get_thread_db()
     try:
         # Remove old entry for this project+source (content may have changed).
         conn.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
@@ -606,8 +604,7 @@ def delete_kg_from_db(project_id: int, kg_source: str = "chunks") -> bool:
 
 def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
     """Touch the heartbeat timestamp for the KG build of a project+source."""
-    import db.init as _db
-    conn = _db.get_thread_db()
+    conn = get_thread_db()
     try:
         conn.execute(
             f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
@@ -980,9 +977,8 @@ def build_kg_standalone(
     Designed to run in a background thread.  Uses the in-memory progress
     store so the frontend can poll for status.
     """
-    import db.init as _db
 
-    conn = _db.get_thread_db()
+    conn = get_thread_db()
     rows = conn.execute(
         "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (chunk_config_id,),
@@ -1011,8 +1007,7 @@ def build_kg_standalone(
 
 def _fetch_document_texts(project_id: int) -> list[str]:
     """Fetch full document texts for a project from the DB."""
-    import db.init as _db
-    conn = _db.get_thread_db()
+    conn = get_thread_db()
     rows = conn.execute(
         "SELECT content FROM documents WHERE project_id = ? ORDER BY id",
         (project_id,),
@@ -1131,8 +1126,7 @@ def rebuild_kg_links(
         # Get chunks for hash (needed by save_kg_to_db)
         chunk_config_id = row["chunk_config_id"]
         if chunk_config_id:
-            import db.init as _db
-            conn = _db.get_db()
+            conn = get_db()
             chunk_rows = conn.execute(
                 "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                 (chunk_config_id,),
@@ -1231,10 +1225,9 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
-    import db.init as _db
     from ragas.run_config import RunConfig
 
-    conn = _db.get_thread_db()
+    conn = get_thread_db()
 
     # Load current chunks from DB
     chunk_rows = conn.execute(

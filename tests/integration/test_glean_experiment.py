@@ -16,7 +16,6 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -165,7 +164,7 @@ def _start_server(tmp_dir, port):
             logger.debug("test cleanup error ignored", exc_info=True)
         time.sleep(0.5)
     proc.kill()
-    pytest.fail(f"Server on port {port} did not start within 30s")
+    raise AssertionError(f"Server on port {port} did not start within 30s")
 
 
 def _stop_server(proc):

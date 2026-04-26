@@ -21,12 +21,12 @@ from app.models import (
     BulkAnnotation,
     VALID_QUESTION_STATUSES,
     BULK_ACTION_TO_STATUS,
-    MAX_CHUNKS_FOR_GENERATION,
-    MAX_UPLOAD_QA_ROWS,
 )
-from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URLS, KG_THREAD_MODE
-import db.init
-from db.init import NOW_SQL, json_extract_sql
+from config import (
+    KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URLS, KG_THREAD_MODE,
+    MAX_CHUNKS_FOR_GENERATION, MAX_UPLOAD_QA_ROWS,
+)
+from db.init import get_db, get_thread_db, NOW_SQL, json_extract_sql
 
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @router.post("/projects/{project_id}/test-sets", status_code=201)
 async def create_test_set(project_id: int, req: TestSetCreate):
-    conn = db.init.get_db()
+    conn = get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -270,7 +270,7 @@ def _run_generation(
     )
 
     register_cancel_flag(project_id)
-    conn = db.init.get_thread_db()
+    conn = get_thread_db()
     try:
         # When using KG as source with no explicit sample, set node_sample_size
         # to the total node count so the cached-KG path is always taken
@@ -391,7 +391,7 @@ async def preview_upload(project_id: int, file: UploadFile = File(...)):
     Returns the column names and first 5 rows so the user can pick
     which column is the question and which is the reference answer.
     """
-    conn = db.init.get_db()
+    conn = get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -455,7 +455,7 @@ async def upload_test_set(
       - contexts_column: (optional) column for reference contexts
       - name: (optional) test set name
     """
-    conn = db.init.get_db()
+    conn = get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -650,7 +650,7 @@ async def cancel_test_set_generation(project_id: int, test_set_id: int):
     """Cancel an in-progress test set generation."""
     from evaluation.metrics.testgen import cancel_generation
 
-    conn = db.init.get_db()
+    conn = get_db()
     row = conn.execute(
         "SELECT status FROM test_sets WHERE id = ? AND project_id = ?",
         (test_set_id, project_id),
@@ -676,7 +676,7 @@ async def generation_progress(project_id: int):
     # Check DB for completed/failed/cancelled status when no in-memory progress
     # (generation finished and cleared progress, or server restarted)
     if progress is None:
-        conn = db.init.get_db()
+        conn = get_db()
         row = conn.execute(
             "SELECT id, status, error_message FROM test_sets "
             "WHERE project_id = ? AND status IN ('generating', 'completed', 'failed', 'cancelled') "
@@ -720,7 +720,7 @@ async def generation_progress(project_id: int):
 
 @router.get("/projects/{project_id}/test-sets")
 async def list_test_sets(project_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -758,7 +758,7 @@ async def list_test_sets(project_id: int):
 async def list_test_questions(
     project_id: int, test_set_id: int, status: str | None = None
 ):
-    conn = db.init.get_db()
+    conn = get_db()
 
     # Validate status param
     if status is not None and status not in VALID_QUESTION_STATUSES:
@@ -790,7 +790,7 @@ async def list_test_questions(
     "/projects/{project_id}/test-sets/{test_set_id}", status_code=204
 )
 async def delete_test_set(project_id: int, test_set_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
 
     # Validate test set belongs to project
     ts = conn.execute(
@@ -828,7 +828,7 @@ async def annotate_question(
     question_id: int,
     req: QuestionAnnotation,
 ):
-    conn = db.init.get_db()
+    conn = get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -886,7 +886,7 @@ async def annotate_question(
 async def bulk_annotate_questions(
     project_id: int, test_set_id: int, req: BulkAnnotation
 ):
-    conn = db.init.get_db()
+    conn = get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -959,7 +959,7 @@ async def bulk_annotate_questions(
 
 @router.get("/projects/{project_id}/test-sets/{test_set_id}/summary")
 async def test_set_summary(project_id: int, test_set_id: int):
-    conn = db.init.get_db()
+    conn = get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -1092,7 +1092,7 @@ async def get_knowledge_graph_info(project_id: int, kg_source: str = "chunks"):
     """
     from evaluation.metrics.testgen import get_kg_info, _chunks_hash
 
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1134,7 +1134,7 @@ async def delete_knowledge_graph(project_id: int, kg_source: str = "chunks"):
     """Delete the cached knowledge graph for a project."""
     from evaluation.metrics.testgen import delete_kg_from_db
 
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1333,7 +1333,7 @@ def _make_chunk_kg_script(chunk_config_id: int, overlap_max_nodes: int | None, f
 @router.post("/projects/{project_id}/build-knowledge-graph")
 async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
     """Start building a knowledge graph in the background."""
-    logger.info("KG generate clicked: project=%d fast=%s", project_id, req.fast_mode)
+    logger.info("KG generate clicked: project=%d fast=%d", int(project_id), int(req.fast_mode))
 
     # Offload to worker service(s) if configured
     if KG_WORKER_URLS:
@@ -1364,7 +1364,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                     logger.warning("Worker %s unreachable: %s", worker_url, e)
         raise HTTPException(status_code=503, detail="All KG workers busy or unreachable — try again shortly")
 
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1508,7 +1508,7 @@ class RebuildLinksRequest(BaseModel):
 @router.post("/projects/{project_id}/knowledge-graph/rebuild-links")
 async def rebuild_kg_links_endpoint(project_id: int, req: RebuildLinksRequest):
     """Rebuild only the overlap/link step of a KG with new parameters."""
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1558,7 +1558,7 @@ async def update_knowledge_graph_endpoint(project_id: int, req: UpdateKGRequest)
     necessary changes (add new nodes, remove deleted nodes, rebuild links).
     Much faster than a full rebuild when only a few documents changed.
     """
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1623,7 +1623,7 @@ async def get_knowledge_graph_data(project_id: int):
     import tempfile
     from pathlib import Path as _Path
 
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1665,7 +1665,7 @@ async def stream_knowledge_graph_data(project_id: int):
     import tempfile
     from pathlib import Path as _Path
 
-    conn = db.init.get_db()
+    conn = get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1735,7 +1735,7 @@ async def list_all_knowledge_graphs():
     """List all saved knowledge graphs across projects."""
     from evaluation.metrics.testgen import _chunks_hash
 
-    conn = db.init.get_db()
+    conn = get_db()
     rows = conn.execute(
         "SELECT kg.id, kg.project_id, p.name AS project_name, "
         "kg.num_nodes, kg.num_chunks, kg.is_complete, kg.chunks_hash, "

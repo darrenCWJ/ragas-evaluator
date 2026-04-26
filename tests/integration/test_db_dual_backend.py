@@ -150,7 +150,7 @@ class TestPgConnectionShim:
     def test_placeholder_substitution_replaces_question_marks_with_percent_s(self):
         """_PgConnection.execute must replace every ? placeholder with %s."""
         import db.init as db_module
-        from db.init import _PgConnection
+        _PgConnection = db_module._PgConnection
 
         mock_pg_conn, mock_cursor, mock_psycopg2 = self._build_mocks()
 
@@ -168,7 +168,7 @@ class TestPgConnectionShim:
     def test_insert_appends_returning_id(self):
         """_PgConnection.execute must append RETURNING id to INSERT statements."""
         import db.init as db_module
-        from db.init import _PgConnection
+        _PgConnection = db_module._PgConnection
 
         mock_pg_conn, mock_cursor, mock_psycopg2 = self._build_mocks()
 
@@ -188,7 +188,7 @@ class TestPgConnectionShim:
     def test_select_does_not_append_returning(self):
         """_PgConnection.execute must NOT append RETURNING id to SELECT statements."""
         import db.init as db_module
-        from db.init import _PgConnection
+        _PgConnection = db_module._PgConnection
 
         mock_pg_conn, mock_cursor, mock_psycopg2 = self._build_mocks()
 
