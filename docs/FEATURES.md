@@ -1,7 +1,7 @@
 | [README](../README.md) | [Features Guide](FEATURES.md) |
 |---|---|
 
-# Feature Guide
+# Tribunal — Feature Guide
 
 What each feature does and the idea behind it.
 
