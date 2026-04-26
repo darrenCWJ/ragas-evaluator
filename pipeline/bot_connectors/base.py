@@ -33,7 +33,7 @@ class BotResponse:
 class BotConnector(Protocol):
     """Interface every bot connector must satisfy."""
 
-    async def query(self, question: str) -> BotResponse: ...
+    async def query(self, question: str) -> BotResponse: pass
 
 
 # Instruction appended to the system prompt when the user opts in to

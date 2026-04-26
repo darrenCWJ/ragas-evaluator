@@ -30,10 +30,6 @@ router = APIRouter(prefix="/api", tags=["multi_llm_judge"])
 
 VALID_ANNOTATION_STATUSES = {"accurate", "inaccurate", "unsure"}
 
-# Verdict sets
-_BUILTIN_VERDICTS = {"positive", "mixed", "critical"}
-_CRITERIA_VERDICTS = {"good", "mixed", "bad"}
-
 # Normalise criteria verdicts → built-in labels for the frontend panel
 _CRITERIA_VERDICT_MAP = {"good": "positive", "bad": "critical", "mixed": "mixed"}
 

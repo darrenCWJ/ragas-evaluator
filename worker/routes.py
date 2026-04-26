@@ -3,8 +3,6 @@
 import asyncio
 import logging
 import threading
-from typing import Any
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 

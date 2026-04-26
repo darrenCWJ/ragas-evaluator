@@ -279,8 +279,6 @@ def sample_kg_from_json(kg_json: str, n: int) -> tuple[KnowledgeGraph, list[str]
 
     If *n* ≥ total nodes the full KG is returned unchanged.
     """
-    import json as _json
-
     data = _json.loads(kg_json)
     nodes = data.get("nodes", [])
 
@@ -465,7 +463,6 @@ def _load_kg_safe(tmp_path: str) -> KnowledgeGraph:
         return KnowledgeGraph.load(tmp_path)
     except KeyError:
         logger.warning("KG JSON has dangling relationships — patching before load")
-        import json as _json
         data = _json.loads(Path(tmp_path).read_text(encoding="utf-8"))
         node_ids = {n["id"] for n in data.get("nodes", [])}
         original_rel_count = len(data.get("relationships", []))
@@ -2073,7 +2070,7 @@ def _generate_bridge_questions(
                         path = nx.shortest_path(G, sampled[i], sampled[j])
                         candidate_pairs.append((sampled[i], sampled[j], path))
                 except nx.NetworkXNoPath:
-                    pass
+                    continue
 
     if not candidate_pairs:
         logger.info("No node pairs with distance ≥ 3 found for bridge questions")
@@ -2446,7 +2443,6 @@ def _generate_project_testset_inner(
         if project_id is not None:
             kg_json = load_full_kg_json(project_id, kg_source=graph_rag_kg_source)
             if kg_json is not None:
-                import json as _json
                 num_nodes = len(_json.loads(kg_json).get("nodes", []))
                 sample_n = min(node_sample_size, num_nodes)
                 logger.info(
