@@ -94,7 +94,7 @@ async def close_gemini_client() -> None:
             if close_fn is not None:
                 await close_fn()
         except Exception:
-            pass
+            logger.debug("Gemini client close error ignored", exc_info=True)
         _gemini_client = None
 
 
@@ -363,7 +363,7 @@ async def _fetch_gateway_judge_models() -> list[dict]:
                         if (m.get("id") if isinstance(m, dict) else m)
                     ]
         except Exception:
-            pass
+            logger.debug("Gateway models fetch failed, using static fallback", exc_info=True)
 
     # --- static fallback via env var ---
     static = os.environ.get("GATEWAY_JUDGE_MODELS", "").strip()

@@ -5,6 +5,7 @@ Uses atomic file writes (temp + rename) to prevent corruption from concurrent re
 """
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -12,6 +13,8 @@ from pathlib import Path
 from rank_bm25 import BM25Okapi
 
 from config import BM25_PATH
+
+logger = logging.getLogger(__name__)
 
 BM25_DATA_DIR = BM25_PATH
 
@@ -67,7 +70,7 @@ def save_index(
         try:
             os.unlink(tmp_path)
         except OSError:
-            pass
+            logger.debug("temp file cleanup failed", exc_info=True)
         raise
 
 
@@ -146,7 +149,5 @@ def build_and_save_index(
 
 def delete_index(path: str) -> None:
     """Delete a BM25 index file. No-op if file doesn't exist."""
-    try:
+    if os.path.exists(path):
         os.unlink(path)
-    except FileNotFoundError:
-        pass

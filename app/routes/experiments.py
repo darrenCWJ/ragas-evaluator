@@ -1098,14 +1098,12 @@ async def run_experiment(
                             csv_match = csv_answer_lookup.get(question_text.strip().lower())
                             if csv_match:
                                 generated_answer = csv_match["answer"]
-                                source_text = csv_match["sources"]
                             else:
                                 generated_answer = (
                                     q_row["user_edited_answer"]
                                     if q_row["user_edited_answer"]
                                     else q_row["reference_answer"]
                                 ) or ""
-                                source_text = ""
                             raw_contexts = json.loads(q_row["reference_contexts"]) if q_row["reference_contexts"] else []
                             full_context_dicts = [
                                 {"content": c, "source": "csv_upload"} if isinstance(c, str)

@@ -307,7 +307,7 @@ async def hybrid_search(project_id: int, req: HybridSearchRequest):
         index, texts, metadatas = load_index(index_path)
         sparse_results = search_bm25(index, texts, metadatas, req.query, req.top_k)
     except FileNotFoundError:
-        pass
+        logger.debug("BM25 index not found at %s, skipping sparse search", index_path)
 
     # --- Reciprocal Rank Fusion ---
     RRF_K = 60

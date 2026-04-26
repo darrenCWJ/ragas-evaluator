@@ -509,7 +509,6 @@ class CustomMetricCreate(BaseModel):
         if len(v) > 100:
             raise ValueError("name must not exceed 100 characters")
         # Ensure name is a valid metric key (lowercase, underscores)
-        import re
         if not re.match(r"^[a-z][a-z0-9_]*$", v):
             raise ValueError("name must be lowercase with underscores only (e.g. 'my_metric')")
         return v

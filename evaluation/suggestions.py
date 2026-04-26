@@ -133,7 +133,6 @@ def generate_suggestions(
 
 
 # Fields where override_value must be validated as a specific type
-_NUMERIC_CONFIG_FIELDS = {"top_k", "alpha", "max_steps"}
 _ENUM_CONFIG_FIELDS = {
     "response_mode": VALID_RESPONSE_MODES,
     "search_type": VALID_SEARCH_TYPES,
