@@ -17,7 +17,7 @@ Tribunal addresses that gap. It provides an **LLM-as-a-judge evaluation platform
 
 ### Core Idea
 
-Rather than treating evaluation as a one-off check, the system enables an **iterative improvement loop**:
+Rather than treating evaluation as a one-off check, Tribunal enables an **iterative improvement loop**:
 
 1. **Configure** a RAG pipeline (chunking strategy, embedding model, retrieval mode, LLM)
 2. **Generate** synthetic test questions from your documents using auto-generated or custom personas
@@ -40,13 +40,13 @@ Rather than treating evaluation as a one-off check, the system enables an **iter
           |                  |                  |
   +-------+-------+  +------+------+  +--------+--------+
   |   Pipeline    |  |  Evaluation |  |    Database     |
-  | chunking      |  | 20+ metrics |  | SQLite (local) |
-  | embedding     |  | scoring     |  | PostgreSQL     |
-  | retrieval     |  | suggestions |  | projects       |
-  | generation    |  | test gen    |  | configs        |
-  | bot connectors|  | custom      |  | experiments    |
-  | multi-LLM     |  | annotations |  | annotations    |
-  +---------------+  +-------------+  +----------------+
+  | chunking      |  | 20+ metrics |  | SQLite (local)  |
+  | embedding     |  | scoring     |  | PostgreSQL      |
+  | retrieval     |  | suggestions |  | projects        |
+  | generation    |  | test gen    |  | configs         |
+  | bot connectors|  | custom      |  | experiments     |
+  | multi-LLM     |  | annotations |  | annotations     |
+  +---------------+  +-------------+  +-----------------+
           |
   +-------+-------+
   |  KG Worker    |  (optional separate service)
@@ -56,7 +56,7 @@ Rather than treating evaluation as a one-off check, the system enables an **iter
   +---------------+
 ```
 
-The **KG Worker** is an optional sidecar service that offloads memory-intensive knowledge graph construction from the main app. Tribunal delegates via HTTP (`KG_WORKER_URL`) and polls for progress. Without a worker, KG builds run in-process.
+The **KG Worker** is an optional sidecar service that offloads memory-intensive knowledge graph construction from the main app. Tribunal delegates via HTTP and polls for progress. Without a worker, KG builds run in-process.
 
 ### Suggestion Engine
 
@@ -84,12 +84,14 @@ Each suggestion maps to a specific config field and can be applied directly from
 | `context_recall` | Coverage of relevant context |
 | `context_entities_recall` | Entity extraction completeness |
 | `noise_sensitivity` | Robustness to irrelevant context |
+| `response_groundedness` | Factual grounding in retrieved context |
 
 ### Natural Language Comparison
 | Metric | What it measures |
 |---|---|
-| `semantic_similarity` | Embedding cosine similarity |
+| `semantic_similarity` | Embedding cosine similarity to reference answer |
 | `non_llm_string_similarity` | Levenshtein / Hamming / Jaro distance |
+| `factual_correctness` | Factual overlap with reference answer |
 | `bleu_score` | N-gram precision |
 | `rouge_score` | Recall-oriented n-gram overlap |
 | `chrf_score` | Character n-gram F-score |
@@ -99,8 +101,9 @@ Each suggestion maps to a specific config field and can be applied directly from
 ### General Purpose
 | Metric | What it measures |
 |---|---|
-| `aspect_critic` | Custom aspect evaluation (e.g. harmfulness) |
+| `aspect_critic` | Custom aspect evaluation (e.g. harmfulness, helpfulness) |
 | `rubrics_score` | Rubric-based multi-dimensional scoring |
+| `instance_rubrics` | Per-question rubric scoring |
 | `summarization_score` | Summary quality evaluation |
 
 ### NVIDIA Metrics
@@ -108,29 +111,26 @@ Each suggestion maps to a specific config field and can be applied directly from
 |---|---|
 | `answer_accuracy` | Response correctness |
 | `context_relevance` | Context appropriateness |
-| `response_groundedness` | Factual grounding in context |
 
-### Agent Metrics
-| Metric | What it measures |
-|---|---|
-| `topic_adherence` | Topic focus monitoring |
-| `tool_call_accuracy` | Correct tool invocation |
-
-### SQL Metrics
+### SQL / Tabular Metrics
 | Metric | What it measures |
 |---|---|
 | `datacompy_score` | SQL query result comparison |
-| `sql_semantic_equivalence` | Semantic SQL query comparison |
+| `sql_semantic_equivalence` | Semantic SQL query equivalence |
 
 ## Key Features
 
-- **Persona-based test generation** — auto-generate diverse personas with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
+- **Persona-based test generation** — auto-generate diverse personas (fast: direct LLM call; full: KG-based) with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
 - **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
-- **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously and compute a reliability score based on inter-judge agreement. Flags results where judges disagree.
-- **Source verification** — automatically check bot-cited URLs for reachability and content alignment.
-- **Human annotation** — sample experiment results for human review and compute evaluator accuracy against ground truth.
-- **Custom metrics** — define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics) without code changes.
-- **Experiment comparison & reporting** — per-metric deltas, experiment lineage tracking, project-level reports by bot type, CSV export.
+- **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously with chain-of-thought reasoning and claim-level annotations. Computes a reliability score based on inter-judge agreement; flags results where judges disagree.
+- **Reranker support** — optional cross-encoder reranker applied after retrieval with configurable top-k cutoff.
+- **Source verification** — automatically check bot-cited URLs for reachability and content alignment. Statuses: `verified`, `hallucinated`, `inaccessible`, `unverifiable`.
+- **Human annotation** — deterministic 20% sample of experiment results for human review; computes evaluator accuracy against ground truth.
+- **Custom metrics** — define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics, criteria judge, reference judge) without code changes. Includes LLM-powered description refinement.
+- **Experiment comparison & reporting** — per-metric deltas, experiment lineage tracking, time-series trends, project-level reports by bot type, CSV/JSON export.
+- **KG visualization** — stream knowledge graph nodes and edges via SSE; inspect the graph structure built for test generation.
+- **2-step chunking pipeline** — chain two chunking strategies sequentially (e.g., markdown split then recursive) with post-chunk quality filters.
+- **Contextual prefix embedding** — prepend document-level context labels to chunk text before embedding for improved multi-corpus retrieval.
 
 ## Deployment
 
@@ -145,7 +145,11 @@ docker compose up --build
 
 Tribunal is available at `http://localhost:8000`. Data (SQLite DB, vector store, uploaded docs) is persisted in `./data/`. To use a different port, set `PORT=9000` in your `.env`.
 
-The docker-compose stack includes the **KG Worker** service. To disable it, remove the `worker` service from `docker-compose.yml` and unset `KG_WORKER_URL` in your `.env`.
+The docker-compose stack includes the **KG Worker** service. To run without it, use:
+
+```bash
+docker compose up --build --no-deps app
+```
 
 ### Option B — Server deployment (Northflank + Neon)
 
@@ -157,9 +161,9 @@ Set these environment variables on your platform:
 | `DATABASE_URL` | PostgreSQL connection string (e.g. Neon) |
 | `RAGAS_API_KEY` | Strong secret to protect all API endpoints |
 | `PORT` | Set automatically by Northflank |
-| `KG_WORKER_URL` | Optional — URL of the deployed KG worker (e.g. `https://kg-worker.example.com`) |
+| `KG_WORKER_URLS` | Optional — comma-separated worker URLs (e.g. `http://kg-worker-1:3000,http://kg-worker-2:3000`) |
 
-The Dockerfile builds the frontend and starts the app on `$PORT` (defaults to `3000`). Deploy the worker separately using `worker/Dockerfile` and point `KG_WORKER_URL` at it.
+The Dockerfile builds the frontend and starts the app on `$PORT` (defaults to `3000`). Deploy the worker separately using `worker/Dockerfile` and point `KG_WORKER_URLS` at it.
 
 ### Option C — Local development (no Docker)
 
@@ -200,6 +204,31 @@ ALLOW_PRIVATE_ENDPOINTS=true
 
 By default this is `false`, which blocks requests to private IP ranges to prevent SSRF attacks on internet-facing deployments. Only enable this when the app itself runs on a trusted private network.
 
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | — | **Required.** OpenAI API key |
+| `ANTHROPIC_API_KEY` | — | Optional. Enables Claude models as judges |
+| `GOOGLE_API_KEY` | — | Optional. Enables Gemini models as judges |
+| `RAGAS_API_KEY` | — | Bearer token auth; without it all endpoints are public |
+| `DATABASE_URL` | — | PostgreSQL connection string; omit for SQLite |
+| `KG_WORKER_URLS` | — | Comma-separated worker URLs for load-balanced KG builds |
+| `KG_WORKER_URL` | — | Legacy single-worker URL (backward compat) |
+| `KG_THREAD_MODE` | `false` | Run KG builds in a thread instead of subprocess |
+| `ALLOW_PRIVATE_ENDPOINTS` | `false` | Allow requests to private IPs (disable SSRF protection) |
+| `PORT` | `8000` | Server port |
+| `CONTEXT_CHAR_BUDGET` | `100000` | Max characters of context sent to the LLM |
+| `BOT_QUERY_TIMEOUT` | `120` | Seconds before a bot query times out |
+| `KG_SUBPROCESS_TIMEOUT` | `86400` | Seconds before a KG build is killed (0 = no limit) |
+| `MAX_UPLOAD_SIZE` | `52428800` | Max document upload size in bytes (50 MB) |
+| `MAX_BASELINE_ROWS` | `1000` | Max rows per baseline CSV upload |
+| `MAX_UPLOAD_QA_ROWS` | `2000` | Max rows per test set CSV/JSON upload |
+| `DEFAULT_EVAL_MODEL` | `gpt-4o-mini` | Default LLM for evaluation |
+| `MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD` | `0.6` | Min reliability score to include a judge in consensus |
+| `MULTI_LLM_JUDGE_TEMP_MIN` | `0.3` | Lowest judge temperature |
+| `MULTI_LLM_JUDGE_TEMP_MAX` | `0.75` | Highest judge temperature |
+
 ## Project Structure
 
 ```
@@ -207,12 +236,12 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 │   ├── __init__.py          # App factory, middleware, lifespan
 │   ├── models.py            # Pydantic request/response models
 │   └── routes/              # Route modules (16 modules)
-│       ├── projects.py      # Project CRUD
-│       ├── documents.py     # Document upload (PDF/TXT)
-│       ├── chunks.py        # Chunking configuration
+│       ├── projects.py      # Project CRUD, baselines, API config
+│       ├── documents.py     # Document upload (PDF/TXT/DOCX)
+│       ├── chunks.py        # Chunking configuration and preview
 │       ├── embeddings.py    # Embedding configuration
 │       ├── rag.py           # RAG config and single-query testing
-│       ├── testsets.py      # Test set generation and curation
+│       ├── testsets.py      # Test set generation, KG endpoints, upload
 │       ├── personas.py      # Persona CRUD and auto-generation
 │       ├── experiments.py   # Experiment runner (SSE streaming)
 │       ├── analyze.py       # Suggestions and config changes
@@ -220,16 +249,17 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 │       ├── annotations.py   # Human annotation and evaluator accuracy
 │       ├── reports.py       # Project-level reporting and trends
 │       ├── custom_metrics.py # User-defined evaluation metrics
+│       ├── multi_llm_judge.py # Multi-judge evaluation
 │       └── health.py        # Health check endpoint
 ├── pipeline/                # RAG engine
-│   ├── chunking.py          # 6 chunking strategies
-│   ├── embedding.py         # OpenAI + SentenceTransformers
+│   ├── chunking.py          # 6 chunking strategies + 2-step pipeline
+│   ├── embedding.py         # OpenAI + SentenceTransformers + contextual prefix
 │   ├── vectorstore.py       # ChromaDB integration
 │   ├── bm25.py              # BM25 sparse search
-│   ├── rag.py               # Retrieval + generation (dense/sparse/hybrid)
+│   ├── rag.py               # Retrieval + generation (dense/sparse/hybrid/reranker)
 │   └── llm.py               # Multi-provider LLM routing (OpenAI, Anthropic, Google)
 ├── evaluation/              # Metrics and analysis
-│   ├── metrics/             # 20+ metric modules
+│   ├── metrics/             # 23 metric modules
 │   ├── scoring.py           # Metric orchestration
 │   ├── suggestions.py       # Rule-based suggestion engine
 │   └── testgen.py           # Synthetic test generation (persona-based)
@@ -238,7 +268,7 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 │   ├── routes.py            # 5 endpoints: /build-kg, /progress, /kg, /clear-build, /health
 │   ├── config.py            # Worker config (concurrency, timeouts, paths)
 │   ├── db/init.py           # Worker DB layer (KG tables, progress tracking)
-│   ├── evaluation/metrics/testgen.py  # KG build functions (build_kg_standalone, etc.)
+│   ├── evaluation/metrics/testgen.py  # KG build functions
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── .env.example
@@ -267,5 +297,5 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 | Vector store | ChromaDB |
 | Sparse search | BM25 (rank-bm25) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
-| PDF parsing | pypdf |
+| Document parsing | pypdf (PDF), python-docx (DOCX) |
 | Containerisation | Docker (multi-stage build), docker compose |
