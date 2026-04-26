@@ -27,11 +27,6 @@ from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
 from pipeline.bot_connectors.factory import create_connector
 from app.routes.bot_configs import bot_config_returns_contexts
 from app.routes.projects import _sanitize_csv_value
-
-
-def _safe(s: object) -> str:
-    """Strip CRLF from user-controlled values before logging to prevent log injection."""
-    return str(s).replace("\r", "\\r").replace("\n", "\\n")
 from pipeline.rag import single_shot_query, multi_step_query
 
 logger = logging.getLogger(__name__)
@@ -1004,15 +999,15 @@ async def run_experiment(
                     temperature_assignments=req.judge_temperature_assignments,
                 )
                 logger.info(
-                    "Experiment %d: multi_llm_judge enabled with %d evaluators (assignments: %s)",
-                    experiment_id, n_evaluators, _safe(judge_assignments),
+                    "Experiment %d: multi_llm_judge enabled with %d evaluators, %d assignments",
+                    experiment_id, n_evaluators, len(judge_assignments) if judge_assignments else 0,
                 )
 
             # Setup scorers — skip entirely when no built-in or custom metrics
             # are selected (e.g. only multi_llm_judge). Calling setup_scorers([])
             # or setup_scorers(None) falls back to ALL_METRICS inside that
             # function, so we must guard the call here instead.
-            logger.info("Experiment %d: setting up scorers for %s", experiment_id, _safe(builtin_selected))
+            logger.info("Experiment %d: setting up scorers (%d built-in selected)", experiment_id, len(builtin_selected))
             scorers, custom_scorers, llm = setup_scorers(
                 builtin_selected,   # [] → no built-in metrics (fixed in scoring.py)
                 custom_configs,
@@ -1099,7 +1094,7 @@ async def run_experiment(
                         if is_csv:
                             # Look up the bot's actual answer from external_baselines;
                             # reference_answer (ground truth) comes from test_questions.
-                            logger.info("CSV experiment %d: processing q%d '%s'", experiment_id, qid, _safe(question_text[:60]))
+                            logger.info("CSV experiment %d: processing q%d", experiment_id, qid)
                             csv_match = csv_answer_lookup.get(question_text.strip().lower())
                             if csv_match:
                                 generated_answer = csv_match["answer"]
@@ -1232,7 +1227,7 @@ async def run_experiment(
                         })
 
                     except Exception as e:
-                        logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, _safe(e))
+                        logger.warning("Experiment %d question %d failed", experiment_id, qid, exc_info=True)
                         await progress_queue.put({
                             "idx": idx, "qid": qid, "question_text": question_text,
                             "generated_answer": None,
@@ -1309,8 +1304,8 @@ async def run_experiment(
                                 )
                         except Exception as _judge_err:
                             logger.warning(
-                                "Experiment %d: multi_llm_judge failed for result %d: %s",
-                                experiment_id, result_row_id, _safe(_judge_err),
+                                "Experiment %d: multi_llm_judge failed for result %d",
+                                experiment_id, result_row_id,
                                 exc_info=True,
                             )
                     # --- End Multi-LLM Judge block ---
@@ -1348,8 +1343,8 @@ async def run_experiment(
                                 )
                         except Exception as _cj_err:
                             logger.warning(
-                                "Experiment %d: criteria_judge '%s' failed for result %d: %s",
-                                experiment_id, _safe(cj_config.metric_name), result_row_id, _safe(_cj_err),
+                                "Experiment %d: criteria_judge failed for result %d",
+                                experiment_id, result_row_id,
                                 exc_info=True,
                             )
                     # --- End Criteria Judges block ---
@@ -1388,8 +1383,8 @@ async def run_experiment(
                                 )
                         except Exception as _rj_err:
                             logger.warning(
-                                "Experiment %d: reference_judge '%s' failed for result %d: %s",
-                                experiment_id, _safe(rj_config.metric_name), result_row_id, _safe(_rj_err),
+                                "Experiment %d: reference_judge failed for result %d",
+                                experiment_id, result_row_id,
                                 exc_info=True,
                             )
                     # --- End Reference Judges block ---
@@ -1466,8 +1461,7 @@ async def run_experiment(
                 }
 
         except Exception as e:
-            import traceback
-            logger.error("Experiment %d fatal error: %s\n%s", experiment_id, _safe(e), traceback.format_exc())
+            logger.error("Experiment %d fatal error", experiment_id, exc_info=True)
             _experiment_progress[experiment_id] = {
                 "phase": "error", "current": 0, "total": 0,
                 "question": "", "error": str(e), "result_count": 0,
@@ -1497,8 +1491,9 @@ async def run_experiment(
                     run_conn.commit()
             except Exception as _cleanup_err:
                 logger.warning(
-                    "Experiment %d: cleanup status-update failed: %s",
-                    experiment_id, _safe(_cleanup_err),
+                    "Experiment %d: cleanup status-update failed",
+                    experiment_id,
+                    exc_info=True,
                 )
             finally:
                 run_conn.close()

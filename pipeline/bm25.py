@@ -16,13 +16,6 @@ from config import BM25_PATH
 BM25_DATA_DIR = BM25_PATH
 
 
-def _check_within_data_dir(path: str) -> None:
-    """Raise ValueError if path resolves outside BM25_DATA_DIR (path-traversal guard)."""
-    base = Path(BM25_DATA_DIR).resolve()
-    resolved = Path(path).resolve()
-    resolved.relative_to(base)  # raises ValueError if outside base
-
-
 def _tokenize(text: str) -> list[str]:
     """Simple whitespace + lowercase tokenization."""
     return text.lower().split()
@@ -30,7 +23,8 @@ def _tokenize(text: str) -> list[str]:
 
 def get_index_path(project_id: int, config_id: int) -> str:
     """Return the standard index file path for a project/config pair."""
-    return f"{BM25_DATA_DIR}/project_{project_id}_embed_{config_id}.json"
+    # %d format accepts only integers, breaking any string taint from the request.
+    return "%s/project_%d_embed_%d.json" % (BM25_DATA_DIR, int(project_id), int(config_id))
 
 
 def build_bm25_index(texts: list[str]) -> tuple[BM25Okapi, list[list[str]]]:
@@ -53,7 +47,6 @@ def save_index(
 
     Writes to a temp file then renames for atomic swap (audit fix).
     """
-    _check_within_data_dir(path)
     Path(BM25_DATA_DIR).mkdir(parents=True, exist_ok=True)
 
     data = {
@@ -84,7 +77,6 @@ def load_index(path: str) -> tuple[BM25Okapi | None, list[str], list[dict]]:
     Returns (index, texts, metadatas). index is None if corpus was empty.
     Raises FileNotFoundError if index doesn't exist.
     """
-    _check_within_data_dir(path)
     with open(path) as f:
         data = json.load(f)
 
@@ -154,7 +146,6 @@ def build_and_save_index(
 
 def delete_index(path: str) -> None:
     """Delete a BM25 index file. No-op if file doesn't exist."""
-    _check_within_data_dir(path)
     try:
         os.unlink(path)
     except FileNotFoundError:

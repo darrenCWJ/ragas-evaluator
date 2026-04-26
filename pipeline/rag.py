@@ -129,7 +129,7 @@ async def _retrieve_hybrid(query: str, config_row, conn) -> list[dict]:
         index, texts, metadatas = load_index(index_path)
         sparse_results = search_bm25(index, texts, metadatas, query, top_k)
     except FileNotFoundError:
-        logger.warning("BM25 index not found at %s, sparse leg skipped", index_path.replace("\r", "\\r").replace("\n", "\\n"))
+        logger.warning("BM25 index not found at %s, sparse leg skipped", index_path)
 
     # Reciprocal Rank Fusion
     RRF_K = 60

@@ -31,11 +31,6 @@ from db.init import NOW_SQL, json_extract_sql
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
 
-
-def _safe(s: object) -> str:
-    """Strip CRLF from user-controlled values before logging to prevent log injection."""
-    return str(s).replace("\r", "\\r").replace("\n", "\\n")
-
 # Track active generation threads by project_id to prevent duplicates
 _active_generations: dict[int, int] = {}  # project_id -> test_set_id
 _gen_lock = threading.Lock()
@@ -1341,7 +1336,7 @@ def _make_chunk_kg_script(chunk_config_id: int, overlap_max_nodes: int | None, f
 @router.post("/projects/{project_id}/build-knowledge-graph")
 async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
     """Start building a knowledge graph in the background."""
-    logger.info("KG generate clicked: project=%d source=%s fast=%s", project_id, _safe(req.kg_source), req.fast_mode)
+    logger.info("KG generate clicked: project=%d fast=%s", project_id, req.fast_mode)
 
     # Offload to worker service(s) if configured
     if KG_WORKER_URLS:
