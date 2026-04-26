@@ -1,7 +1,9 @@
 | [README](README.md) | [Features Guide](docs/FEATURES.md) | [Workflow Guide](docs/WORKFLOW.md) |
 |---|---|---|
 
-# RAG Evaluator
+# Tribunal
+
+**LLM-as-a-judge evaluation platform for RAG chatbots.**
 
 ## Problem Statement
 
@@ -9,7 +11,7 @@ As AI chatbots become increasingly accessible, more individuals and teams are bu
 
 Most RAG (Retrieval-Augmented Generation) systems are deployed with minimal evaluation. Builders rely on manual spot-checking or anecdotal feedback, leaving systemic issues — hallucinations, poor retrieval, irrelevant responses — undetected until users complain.
 
-This project addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
+Tribunal addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
 
 ## Design
 
@@ -54,7 +56,7 @@ Rather than treating evaluation as a one-off check, the system enables an **iter
   +---------------+
 ```
 
-The **KG Worker** is an optional sidecar service that offloads memory-intensive knowledge graph construction from the main app. The main app delegates via HTTP (`KG_WORKER_URL`) and polls for progress. Without a worker, KG builds run in-process.
+The **KG Worker** is an optional sidecar service that offloads memory-intensive knowledge graph construction from the main app. Tribunal delegates via HTTP (`KG_WORKER_URL`) and polls for progress. Without a worker, KG builds run in-process.
 
 ### Suggestion Engine
 
@@ -141,7 +143,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-App available at `http://localhost:8000`. Data (SQLite DB, vector store, uploaded docs) is persisted in `./data/`. To use a different port, set `PORT=9000` in your `.env`.
+Tribunal is available at `http://localhost:8000`. Data (SQLite DB, vector store, uploaded docs) is persisted in `./data/`. To use a different port, set `PORT=9000` in your `.env`.
 
 The docker-compose stack includes the **KG Worker** service. To disable it, remove the `worker` service from `docker-compose.yml` and unset `KG_WORKER_URL` in your `.env`.
 
@@ -179,7 +181,7 @@ cd frontend && npm install && npm run dev  # dev server on :5173
 
 ### Authentication
 
-Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
+Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all Tribunal API requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
 
 ```bash
 # Generate a strong secret
