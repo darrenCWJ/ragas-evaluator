@@ -1,5 +1,5 @@
 fastapi>=0.136.1
-uvicorn>=0.34.0
+uvicorn>=0.46.0
 python-dotenv>=1.2.2
 openai>=2.32.0
 ragas>=0.4.3
