@@ -8,6 +8,7 @@ Hits a real OpenAI API — marked @pytest.mark.slow.  Run with:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import subprocess
@@ -18,7 +19,7 @@ import time
 import pytest
 import requests
 
-from evaluation.scoring import ALL_METRICS
+logger = logging.getLogger(__name__)
 
 MAX_WAIT = 300  # 5 minutes
 POLL_INTERVAL = 5
@@ -76,7 +77,7 @@ def _start_server(tmp_dir, port):
             if requests.get(f"{base_url}/api/health", timeout=2).ok:
                 return proc, db_path, base_url
         except requests.ConnectionError:
-            pass
+            logger.debug("test cleanup error ignored", exc_info=True)
         time.sleep(0.5)
     out = proc.stdout.read().decode() if proc.stdout else ""
     proc.kill()
@@ -113,7 +114,7 @@ def _fire_and_poll(base_url, db_path, project_id, experiment_id, metrics):
                 if "event: completed" in line or "event: error" in line:
                     break
         except Exception:
-            pass
+            logger.debug("test cleanup error ignored", exc_info=True)
         finally:
             if shared["resp"]:
                 shared["resp"].close()
@@ -147,7 +148,7 @@ def _fire_and_poll(base_url, db_path, project_id, experiment_id, metrics):
                     t.join(timeout=5)
                     pytest.fail("Experiment failed")
         except sqlite3.OperationalError:
-            pass
+            logger.debug("test cleanup error ignored", exc_info=True)
         time.sleep(POLL_INTERVAL)
 
     if shared["resp"]:

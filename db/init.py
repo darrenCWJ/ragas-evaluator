@@ -569,7 +569,7 @@ def get_db() -> sqlite3.Connection | _PgConnection:
             try:
                 _connection.close()
             except Exception:
-                pass
+                logger.debug("DB connection close failed", exc_info=True)
             try:
                 _connection = _make_pg_connection()
             except Exception as _reconnect_err:
@@ -619,5 +619,5 @@ def reconnect_if_needed(
         try:
             conn.close()
         except Exception:
-            pass
+            logger.debug("DB connection close failed", exc_info=True)
         return get_thread_db()

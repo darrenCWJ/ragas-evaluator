@@ -24,7 +24,7 @@ from app.models import (
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
 )
-from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URL, KG_WORKER_URLS, KG_THREAD_MODE
+from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URLS, KG_THREAD_MODE
 import db.init
 from db.init import NOW_SQL, json_extract_sql
 
@@ -269,7 +269,7 @@ def _run_generation(
         is_cancelled,
     )
 
-    cancel_flag = register_cancel_flag(project_id)
+    register_cancel_flag(project_id)
     conn = db.init.get_thread_db()
     try:
         # When using KG as source with no explicit sample, set node_sample_size
@@ -1180,8 +1180,6 @@ def _run_kg_in_thread(
     Unlike the subprocess approach, this reuses the already-imported ragas
     library so the container's memory is not doubled by a fresh Python process.
     """
-    import asyncio
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -1227,7 +1225,6 @@ def _run_kg_subprocess(
     forwarded to the parent process's in-memory progress store so the frontend
     polling endpoint can reflect real step-by-step status.
     """
-    import json
     import subprocess
     import sys
     from pathlib import Path

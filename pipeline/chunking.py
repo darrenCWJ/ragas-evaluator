@@ -20,17 +20,16 @@ def _coerce_numeric(params: dict) -> dict:
     out = {}
     for k, v in params.items():
         if isinstance(v, str):
-            try:
-                out[k] = int(v)
-                continue
-            except ValueError:
-                pass
-            try:
-                out[k] = float(v)
-                continue
-            except ValueError:
-                pass
-        out[k] = v
+            for convert in (int, float):
+                try:
+                    out[k] = convert(v)
+                    break
+                except ValueError:
+                    continue
+            else:
+                out[k] = v
+        else:
+            out[k] = v
     return out
 
 
