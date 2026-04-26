@@ -8,6 +8,8 @@ import logging
 import threading
 from datetime import datetime
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -902,6 +904,7 @@ async def bulk_annotate_questions(
         raise HTTPException(status_code=404, detail="Test set not found")
 
     target_status = BULK_ACTION_TO_STATUS[req.action]
+    updated_count = 0
 
     if req.action in ("approve", "reject"):
         # Require non-empty question_ids
@@ -1301,10 +1304,10 @@ def _run_kg_subprocess(
 
 
 class BuildKGRequest(BaseModel):
-    chunk_config_id: int | None = None  # required for chunks source, ignored for documents
-    overlap_max_nodes: int | None = 500  # cap for OverlapScoreBuilder sampling
-    kg_source: str = "chunks"           # "chunks" or "documents"
-    fast_mode: bool = False             # use combined single-call extractor (2 LLM rounds)
+    chunk_config_id: int | None = None
+    overlap_max_nodes: int | None = 500
+    kg_source: Literal["chunks", "documents"] = "chunks"
+    fast_mode: bool = False
 
 
 def _make_doc_kg_script(overlap_max_nodes: int | None) -> str:
@@ -1333,7 +1336,7 @@ def _make_chunk_kg_script(chunk_config_id: int, overlap_max_nodes: int | None, f
 @router.post("/projects/{project_id}/build-knowledge-graph")
 async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
     """Start building a knowledge graph in the background."""
-    logger.info("KG generate clicked: project=%d source=%s fast=%s", project_id, req.kg_source, req.fast_mode)
+    logger.info("KG generate clicked: project=%d fast=%s", project_id, req.fast_mode)
 
     # Offload to worker service(s) if configured
     if KG_WORKER_URLS:
@@ -1425,7 +1428,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 
 
 @router.get("/projects/{project_id}/knowledge-graph/progress")
-async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
+async def kg_build_progress(project_id: int, kg_source: Literal["chunks", "documents"] = "chunks"):
     """Poll knowledge graph build progress."""
     from evaluation.metrics.testgen import get_progress, get_kg_info
 
@@ -1440,7 +1443,7 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
                 for worker_url in candidates:
                     try:
                         resp = await client.get(
-                            f"{worker_url}/progress/{project_id}",
+                            f"{worker_url}/progress/{int(project_id)}",
                             params={"kg_source": kg_source},
                         )
                         if resp.status_code == 200:

@@ -23,7 +23,8 @@ def _tokenize(text: str) -> list[str]:
 
 def get_index_path(project_id: int, config_id: int) -> str:
     """Return the standard index file path for a project/config pair."""
-    return f"{BM25_DATA_DIR}/project_{project_id}_embed_{config_id}.json"
+    # %d format accepts only integers, breaking any string taint from the request.
+    return "%s/project_%d_embed_%d.json" % (BM25_DATA_DIR, int(project_id), int(config_id))
 
 
 def build_bm25_index(texts: list[str]) -> tuple[BM25Okapi, list[list[str]]]:
