@@ -82,7 +82,7 @@ class _ApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Ragas Evaluator", version=APP_VERSION, lifespan=lifespan)
+    application = FastAPI(title="Tribunal", version=APP_VERSION, lifespan=lifespan)
 
     application.add_middleware(_ApiKeyMiddleware)
     application.add_middleware(
