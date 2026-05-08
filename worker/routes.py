@@ -62,7 +62,18 @@ def _run_kg_in_thread(
 
 @router.get("/health")
 async def health():
-    return {"status": "ok"}
+    import os
+    try:
+        import resource
+        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # macOS reports in bytes, Linux in KB
+        if os.uname().sysname == "Darwin":
+            rss_mb = rss_bytes / (1024 * 1024)
+        else:
+            rss_mb = rss_bytes / 1024
+    except Exception:
+        rss_mb = None
+    return {"status": "ok", "rss_mb": round(rss_mb, 1) if rss_mb else None, "active_builds": len(_active_builds)}
 
 
 @router.post("/build-kg", status_code=202)
