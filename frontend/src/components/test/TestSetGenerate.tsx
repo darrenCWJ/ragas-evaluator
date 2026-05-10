@@ -6,6 +6,7 @@ import {
   generatePersonas,
   fetchPersonas,
   savePersonasBulk,
+  updatePersona,
   deletePersona,
   fetchGenerationProgress,
   fetchKnowledgeGraphInfo,
@@ -167,6 +168,8 @@ export default function TestSetGenerate({
   const [savedPersonas, setSavedPersonas] = useState<SavedPersona[]>([]);
   const [savingPersonas, setSavingPersonas] = useState(false);
   const [showSavedPersonas, setShowSavedPersonas] = useState(false);
+  const [editingPersonaId, setEditingPersonaId] = useState<number | null>(null);
+  const [editingPersona, setEditingPersona] = useState<{ name: string; role_description: string; question_style: string }>({ name: "", role_description: "", question_style: "" });
   const [elapsed, setElapsed] = useState(0);
   const [progress, setProgress] = useState<GenerationProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -388,6 +391,24 @@ export default function TestSetGenerate({
     try {
       await deletePersona(projectId, personaId);
       setSavedPersonas((prev) => prev.filter((p) => p.id !== personaId));
+    } catch {
+      // silent
+    }
+  };
+
+  const handleStartEditPersona = (p: SavedPersona) => {
+    setEditingPersonaId(p.id);
+    setEditingPersona({ name: p.name, role_description: p.role_description, question_style: p.question_style });
+  };
+
+  const handleSaveEditPersona = async () => {
+    if (editingPersonaId === null) return;
+    try {
+      await updatePersona(projectId, editingPersonaId, editingPersona);
+      setSavedPersonas((prev) =>
+        prev.map((p) => p.id === editingPersonaId ? { ...p, ...editingPersona } : p),
+      );
+      setEditingPersonaId(null);
     } catch {
       // silent
     }
@@ -863,7 +884,7 @@ export default function TestSetGenerate({
                       setError("Failed to delete knowledge graph");
                     }
                   }}
-                  disabled={kgBuilding}
+                  disabled={generating || kgBuilding}
                   className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40"
                 >
                   Delete
@@ -1186,7 +1207,7 @@ export default function TestSetGenerate({
                     ? "bg-accent text-white"
                     : "border border-border text-text-muted hover:border-accent hover:text-accent"
                 }`}
-                disabled={generatingPersonas}
+                disabled={generating || generatingPersonas}
               >
                 Fast
               </button>
@@ -1198,7 +1219,7 @@ export default function TestSetGenerate({
                     ? "bg-accent text-white"
                     : "border border-border text-text-muted hover:border-accent hover:text-accent"
                 }`}
-                disabled={generatingPersonas}
+                disabled={generating || generatingPersonas}
               >
                 Full (Knowledge Graph)
               </button>
@@ -1214,7 +1235,7 @@ export default function TestSetGenerate({
                     { name: "", role_description: "", question_style: "" },
                   ])
                 }
-                disabled={generatingPersonas || customPersonas.length >= (Number(numPersonas) || 1)}
+                disabled={generating || generatingPersonas || customPersonas.length >= (Number(numPersonas) || 1)}
                 className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
               >
                 + Add Persona
@@ -1227,7 +1248,7 @@ export default function TestSetGenerate({
               <button
                 type="button"
                 onClick={handleAutoGeneratePersonas}
-                disabled={generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
+                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
                 className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {generatingPersonas
@@ -1240,7 +1261,7 @@ export default function TestSetGenerate({
                 <button
                   type="button"
                   onClick={handleSavePersonas}
-                  disabled={savingPersonas}
+                  disabled={savingPersonas || generating}
                   className="rounded-md border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {savingPersonas ? "Saving…" : "Save Personas"}
@@ -1250,39 +1271,93 @@ export default function TestSetGenerate({
                 <button
                   type="button"
                   onClick={() => setShowSavedPersonas(!showSavedPersonas)}
-                  disabled={generatingPersonas || savedPersonas.length === 0}
+                  disabled={generating || generatingPersonas || savedPersonas.length === 0}
                   className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Load Saved{savedPersonas.length > 0 && ` (${savedPersonas.length})`}
                 </button>
                 {showSavedPersonas && savedPersonas.length > 0 && (
-                  <div className="absolute left-0 top-full z-10 mt-1 max-h-60 w-80 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg">
+                  <div className="absolute left-0 top-full z-10 mt-1 max-h-80 w-96 overflow-y-auto rounded-lg border border-border bg-surface shadow-lg">
                     {savedPersonas.map((p) => (
                       <div
                         key={p.id}
-                        className="flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-b-0"
+                        className="border-b border-border/50 px-3 py-2 last:border-b-0"
                       >
-                        <button
-                          type="button"
-                          onClick={() => handleLoadSavedPersona(p)}
-                          className="flex-1 text-left"
-                        >
-                          <p className="text-sm font-medium text-text-primary">{p.name}</p>
-                          <p className="truncate text-xs text-text-muted">{p.role_description}</p>
-                          {p.question_style && (
-                            <p className="truncate text-xs text-accent/70">{p.question_style}</p>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteSavedPersona(p.id)}
-                          className="shrink-0 rounded p-1 text-text-muted transition hover:text-red-400"
-                          title="Delete saved persona"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                          </svg>
-                        </button>
+                        {editingPersonaId === p.id ? (
+                          <div className="space-y-1.5">
+                            <input
+                              type="text"
+                              value={editingPersona.name}
+                              onChange={(e) => setEditingPersona({ ...editingPersona, name: e.target.value })}
+                              className="w-full rounded border border-border bg-input px-2 py-1 text-sm text-text-primary"
+                              placeholder="Name"
+                            />
+                            <textarea
+                              value={editingPersona.role_description}
+                              onChange={(e) => setEditingPersona({ ...editingPersona, role_description: e.target.value })}
+                              className="w-full rounded border border-border bg-input px-2 py-1 text-xs text-text-primary"
+                              placeholder="Role description"
+                              rows={2}
+                            />
+                            <input
+                              type="text"
+                              value={editingPersona.question_style}
+                              onChange={(e) => setEditingPersona({ ...editingPersona, question_style: e.target.value })}
+                              className="w-full rounded border border-border bg-input px-2 py-1 text-xs text-text-primary"
+                              placeholder="Question style"
+                            />
+                            <div className="flex gap-1.5 pt-0.5">
+                              <button
+                                type="button"
+                                onClick={handleSaveEditPersona}
+                                className="rounded bg-accent px-2 py-0.5 text-xs font-medium text-deep transition hover:bg-accent/80"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingPersonaId(null)}
+                                className="rounded px-2 py-0.5 text-xs text-text-muted transition hover:text-text-primary"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleLoadSavedPersona(p)}
+                              className="flex-1 text-left"
+                            >
+                              <p className="text-sm font-medium text-text-primary">{p.name}</p>
+                              <p className="truncate text-xs text-text-muted">{p.role_description}</p>
+                              {p.question_style && (
+                                <p className="truncate text-xs text-accent/70">{p.question_style}</p>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditPersona(p)}
+                              className="shrink-0 rounded p-1 text-text-muted transition hover:text-accent"
+                              title="Edit persona"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSavedPersona(p.id)}
+                              className="shrink-0 rounded p-1 text-text-muted transition hover:text-red-400"
+                              title="Delete saved persona"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1559,7 +1634,7 @@ export default function TestSetGenerate({
                 )}
                 <button
                   type="button"
-                  disabled={docKgBuilding}
+                  disabled={generating || docKgBuilding}
                   onClick={async () => {
                     setDocKgBuilding(true);
                     try {
@@ -1700,12 +1775,38 @@ export default function TestSetGenerate({
       <button
         onClick={handleGenerate}
         disabled={
+          generating ||
           (chunksRequired && chunkConfigId === "") ||
           (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))
         }
         className="rounded-lg bg-accent px-5 py-2 text-sm font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Generate Test Set
+        {generating ? (
+          <span className="flex items-center gap-2">
+            <svg
+              className="h-4 w-4 animate-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+            Generating… this may take a few minutes
+          </span>
+        ) : (
+          "Generate Test Set"
+        )}
       </button>
     </div>
   );

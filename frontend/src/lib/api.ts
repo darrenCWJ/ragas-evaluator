@@ -744,6 +744,17 @@ export async function savePersonasBulk(
   return data.personas;
 }
 
+export async function updatePersona(
+  projectId: number,
+  personaId: number,
+  updates: { name?: string; role_description?: string; question_style?: string },
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/personas/${personaId}`,
+    { method: "PUT", body: JSON.stringify(updates) },
+  );
+}
+
 export async function deletePersona(
   projectId: number,
   personaId: number,
