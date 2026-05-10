@@ -60,7 +60,7 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, get_thread_db, NOW_SQL
+from db.init import get_db, NOW_SQL
 
 
 logger = logging.getLogger(__name__)
@@ -307,6 +307,8 @@ def sample_kg_from_json(kg_json: str, n: int) -> tuple[KnowledgeGraph, list[str]
 
     If *n* ≥ total nodes the full KG is returned unchanged.
     """
+    import json as _json
+
     data = _json.loads(kg_json)
     nodes = data.get("nodes", [])
 
@@ -491,6 +493,7 @@ def _load_kg_safe(tmp_path: str) -> KnowledgeGraph:
         return KnowledgeGraph.load(tmp_path)
     except KeyError:
         logger.warning("KG JSON has dangling relationships — patching before load")
+        import json as _json
         data = _json.loads(Path(tmp_path).read_text(encoding="utf-8"))
         node_ids = {n["id"] for n in data.get("nodes", [])}
         original_rel_count = len(data.get("relationships", []))
@@ -603,7 +606,8 @@ def save_kg_to_db(
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     try:
         # Remove old entry for this project+source (content may have changed).
         conn.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
@@ -633,7 +637,8 @@ def delete_kg_from_db(project_id: int, kg_source: str = "chunks") -> bool:
 
 def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
     """Touch the heartbeat timestamp for the KG build of a project+source."""
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     try:
         conn.execute(
             f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
@@ -832,10 +837,13 @@ def _apply_transform_batched(
         apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=_workers))
         result_nodes.extend(mini_kg.nodes)
         # Keep kg.nodes current after every batch so that if an exception
-        # propagates the exception handler saves a checkpoint with work done so far.
+        # propagates (e.g. daily API quota exceeded) the exception handler in
+        # build_knowledge_graph saves a checkpoint that includes the embeddings
+        # computed so far.  On the next run _apply_transform_batched will detect
+        # the already-embedded nodes above and skip them.
         kg.nodes = result_nodes + all_nodes[start + batch_size :]
-        # Actively persist after each batch so a hard process kill (OOM, timeout)
-        # only loses the current batch — next run resumes from here.
+        # Actively persist after each batch so a hard process kill (not just a
+        # Python exception) also survives — the next run picks up from here.
         if save_partial_fn is not None:
             save_partial_fn(kg)
         # Free batch temporaries and release memory back to OS.
@@ -1095,8 +1103,9 @@ def build_kg_standalone(
     Designed to run in a background thread.  Uses the in-memory progress
     store so the frontend can poll for status.
     """
+    import db.init as _db
 
-    conn = get_thread_db()
+    conn = _db.get_thread_db()
     rows = conn.execute(
         "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (chunk_config_id,),
@@ -1125,7 +1134,8 @@ def build_kg_standalone(
 
 def _fetch_document_texts(project_id: int) -> list[str]:
     """Fetch full document texts for a project from the DB."""
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     rows = conn.execute(
         "SELECT content FROM documents WHERE project_id = ? ORDER BY id",
         (project_id,),
@@ -1244,7 +1254,8 @@ def rebuild_kg_links(
         # Get chunks for hash (needed by save_kg_to_db)
         chunk_config_id = row["chunk_config_id"]
         if chunk_config_id:
-            conn = get_db()
+            import db.init as _db
+            conn = _db.get_db()
             chunk_rows = conn.execute(
                 "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                 (chunk_config_id,),
@@ -1343,9 +1354,10 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
+    import db.init as _db
     from ragas.run_config import RunConfig
 
-    conn = get_thread_db()
+    conn = _db.get_thread_db()
 
     # Load current chunks from DB
     chunk_rows = conn.execute(
@@ -1767,7 +1779,17 @@ def generate_personas(
         return [_merge_persona_fields(p) for p in raw]
 
     llm, embeddings, _ = _build_llm_and_embeddings()
-    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id)
+
+    # Reuse an existing completed KG if available (avoids clobbering the main KG).
+    kg = None
+    if project_id is not None:
+        cached = load_cached_kg(project_id, chunks, allow_partial=False, kg_source="chunks")
+        if cached is not None:
+            logger.info("Reusing existing KG for persona generation (project %d)", project_id)
+            kg = cached
+
+    if kg is None:
+        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, kg_source="personas")
 
     # Ragas generate_personas_from_kg requires summary + summary_embedding
     # properties that our 4-step KG pipeline doesn't produce.  Check if the
@@ -2181,7 +2203,7 @@ def _generate_bridge_questions(
                         path = nx.shortest_path(G, sampled[i], sampled[j])
                         candidate_pairs.append((sampled[i], sampled[j], path))
                 except nx.NetworkXNoPath:
-                    continue
+                    pass
 
     if not candidate_pairs:
         logger.info("No node pairs with distance ≥ 3 found for bridge questions")
@@ -2554,6 +2576,7 @@ def _generate_project_testset_inner(
         if project_id is not None:
             kg_json = load_full_kg_json(project_id, kg_source=graph_rag_kg_source)
             if kg_json is not None:
+                import json as _json
                 num_nodes = len(_json.loads(kg_json).get("nodes", []))
                 sample_n = min(node_sample_size, num_nodes)
                 logger.info(
