@@ -2224,3 +2224,56 @@ export function streamKnowledgeGraphData(
 
   return () => controller.abort();
 }
+
+// ---------------------------------------------------------------------------
+// Worker status
+// ---------------------------------------------------------------------------
+
+export interface WorkerTask {
+  project_id: number;
+  type: "kg_build" | "persona_generation";
+  kg_source?: string;
+  started_at?: number;
+  num_personas?: number;
+}
+
+export interface WorkerInfo {
+  url: string;
+  reachable: boolean;
+  status?: string;
+  rss_mb?: number | null;
+  tasks?: WorkerTask[];
+  active_kg_builds?: number;
+  active_persona_builds?: number;
+  max_concurrent_kg?: number;
+  max_concurrent_personas?: number;
+  error?: string;
+}
+
+export interface WorkersStatusResponse {
+  workers: WorkerInfo[];
+  total_configured: number;
+}
+
+export async function fetchWorkersStatus(): Promise<WorkersStatusResponse> {
+  return request<WorkersStatusResponse>("/api/workers/status");
+}
+
+export async function clearWorkerPersonaTask(
+  projectId: number,
+): Promise<{ cleared: boolean }> {
+  return request<{ cleared: boolean }>(
+    `/api/workers/clear-personas/${projectId}`,
+    { method: "POST" },
+  );
+}
+
+export async function clearWorkerBuildTask(
+  projectId: number,
+  kgSource: string = "chunks",
+): Promise<{ cleared: boolean }> {
+  return request<{ cleared: boolean }>(
+    `/api/workers/clear-build/${projectId}?kg_source=${kgSource}`,
+    { method: "POST" },
+  );
+}

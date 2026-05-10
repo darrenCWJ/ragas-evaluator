@@ -110,6 +110,7 @@ export default function Stepper() {
   const currentPath = location.pathname.split("/").pop() ?? "";
 
   const isKgActive = currentPath === "knowledge-graph";
+  const isWorkersActive = currentPath === "workers";
 
   return (
     <nav
@@ -238,6 +239,52 @@ export default function Stepper() {
           </span>
         </div>
         {isKgActive && (
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+        )}
+      </NavLink>
+
+      {/* Workers dashboard link */}
+      <NavLink
+        to="/workers"
+        className={`
+          group relative flex items-center gap-3 rounded-lg px-3 py-2.5
+          transition-all duration-200 outline-none
+          focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
+          ${
+            isWorkersActive
+              ? "bg-accent-glow text-text-primary"
+              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+          }
+        `}
+      >
+        <span
+          className={`
+            flex h-8 w-8 shrink-0 items-center justify-center rounded-md
+            transition-colors duration-200
+            ${
+              isWorkersActive
+                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
+                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+            }
+          `}
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"
+            />
+          </svg>
+        </span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-sm font-medium leading-tight truncate">
+            Workers
+          </span>
+          <span className="text-micro text-text-muted leading-tight truncate">
+            Monitor & manage
+          </span>
+        </div>
+        {isWorkersActive && (
           <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
         )}
       </NavLink>
