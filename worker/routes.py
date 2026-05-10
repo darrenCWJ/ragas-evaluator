@@ -179,13 +179,26 @@ def _run_personas_in_thread(
         personas = generate_personas(chunks=chunks, num_personas=num_personas, fast=False, project_id=project_id)
         result = _enrich_with_question_styles(personas)
 
+        saved_count = 0
+        for p in result:
+            name = p.get("name", "").strip()
+            role_desc = p.get("role_description", "").strip()
+            if not name or not role_desc:
+                continue
+            conn.execute(
+                "INSERT INTO personas (project_id, name, role_description, question_style) VALUES (?, ?, ?, ?)",
+                (project_id, name, role_desc, p.get("question_style", "")),
+            )
+            saved_count += 1
+        conn.commit()
+
         with _persona_lock:
             _active_persona_builds[project_id] = {
                 **_active_persona_builds[project_id],
                 "status": "completed",
                 "result": result,
             }
-        logger.info("Persona generation completed: project=%d, %d personas", project_id, len(result))
+        logger.info("Persona generation completed: project=%d, %d personas saved to DB", project_id, saved_count)
     except Exception as exc:
         logger.exception("Persona generation failed: project=%d: %s", project_id, exc)
         with _persona_lock:

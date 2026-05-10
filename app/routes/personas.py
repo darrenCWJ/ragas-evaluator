@@ -49,6 +49,20 @@ def _run_persona_subprocess(
         if result.returncode != 0:
             raise RuntimeError("KG persona generation subprocess exited non-zero (check server logs)")
         personas = json.loads(result.stdout.strip().split("\n")[-1])
+        conn = db.init.get_db()
+        saved_count = 0
+        for p in personas:
+            name = (p.get("name") or "").strip()
+            role_desc = (p.get("role_description") or "").strip()
+            if not name or not role_desc:
+                continue
+            conn.execute(
+                "INSERT INTO personas (project_id, name, role_description, question_style) VALUES (?, ?, ?, ?)",
+                (project_id, name, role_desc, p.get("question_style", "")),
+            )
+            saved_count += 1
+        conn.commit()
+        logger.info("Persona generation completed: project=%d, %d personas saved to DB", project_id, saved_count)
         with _persona_task_lock:
             _persona_tasks[project_id] = {"status": "completed", "personas": personas}
     except Exception as exc:
