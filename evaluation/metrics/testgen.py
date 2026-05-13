@@ -1660,10 +1660,29 @@ def generate_personas(
 
     llm, embeddings, _ = _build_llm_and_embeddings()
 
-    # Reuse an existing completed KG if available (avoids clobbering the main KG).
+    # Reuse an existing completed KG if available (avoids rebuilding).
+    # Try exact hash match first, then any completed KG for the project.
     kg = None
     if project_id is not None:
         cached = load_cached_kg(project_id, chunks, allow_partial=False, kg_source="chunks")
+        if cached is None:
+            db_conn = get_db()
+            for source in ("chunks", "documents", "personas"):
+                row = db_conn.execute(
+                    "SELECT kg_json, is_complete FROM knowledge_graphs "
+                    "WHERE project_id = ? AND kg_source = ? AND is_complete = TRUE",
+                    (project_id, source),
+                ).fetchone()
+                if row is not None:
+                    logger.info("Reusing completed KG (source=%s) for persona generation (project %d)", source, project_id)
+                    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
+                        f.write(row["kg_json"])
+                        tmp_path = f.name
+                    try:
+                        cached = _load_kg_safe(tmp_path)
+                    finally:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    break
         if cached is not None:
             logger.info("Reusing existing KG for persona generation (project %d)", project_id)
             kg = cached
@@ -1752,6 +1771,7 @@ def generate_testset_from_chunks(
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
     project_id: int | None = None,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> list[dict]:
     """Generate test questions from pre-chunked text using parallel workers.
 
@@ -1769,6 +1789,8 @@ def generate_testset_from_chunks(
         # Fast path — single worker, no threading overhead.
         generate_size = int(testset_size * OVERGENERATE_FACTOR)
         results = _worker_generate_from_chunks(chunks, generate_size, query_distribution, project_id=project_id)
+        if on_batch and results:
+            on_batch(results)
         results = _deduplicate_questions(results)
         return results[:testset_size]
 
@@ -1808,7 +1830,10 @@ def generate_testset_from_chunks(
                     f.cancel()
                 break
             try:
-                all_questions.extend(future.result())
+                batch = future.result()
+                if on_batch and batch:
+                    on_batch(batch)
+                all_questions.extend(batch)
             except Exception:
                 logger.exception("Worker failed during chunk-based generation")
 
@@ -1826,6 +1851,7 @@ def generate_testset_with_personas(
     project_id: int | None = None,
     prebuilt_kg: "KnowledgeGraph | None" = None,
     fast_mode: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> dict:
     """Generate test questions with persona information using parallel workers.
 
@@ -1873,6 +1899,8 @@ def generate_testset_with_personas(
     if effective_workers <= 1:
         generate_size = int(testset_size * OVERGENERATE_FACTOR)
         questions = _worker_generate_from_kg(kg, personas, generate_size, query_distribution, project_id=project_id)
+        if on_batch and questions:
+            on_batch(questions)
         questions = _deduplicate_questions(questions)
         questions = questions[:testset_size]
     else:
@@ -1908,7 +1936,10 @@ def generate_testset_with_personas(
                         f.cancel()
                     break
                 try:
-                    all_questions.extend(future.result())
+                    batch = future.result()
+                    if on_batch and batch:
+                        on_batch(batch)
+                    all_questions.extend(batch)
                 except Exception:
                     logger.exception("Worker failed during persona-based generation")
 
@@ -2381,6 +2412,7 @@ def generate_project_testset(
     graph_rag_kg_source: str = "chunks",
     node_sample_size: int = 0,
     fast_mode: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> dict:
     """Unified entry point for project-scoped test set generation.
 
@@ -2417,6 +2449,7 @@ def generate_project_testset(
             graph_rag_kg_source=graph_rag_kg_source,
             node_sample_size=node_sample_size,
             fast_mode=fast_mode,
+            on_batch=on_batch,
         )
     finally:
         if project_id is not None:
@@ -2436,6 +2469,7 @@ def _generate_project_testset_inner(
     graph_rag_kg_source: str = "chunks",
     node_sample_size: int = 0,
     fast_mode: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> dict:
     # ---------------------------------------------------------------------------
     # Resolve effective chunks and prebuilt KG for KG-node sampling.
@@ -2490,6 +2524,7 @@ def _generate_project_testset_inner(
                 project_id=project_id,
                 prebuilt_kg=prebuilt_kg,
                 fast_mode=fast_mode,
+                on_batch=on_batch,
             )
         else:
             questions = generate_testset_from_chunks(
@@ -2499,6 +2534,7 @@ def _generate_project_testset_inner(
                 query_distribution=query_distribution,
                 num_workers=num_workers,
                 project_id=project_id,
+                on_batch=on_batch,
             )
             result = {"personas": [], "questions": questions}
         # Tag all questions as in_knowledge_base for consistency
@@ -2545,6 +2581,7 @@ def _generate_project_testset_inner(
                 project_id=project_id,
                 prebuilt_kg=prebuilt_kg,
                 fast_mode=fast_mode,
+                on_batch=on_batch,
             )
             all_personas = ragas_result.get("personas", [])
             ragas_questions = ragas_result.get("questions", [])
@@ -2556,6 +2593,7 @@ def _generate_project_testset_inner(
                 query_distribution=query_distribution,
                 num_workers=num_workers,
                 project_id=project_id,
+                on_batch=on_batch,
             )
 
         # Split ragas questions between typical and in_knowledge_base

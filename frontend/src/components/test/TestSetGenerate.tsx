@@ -330,13 +330,14 @@ export default function TestSetGenerate({
   };
 
   const handleAutoGeneratePersonas = async () => {
-    if (chunkConfigId === "" || !validatePersonas(numPersonas)) return;
+    const effectiveChunkConfigId = chunkConfigId !== "" ? (chunkConfigId as number) : kgInfo?.chunk_config_id;
+    if (!effectiveChunkConfigId || !validatePersonas(numPersonas)) return;
     setGeneratingPersonas(true);
     setError(null);
     try {
       const personas = await generatePersonas(
         projectId,
-        chunkConfigId as number,
+        effectiveChunkConfigId,
         Number(numPersonas),
         personaGenMode,
       );
@@ -1248,7 +1249,7 @@ export default function TestSetGenerate({
               <button
                 type="button"
                 onClick={handleAutoGeneratePersonas}
-                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "") || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
+                disabled={generating || generatingPersonas || (chunksRequired && chunkConfigId === "" && !kgInfo?.chunk_config_id) || (useKgAsSource && !(kgInfo?.exists && kgInfo.is_complete))}
                 className="rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {generatingPersonas

@@ -221,6 +221,9 @@ async def create_test_set(project_id: int, req: TestSetCreate):
         "question_categories": req.question_categories,
         "total_chunks": total_chunks,
         "sampled_chunks": req.chunk_sample_size if req.chunk_sample_size > 0 else total_chunks,
+        "graph_rag_kg_source": req.graph_rag_kg_source,
+        "use_kg_as_source": req.use_kg_as_source,
+        "fast_kg_mode": req.fast_kg_mode,
     }
     cursor = conn.execute(
         "INSERT INTO test_sets (project_id, name, generation_config_json, status) VALUES (?, ?, ?, 'generating')",
@@ -269,40 +272,14 @@ def _run_generation(
         is_cancelled,
     )
 
-    register_cancel_flag(project_id)
+    cancel_flag = register_cancel_flag(project_id)
     conn = get_thread_db()
-    try:
-        # When using KG as source with no explicit sample, set node_sample_size
-        # to the total node count so the cached-KG path is always taken
-        # (avoids a hash-miss rebuild when chunk_sample_size=0).
-        node_sample_size = req.chunk_sample_size
-        if req.use_kg_as_source and node_sample_size == 0:
-            node_sample_size = len(chunks)
+    saved_count = 0
 
-        result = generate_project_testset(
-            chunks=chunks,
-            testset_size=req.testset_size,
-            use_personas=req.use_personas,
-            num_personas=req.num_personas,
-            custom_personas=req.custom_personas,
-            query_distribution=req.query_distribution,
-            num_workers=req.num_workers,
-            question_categories=req.question_categories,
-            project_id=project_id,
-            graph_rag_kg_source=req.graph_rag_kg_source,
-            node_sample_size=node_sample_size,
-            fast_mode=req.fast_kg_mode,
-        )
-
-        # Insert questions
-        questions = result.get("questions", [])
-        personas = result.get("personas", [])
-        persona_map = {p["name"]: p for p in personas} if personas else {}
-
-        for q in questions:
-            persona_name = q.get("persona") or (
-                q.get("synthesizer_name") if not persona_map else None
-            )
+    def _save_batch(batch: list[dict]) -> None:
+        nonlocal saved_count
+        for q in batch:
+            persona_name = q.get("persona") or q.get("synthesizer_name") or ""
             category = q.get("category", "")
             conn.execute(
                 """INSERT INTO test_questions
@@ -318,6 +295,33 @@ def _run_generation(
                     category,
                 ),
             )
+        conn.commit()
+        saved_count += len(batch)
+        logger.info("Test set %d: saved batch of %d questions (total %d)", test_set_id, len(batch), saved_count)
+
+    try:
+        # When using KG as source with no explicit sample, set node_sample_size
+        # to the total node count so the cached-KG path is always taken
+        # (avoids a hash-miss rebuild when chunk_sample_size=0).
+        node_sample_size = req.chunk_sample_size
+        if req.use_kg_as_source and node_sample_size == 0:
+            node_sample_size = len(chunks)
+
+        generate_project_testset(
+            chunks=chunks,
+            testset_size=req.testset_size,
+            use_personas=req.use_personas,
+            num_personas=req.num_personas,
+            custom_personas=req.custom_personas,
+            query_distribution=req.query_distribution,
+            num_workers=req.num_workers,
+            question_categories=req.question_categories,
+            project_id=project_id,
+            graph_rag_kg_source=req.graph_rag_kg_source,
+            node_sample_size=node_sample_size,
+            fast_mode=req.fast_kg_mode,
+            on_batch=_save_batch,
+        )
 
         if is_cancelled(project_id):
             conn.execute(
@@ -325,7 +329,7 @@ def _run_generation(
                 (test_set_id,),
             )
             conn.commit()
-            logger.info("Test set %d generation cancelled", test_set_id)
+            logger.info("Test set %d generation cancelled (%d questions saved)", test_set_id, saved_count)
         else:
             conn.execute(
                 "UPDATE test_sets SET status = 'completed' WHERE id = ?",
@@ -335,7 +339,7 @@ def _run_generation(
             logger.info(
                 "Test set %d generated successfully (%d questions)",
                 test_set_id,
-                len(questions),
+                saved_count,
             )
 
     except Exception as e:
@@ -344,11 +348,11 @@ def _run_generation(
                 "UPDATE test_sets SET status = 'cancelled' WHERE id = ?",
                 (test_set_id,),
             )
-            logger.info("Test set %d generation cancelled (via exception)", test_set_id)
+            logger.info("Test set %d generation cancelled (via exception, %d questions saved)", test_set_id, saved_count)
         else:
             err_msg = str(e)
             logger.exception(
-                "Test set generation failed for test_set_id=%d", test_set_id
+                "Test set generation failed for test_set_id=%d (%d questions saved)", test_set_id, saved_count
             )
             conn.execute(
                 "UPDATE test_sets SET status = 'failed', error_message = ? WHERE id = ?",
@@ -665,6 +669,102 @@ async def cancel_test_set_generation(project_id: int, test_set_id: int):
 
     cancel_generation(project_id)
     return {"status": "cancelling", "test_set_id": test_set_id}
+
+
+@router.post("/projects/{project_id}/test-sets/{test_set_id}/resume")
+async def resume_test_set_generation(project_id: int, test_set_id: int):
+    """Resume a failed test set generation. Keeps existing questions and generates the remainder."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+    if row["status"] != "failed":
+        raise HTTPException(status_code=409, detail=f"Only failed test sets can be resumed (current: {row['status']})")
+
+    with _gen_lock:
+        if project_id in _active_generations:
+            raise HTTPException(status_code=409, detail="A test set is already being generated for this project")
+
+    existing_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM test_questions WHERE test_set_id = ?",
+        (test_set_id,),
+    ).fetchone()["cnt"]
+
+    config = json.loads(row["generation_config_json"]) if row["generation_config_json"] else {}
+    original_size = config.get("testset_size", 10)
+    remaining = max(0, original_size - existing_count)
+
+    if remaining <= 0:
+        conn.execute("UPDATE test_sets SET status = 'completed', error_message = NULL WHERE id = ?", (test_set_id,))
+        conn.commit()
+        return {"status": "completed", "test_set_id": test_set_id, "existing_questions": existing_count}
+
+    conn.execute(
+        "UPDATE test_sets SET status = 'generating', error_message = NULL WHERE id = ?",
+        (test_set_id,),
+    )
+    conn.commit()
+
+    chunk_config_id = config.get("chunk_config_id")
+    use_kg_as_source = config.get("use_kg_as_source", False)
+
+    chunks: list[str] = []
+    if use_kg_as_source:
+        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
+        import json as _json
+        _kg_json = _load_full_kg_json(project_id, "chunks")
+        if _kg_json:
+            _nodes = _json.loads(_kg_json).get("nodes", [])
+            chunks = [
+                n.get("properties", {}).get("page_content", "")
+                for n in _nodes
+                if n.get("properties", {}).get("page_content", "").strip()
+            ]
+    elif chunk_config_id is not None:
+        chunk_rows = conn.execute(
+            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
+            (chunk_config_id,),
+        ).fetchall()
+        chunks = [r["content"] for r in chunk_rows]
+
+    if not chunks and not (config.get("graph_rag_kg_source") == "documents"):
+        raise HTTPException(status_code=422, detail="No chunks available to resume generation")
+
+    from app.models import TestSetCreate
+    resume_req = TestSetCreate(
+        chunk_config_id=chunk_config_id,
+        testset_size=remaining,
+        use_personas=config.get("use_personas", True),
+        num_personas=config.get("num_personas", 3),
+        custom_personas=config.get("custom_personas"),
+        query_distribution=config.get("query_distribution"),
+        chunk_sample_size=config.get("chunk_sample_size", 0),
+        num_workers=config.get("num_workers", 4),
+        question_categories=config.get("question_categories"),
+        graph_rag_kg_source=config.get("graph_rag_kg_source", "chunks"),
+        use_kg_as_source=use_kg_as_source,
+        fast_kg_mode=config.get("fast_kg_mode", False),
+    )
+
+    with _gen_lock:
+        _active_generations[project_id] = test_set_id
+
+    thread = threading.Thread(
+        target=_run_generation,
+        args=(project_id, test_set_id, chunks, resume_req),
+        daemon=True,
+    )
+    thread.start()
+
+    return {
+        "status": "resuming",
+        "test_set_id": test_set_id,
+        "existing_questions": existing_count,
+        "remaining": remaining,
+    }
 
 
 @router.get("/projects/{project_id}/test-sets/generation-progress")

@@ -598,6 +598,8 @@ export interface TestSet {
     custom_personas: Record<string, unknown>[] | null;
     use_personas: boolean;
   };
+  generation_status?: string;
+  error_message?: string | null;
   created_at: string;
   total_questions: number;
   pending_count: number;
@@ -853,6 +855,15 @@ export async function deleteTestSet(
 ): Promise<void> {
   await request<void>(`/api/projects/${projectId}/test-sets/${testSetId}`, {
     method: "DELETE",
+  });
+}
+
+export async function resumeTestSet(
+  projectId: number,
+  testSetId: number,
+): Promise<{ status: string; existing_questions: number; remaining: number }> {
+  return request(`/api/projects/${projectId}/test-sets/${testSetId}/resume`, {
+    method: "POST",
   });
 }
 
