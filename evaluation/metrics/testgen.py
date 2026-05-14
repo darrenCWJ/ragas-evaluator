@@ -1667,7 +1667,7 @@ def generate_personas(
         cached = load_cached_kg(project_id, chunks, allow_partial=False, kg_source="chunks")
         if cached is None:
             db_conn = get_db()
-            for source in ("chunks", "documents", "personas"):
+            for source in ("chunks", "documents"):
                 row = db_conn.execute(
                     "SELECT kg_json, is_complete FROM knowledge_graphs "
                     "WHERE project_id = ? AND kg_source = ? AND is_complete = TRUE",
@@ -1688,7 +1688,7 @@ def generate_personas(
             kg = cached
 
     if kg is None:
-        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, kg_source="personas")
+        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, kg_source="chunks")
 
     # Ragas generate_personas_from_kg requires summary + summary_embedding
     # properties that our 4-step KG pipeline doesn't produce.  Check if the
