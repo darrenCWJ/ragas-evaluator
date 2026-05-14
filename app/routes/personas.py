@@ -326,6 +326,29 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
         return {"status": "completed", "personas": personas}
 
 
+@router.post("/projects/{project_id}/generate-personas/clear")
+async def clear_persona_generation(project_id: int):
+    """Clear a stale persona generation lock for this project."""
+    cleared = False
+    with _persona_worker_lock:
+        if project_id in _persona_worker:
+            _persona_worker.pop(project_id)
+            cleared = True
+    with _persona_task_lock:
+        if project_id in _persona_tasks:
+            _persona_tasks.pop(project_id)
+            cleared = True
+    if KG_WORKER_URLS:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            for url in KG_WORKER_URLS:
+                try:
+                    await client.post(f"{url}/clear-personas/{project_id}")
+                except Exception:
+                    pass
+    return {"cleared": cleared, "project_id": project_id}
+
+
 @router.get("/projects/{project_id}/generate-personas/status")
 async def get_persona_generation_status(project_id: int):
     """Poll for the result of a full-mode persona generation task.
