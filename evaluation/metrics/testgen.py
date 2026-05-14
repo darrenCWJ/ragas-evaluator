@@ -2443,7 +2443,7 @@ def generate_project_testset(
     # Initialize progress tracking
     if project_id is not None:
         set_progress(project_id, {
-            "stage": "building_knowledge_graph",
+            "stage": "initializing",
             "questions_generated": 0,
             "target_size": testset_size,
         }, kg_source="testset")

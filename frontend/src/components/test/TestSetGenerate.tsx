@@ -548,6 +548,7 @@ export default function TestSetGenerate({
     const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 
     const STAGE_LABELS: Record<string, string> = {
+      initializing: "Initializing",
       building_knowledge_graph: "Building knowledge graph",
       kg_resuming_from_checkpoint: "Resuming from checkpoint",
       kg_loaded_from_cache: "Loaded knowledge graph from cache",
@@ -569,9 +570,9 @@ export default function TestSetGenerate({
     };
     // When KG is loaded from cache, show a single "loaded from cache" step
     // instead of the individual KG build sub-steps.
-    const currentStage = progress?.stage ?? "building_knowledge_graph";
+    const currentStage = progress?.stage ?? "initializing";
     const kgCached = currentStage === "kg_loaded_from_cache"
-      || (!currentStage.startsWith("kg_") && currentStage !== "building_knowledge_graph");
+      || (!currentStage.startsWith("kg_") && currentStage !== "building_knowledge_graph" && currentStage !== "initializing");
 
     const STAGE_ORDER = kgCached
       ? [
