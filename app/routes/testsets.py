@@ -236,7 +236,47 @@ async def create_test_set(project_id: int, req: TestSetCreate):
     with _gen_lock:
         _active_generations[project_id] = test_set_id
 
-    # Spawn background thread for generation
+    # Try delegating to a worker
+    from config import KG_WORKER_URLS
+    if KG_WORKER_URLS:
+        import httpx
+
+        payload = {
+            "project_id": project_id,
+            "test_set_id": test_set_id,
+            "testset_size": req.testset_size,
+            "use_personas": req.use_personas,
+            "num_personas": req.num_personas,
+            "custom_personas": req.custom_personas,
+            "query_distribution": req.query_distribution,
+            "chunk_sample_size": req.chunk_sample_size,
+            "num_workers": req.num_workers,
+            "question_categories": req.question_categories,
+            "graph_rag_kg_source": req.graph_rag_kg_source,
+            "use_kg_as_source": req.use_kg_as_source,
+            "fast_kg_mode": req.fast_kg_mode,
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            for worker_url in KG_WORKER_URLS:
+                try:
+                    resp = await client.post(f"{worker_url}/run-testgen", json=payload)
+                    if resp.status_code == 202:
+                        logger.info("Test generation for project %d delegated to worker: %s", project_id, worker_url)
+                        return {
+                            "id": test_set_id,
+                            "name": name,
+                            "project_id": project_id,
+                            "status": "generating",
+                            "worker": True,
+                        }
+                    if resp.status_code == 409:
+                        break
+                    logger.debug("Worker %s at capacity for testgen, trying next", worker_url)
+                except httpx.HTTPError as e:
+                    logger.warning("Worker %s unreachable for testgen: %s", worker_url, e)
+        logger.info("All workers busy/unreachable — running test generation locally for project %d", project_id)
+
+    # Spawn local background thread for generation
     thread = threading.Thread(
         target=_run_generation,
         args=(project_id, test_set_id, chunks, req),
@@ -772,6 +812,22 @@ async def generation_progress(project_id: int):
     from evaluation.metrics.testgen import get_progress
 
     progress = get_progress(project_id, kg_source="testset")
+
+    # If no local progress, try workers
+    if progress is None:
+        from config import KG_WORKER_URLS
+        if KG_WORKER_URLS:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as client:
+                for worker_url in KG_WORKER_URLS:
+                    try:
+                        resp = await client.get(f"{worker_url}/testgen-progress/{project_id}")
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if data.get("active"):
+                                return {"active": True, **data}
+                    except Exception:
+                        continue
 
     # Check DB for completed/failed/cancelled status when no in-memory progress
     # (generation finished and cleared progress, or server restarted)
