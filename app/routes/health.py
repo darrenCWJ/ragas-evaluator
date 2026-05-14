@@ -77,23 +77,33 @@ async def workers_status():
 
 @router.post("/workers/clear-personas/{project_id}")
 async def clear_worker_personas(project_id: int):
-    """Proxy clear-personas to the appropriate worker."""
-    if not KG_WORKER_URLS:
-        return {"cleared": False, "detail": "No workers configured"}
+    """Clear persona generation locks on workers AND the main app."""
+    from app.routes.personas import (
+        _persona_worker, _persona_worker_lock,
+        _persona_tasks, _persona_task_lock,
+    )
+    cleared = False
+    with _persona_worker_lock:
+        if project_id in _persona_worker:
+            _persona_worker.pop(project_id)
+            cleared = True
+    with _persona_task_lock:
+        if project_id in _persona_tasks:
+            _persona_tasks.pop(project_id)
+            cleared = True
 
-    import httpx
+    if KG_WORKER_URLS:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            for url in KG_WORKER_URLS:
+                try:
+                    resp = await client.post(f"{url}/clear-personas/{project_id}")
+                    if resp.status_code == 200 and resp.json().get("cleared"):
+                        cleared = True
+                except Exception:
+                    continue
 
-    async with httpx.AsyncClient(timeout=5) as client:
-        for url in KG_WORKER_URLS:
-            try:
-                resp = await client.post(f"{url}/clear-personas/{project_id}")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("cleared"):
-                        return data
-            except Exception:
-                continue
-    return {"cleared": False, "detail": "Task not found on any worker"}
+    return {"cleared": cleared, "project_id": project_id}
 
 
 @router.post("/workers/clear-build/{project_id}")
