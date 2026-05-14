@@ -1688,7 +1688,10 @@ def generate_personas(
             kg = cached
 
     if kg is None:
-        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, kg_source="chunks")
+        raise RuntimeError(
+            "No completed knowledge graph found for this project. "
+            "Build one first from the Test page before using Full persona generation."
+        )
 
     # Ragas generate_personas_from_kg requires summary + summary_embedding
     # properties that our 4-step KG pipeline doesn't produce.  Check if the
@@ -1869,10 +1872,20 @@ def generate_testset_with_personas(
             "Using pre-sampled KG (%d nodes) — skipping KG build", len(kg.nodes)
         )
     else:
-        logger.info("Building knowledge graph from %d chunks...", len(chunks))
         if project_id is not None:
-            update_progress(project_id, kg_source="testset", stage="building_knowledge_graph")
-        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, fast_mode=fast_mode)
+            kg_json = load_full_kg_json(project_id, kg_source="chunks")
+            if kg_json is None:
+                kg_json = load_full_kg_json(project_id, kg_source="documents")
+            if kg_json is not None:
+                logger.info("Loading existing KG for test generation (project %d)", project_id)
+                kg = _load_kg_from_json_str(kg_json)
+            else:
+                raise RuntimeError(
+                    "No completed knowledge graph found for this project. "
+                    "Build one first from the Test page before generating test sets."
+                )
+        else:
+            raise RuntimeError("project_id is required for test set generation with personas.")
 
     if project_id is not None:
         update_progress(project_id, kg_source="testset", stage="generating_personas")

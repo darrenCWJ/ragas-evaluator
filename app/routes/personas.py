@@ -229,7 +229,7 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
         raise HTTPException(status_code=404, detail="Chunk config not found")
 
     chunk_rows = conn.execute(
-        "SELECT content FROM chunks WHERE chunk_config_id = ?",
+        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (req.chunk_config_id,),
     ).fetchall()
     if not chunk_rows:

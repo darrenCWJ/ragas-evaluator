@@ -492,6 +492,19 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
     _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN few_shot_examples_json TEXT")
 
+    # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
+    if _USE_PG:
+        try:
+            conn.execute(
+                "ALTER TABLE knowledge_graphs DROP CONSTRAINT IF EXISTS knowledge_graphs_project_id_chunks_hash_key"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_kg_project_source ON knowledge_graphs (project_id, kg_source)"
+            )
+            conn.commit()
+        except Exception:
+            conn.commit()
+
     # Backfill NULL chunk_config_id on knowledge_graphs (SQLite only — PG starts fresh)
     if not _USE_PG:
         import hashlib
