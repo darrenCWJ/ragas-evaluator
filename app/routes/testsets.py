@@ -1921,4 +1921,61 @@ async def list_all_knowledge_graphs():
         d["chunks_stale"] = chunks_stale
         d.pop("chunks_hash", None)  # don't expose internal hash
         result.append(d)
+
+    # Include active builds from workers that may not have a DB row yet
+    if KG_WORKER_URLS:
+        import httpx
+        existing_keys = {(d["project_id"], d["kg_source"]) for d in result}
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                for worker_url in KG_WORKER_URLS:
+                    try:
+                        resp = await client.get(f"{worker_url}/status")
+                        if resp.status_code != 200:
+                            continue
+                        for task in resp.json().get("tasks", []):
+                            if task.get("type") != "kg_build":
+                                continue
+                            pid = task["project_id"]
+                            source = task.get("kg_source", "chunks")
+                            progress_info = {
+                                "stage": task.get("stage"),
+                                "completed_steps": task.get("completed_steps", 0),
+                                "total_steps": task.get("total_steps", 11),
+                                "batch_current": task.get("batch_current"),
+                                "batch_total": task.get("batch_total"),
+                            }
+                            key = (pid, source)
+                            if key in existing_keys:
+                                for d in result:
+                                    if d["project_id"] == pid and d["kg_source"] == source:
+                                        d["building"] = True
+                                        d["build_progress"] = progress_info
+                                        break
+                            else:
+                                proj = conn.execute(
+                                    "SELECT name FROM projects WHERE id = ?", (pid,)
+                                ).fetchone()
+                                result.append({
+                                    "id": None,
+                                    "project_id": pid,
+                                    "project_name": proj["name"] if proj else "Unknown",
+                                    "num_nodes": 0,
+                                    "num_chunks": 0,
+                                    "is_complete": False,
+                                    "completed_steps": 0,
+                                    "total_steps": 11,
+                                    "chunk_config_id": None,
+                                    "kg_source": source,
+                                    "created_at": None,
+                                    "chunks_stale": False,
+                                    "building": True,
+                                    "build_progress": progress_info,
+                                })
+                                existing_keys.add(key)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     return result

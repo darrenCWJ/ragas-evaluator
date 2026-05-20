@@ -42,6 +42,14 @@ export default function KnowledgeGraphPage() {
     loadKgs();
   }, [loadKgs]);
 
+  // Re-fetch list periodically while any KG is actively building
+  useEffect(() => {
+    const hasActiveBuilds = kgs.some((kg) => kg.building);
+    if (!hasActiveBuilds) return;
+    const interval = setInterval(loadKgs, 5000);
+    return () => clearInterval(interval);
+  }, [kgs, loadKgs]);
+
   const handleSelect = useCallback((kg: KGListItem) => {
     setSelectedKg(kg);
     setGraphLoading(true);
@@ -233,7 +241,7 @@ export default function KnowledgeGraphPage() {
         /* KG grid */
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {kgs.map((kg) => (
-            <KGCard key={kg.id} kg={kg} onSelect={handleSelect} onRefresh={loadKgs} />
+            <KGCard key={kg.id ?? `building-${kg.project_id}-${kg.kg_source}`} kg={kg} onSelect={handleSelect} onRefresh={loadKgs} />
           ))}
         </div>
       )}

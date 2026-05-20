@@ -2123,8 +2123,16 @@ export async function updateKnowledgeGraph(
 
 // --- Knowledge Graph Explorer ---
 
+export interface KGBuildProgressInfo {
+  stage?: string;
+  completed_steps: number;
+  total_steps: number;
+  batch_current?: number;
+  batch_total?: number;
+}
+
 export interface KGListItem {
-  id: number;
+  id: number | null;
   project_id: number;
   project_name: string;
   kg_source: string;
@@ -2135,7 +2143,9 @@ export interface KGListItem {
   total_steps: number;
   chunk_config_id: number | null;
   chunks_stale: boolean;
-  created_at: string;
+  created_at: string | null;
+  building?: boolean;
+  build_progress?: KGBuildProgressInfo;
 }
 
 export interface KGGraphNode {
@@ -2253,10 +2263,22 @@ export function streamKnowledgeGraphData(
 
 export interface WorkerTask {
   project_id: number;
-  type: "kg_build" | "persona_generation";
+  experiment_id?: number;
+  type: "kg_build" | "persona_generation" | "experiment" | "testgen";
   kg_source?: string;
   started_at?: number;
   num_personas?: number;
+  stale?: boolean;
+  stage?: string;
+  batch_current?: number;
+  batch_total?: number;
+  completed_steps?: number;
+  total_steps?: number;
+  phase?: string;
+  current?: number;
+  total?: number;
+  test_set_id?: number;
+  questions_generated?: number;
 }
 
 export interface WorkerInfo {
@@ -2267,8 +2289,12 @@ export interface WorkerInfo {
   tasks?: WorkerTask[];
   active_kg_builds?: number;
   active_persona_builds?: number;
+  active_experiments?: number;
+  active_testgens?: number;
   max_concurrent_kg?: number;
   max_concurrent_personas?: number;
+  max_concurrent_experiments?: number;
+  max_concurrent_testgens?: number;
   error?: string;
 }
 

@@ -18,11 +18,55 @@ function elapsed(startedAt: number | undefined): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
+const STAGE_LABELS: Record<string, string> = {
+  building_knowledge_graph: "Starting...",
+  kg_extracting_headlines: "Headlines",
+  kg_splitting_headlines: "Splitting",
+  kg_extracting_keyphrases: "Keyphrases",
+  kg_building_overlap: "Overlap",
+  kg_extracting_summaries: "Summaries",
+  kg_embedding_summaries: "Embedding",
+  kg_filtering_nodes: "Filtering",
+  kg_extracting_themes: "Themes",
+  kg_extracting_entities: "Entities",
+  kg_building_summary_similarity: "Similarity",
+  kg_building_entity_overlap: "Entity overlap",
+  kg_combined_extraction: "Combined extraction",
+};
+
 function taskLabel(task: WorkerTask): string {
   if (task.type === "kg_build") {
     return `KG Build (${task.kg_source ?? "chunks"})`;
   }
+  if (task.type === "experiment") {
+    return `Experiment #${task.experiment_id ?? "?"}`;
+  }
+  if (task.type === "testgen") {
+    return "Test Generation";
+  }
   return `Persona Generation (${task.num_personas ?? "?"} personas)`;
+}
+
+function taskStatus(task: WorkerTask): string {
+  if (task.type === "kg_build" && task.stage) {
+    const label = STAGE_LABELS[task.stage] ?? task.stage;
+    const step = task.completed_steps != null ? `${task.completed_steps + 1}/${task.total_steps ?? 11}` : "";
+    const batch = task.batch_total ? ` (${task.batch_current ?? 0}/${task.batch_total})` : "";
+    return `${label} ${step}${batch}`.trim();
+  }
+  if (task.type === "experiment") {
+    const phase = task.phase ?? "running";
+    if (task.total && task.total > 0) {
+      return `${phase} — ${task.current ?? 0}/${task.total} questions`;
+    }
+    return phase;
+  }
+  if (task.type === "testgen") {
+    const qs = task.questions_generated ?? 0;
+    const stage = task.stage ?? "generating";
+    return qs > 0 ? `${stage} — ${qs} generated` : stage;
+  }
+  return "";
 }
 
 export default function WorkersPage() {
@@ -58,12 +102,12 @@ export default function WorkersPage() {
   }, [poll]);
 
   const handleClear = async (task: WorkerTask) => {
-    const key = `${task.type}-${task.project_id}`;
+    const key = `${task.type}-${task.project_id ?? task.experiment_id}`;
     setClearing(key);
     try {
       if (task.type === "persona_generation") {
         await clearWorkerPersonaTask(task.project_id);
-      } else {
+      } else if (task.type === "kg_build") {
         await clearWorkerBuildTask(task.project_id, task.kg_source);
       }
       await poll();
@@ -152,8 +196,8 @@ export default function WorkersPage() {
               <p className="text-xs text-red-400">{w.error ?? "Unreachable"}</p>
             ) : (
               <div className="space-y-2">
-                <div className="flex gap-4 text-xs text-text-muted">
-                  <div className="flex-1">
+                <div className="grid grid-cols-2 gap-3 text-xs text-text-muted">
+                  <div>
                     <div className="flex justify-between mb-1">
                       <span>KG builds</span>
                       <span>{w.active_kg_builds ?? 0}/{w.max_concurrent_kg ?? "?"}</span>
@@ -167,7 +211,7 @@ export default function WorkersPage() {
                       />
                     </div>
                   </div>
-                  <div className="flex-1">
+                  <div>
                     <div className="flex justify-between mb-1">
                       <span>Personas</span>
                       <span>{w.active_persona_builds ?? 0}/{w.max_concurrent_personas ?? "?"}</span>
@@ -177,6 +221,34 @@ export default function WorkersPage() {
                         className="h-full rounded-full bg-purple-400 transition-all"
                         style={{
                           width: `${Math.min(100, ((w.active_persona_builds ?? 0) / (w.max_concurrent_personas ?? 1)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span>Experiments</span>
+                      <span>{w.active_experiments ?? 0}/{w.max_concurrent_experiments ?? "?"}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-emerald-400 transition-all"
+                        style={{
+                          width: `${Math.min(100, ((w.active_experiments ?? 0) / (w.max_concurrent_experiments ?? 1)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span>Test gen</span>
+                      <span>{w.active_testgens ?? 0}/{w.max_concurrent_testgens ?? "?"}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-amber-400 transition-all"
+                        style={{
+                          width: `${Math.min(100, ((w.active_testgens ?? 0) / (w.max_concurrent_testgens ?? 1)) * 100)}%`,
                         }}
                       />
                     </div>
@@ -211,6 +283,7 @@ export default function WorkersPage() {
               <tr className="border-b border-border text-left text-xs text-text-muted">
                 <th className="px-4 py-2 font-medium">Project</th>
                 <th className="px-4 py-2 font-medium">Type</th>
+                <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Worker</th>
                 <th className="px-4 py-2 font-medium">Elapsed</th>
                 <th className="px-4 py-2 font-medium" />
@@ -218,22 +291,38 @@ export default function WorkersPage() {
             </thead>
             <tbody>
               {allTasks.map((task) => {
-                const key = `${task.type}-${task.project_id}`;
+                const key = `${task.type}-${task.project_id ?? task.experiment_id}`;
                 return (
                   <tr key={key} className="border-b border-border/50 last:border-0">
                     <td className="px-4 py-2.5 text-text-primary font-mono text-xs">
-                      #{task.project_id}
+                      {task.type === "experiment" ? `Exp #${task.experiment_id}` : `#${task.project_id}`}
                     </td>
                     <td className="px-4 py-2.5">
                       <span
                         className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${
                           task.type === "kg_build"
                             ? "bg-accent/10 text-accent"
-                            : "bg-purple-400/10 text-purple-400"
+                            : task.type === "experiment"
+                              ? "bg-emerald-400/10 text-emerald-400"
+                              : task.type === "testgen"
+                                ? "bg-amber-400/10 text-amber-400"
+                                : "bg-purple-400/10 text-purple-400"
                         }`}
                       >
                         {taskLabel(task)}
                       </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs">
+                      {task.stale ? (
+                        <span className="inline-flex items-center gap-1 text-amber-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                          Stale
+                        </span>
+                      ) : taskStatus(task) ? (
+                        <span className="text-text-secondary">{taskStatus(task)}</span>
+                      ) : (
+                        <span className="text-text-muted">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-text-muted text-xs truncate max-w-[140px]">
                       {task.workerUrl?.replace(/^https?:\/\//, "") ?? "—"}
