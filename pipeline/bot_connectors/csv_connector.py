@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from difflib import SequenceMatcher
 
 from pipeline.bot_connectors.base import BotResponse, Citation

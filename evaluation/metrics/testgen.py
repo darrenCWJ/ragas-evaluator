@@ -18,6 +18,7 @@ import math
 import os
 import random
 import signal
+import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -57,7 +58,8 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, get_thread_db, NOW_SQL
+from db.init import get_db, NOW_SQL
+from evaluation.metrics.multi_llm_judge import _extract_json
 
 
 logger = logging.getLogger(__name__)
@@ -278,6 +280,8 @@ def sample_kg_from_json(kg_json: str, n: int) -> tuple[KnowledgeGraph, list[str]
 
     If *n* ≥ total nodes the full KG is returned unchanged.
     """
+    import json as _json
+
     data = _json.loads(kg_json)
     nodes = data.get("nodes", [])
 
@@ -462,6 +466,7 @@ def _load_kg_safe(tmp_path: str) -> KnowledgeGraph:
         return KnowledgeGraph.load(tmp_path)
     except KeyError:
         logger.warning("KG JSON has dangling relationships — patching before load")
+        import json as _json
         data = _json.loads(Path(tmp_path).read_text(encoding="utf-8"))
         node_ids = {n["id"] for n in data.get("nodes", [])}
         original_rel_count = len(data.get("relationships", []))
@@ -574,7 +579,8 @@ def save_kg_to_db(
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     try:
         # Remove old entry for this project+source (content may have changed).
         conn.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
@@ -604,7 +610,8 @@ def delete_kg_from_db(project_id: int, kg_source: str = "chunks") -> bool:
 
 def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
     """Touch the heartbeat timestamp for the KG build of a project+source."""
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     try:
         conn.execute(
             f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
@@ -977,8 +984,9 @@ def build_kg_standalone(
     Designed to run in a background thread.  Uses the in-memory progress
     store so the frontend can poll for status.
     """
+    import db.init as _db
 
-    conn = get_thread_db()
+    conn = _db.get_thread_db()
     rows = conn.execute(
         "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (chunk_config_id,),
@@ -1007,7 +1015,8 @@ def build_kg_standalone(
 
 def _fetch_document_texts(project_id: int) -> list[str]:
     """Fetch full document texts for a project from the DB."""
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     rows = conn.execute(
         "SELECT content FROM documents WHERE project_id = ? ORDER BY id",
         (project_id,),
@@ -1126,7 +1135,8 @@ def rebuild_kg_links(
         # Get chunks for hash (needed by save_kg_to_db)
         chunk_config_id = row["chunk_config_id"]
         if chunk_config_id:
-            conn = get_db()
+            import db.init as _db
+            conn = _db.get_db()
             chunk_rows = conn.execute(
                 "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                 (chunk_config_id,),
@@ -1225,9 +1235,10 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
+    import db.init as _db
     from ragas.run_config import RunConfig
 
-    conn = get_thread_db()
+    conn = _db.get_thread_db()
 
     # Load current chunks from DB
     chunk_rows = conn.execute(
@@ -1649,7 +1660,39 @@ def generate_personas(
         return [_merge_persona_fields(p) for p in raw]
 
     llm, embeddings, _ = _build_llm_and_embeddings()
-    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id)
+
+    # Reuse an existing completed KG if available (avoids rebuilding).
+    # Try exact hash match first, then any completed KG for the project.
+    kg = None
+    if project_id is not None:
+        cached = load_cached_kg(project_id, chunks, allow_partial=False, kg_source="chunks")
+        if cached is None:
+            db_conn = get_db()
+            for source in ("chunks", "documents"):
+                row = db_conn.execute(
+                    "SELECT kg_json, is_complete FROM knowledge_graphs "
+                    "WHERE project_id = ? AND kg_source = ? AND is_complete = TRUE",
+                    (project_id, source),
+                ).fetchone()
+                if row is not None:
+                    logger.info("Reusing completed KG (source=%s) for persona generation (project %d)", source, project_id)
+                    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
+                        f.write(row["kg_json"])
+                        tmp_path = f.name
+                    try:
+                        cached = _load_kg_safe(tmp_path)
+                    finally:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    break
+        if cached is not None:
+            logger.info("Reusing existing KG for persona generation (project %d)", project_id)
+            kg = cached
+
+    if kg is None:
+        raise RuntimeError(
+            "No completed knowledge graph found for this project. "
+            "Build one first from the Test page before using Full persona generation."
+        )
 
     # Ragas generate_personas_from_kg requires summary + summary_embedding
     # properties that our 4-step KG pipeline doesn't produce.  Check if the
@@ -1732,6 +1775,7 @@ def generate_testset_from_chunks(
     query_distribution: dict[str, float] | None = None,
     num_workers: int = 4,
     project_id: int | None = None,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> list[dict]:
     """Generate test questions from pre-chunked text using parallel workers.
 
@@ -1749,6 +1793,8 @@ def generate_testset_from_chunks(
         # Fast path — single worker, no threading overhead.
         generate_size = int(testset_size * OVERGENERATE_FACTOR)
         results = _worker_generate_from_chunks(chunks, generate_size, query_distribution, project_id=project_id)
+        if on_batch and results:
+            on_batch(results)
         results = _deduplicate_questions(results)
         return results[:testset_size]
 
@@ -1788,7 +1834,10 @@ def generate_testset_from_chunks(
                     f.cancel()
                 break
             try:
-                all_questions.extend(future.result())
+                batch = future.result()
+                if on_batch and batch:
+                    on_batch(batch)
+                all_questions.extend(batch)
             except Exception:
                 logger.exception("Worker failed during chunk-based generation")
 
@@ -1806,6 +1855,7 @@ def generate_testset_with_personas(
     project_id: int | None = None,
     prebuilt_kg: "KnowledgeGraph | None" = None,
     fast_mode: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> dict:
     """Generate test questions with persona information using parallel workers.
 
@@ -1823,10 +1873,20 @@ def generate_testset_with_personas(
             "Using pre-sampled KG (%d nodes) — skipping KG build", len(kg.nodes)
         )
     else:
-        logger.info("Building knowledge graph from %d chunks...", len(chunks))
         if project_id is not None:
-            update_progress(project_id, kg_source="testset", stage="building_knowledge_graph")
-        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, fast_mode=fast_mode)
+            kg_json = load_full_kg_json(project_id, kg_source="chunks")
+            if kg_json is None:
+                kg_json = load_full_kg_json(project_id, kg_source="documents")
+            if kg_json is not None:
+                logger.info("Loading existing KG for test generation (project %d)", project_id)
+                kg = _load_kg_from_json_str(kg_json)
+            else:
+                raise RuntimeError(
+                    "No completed knowledge graph found for this project. "
+                    "Build one first from the Test page before generating test sets."
+                )
+        else:
+            raise RuntimeError("project_id is required for test set generation with personas.")
 
     if project_id is not None:
         update_progress(project_id, kg_source="testset", stage="generating_personas")
@@ -1853,6 +1913,8 @@ def generate_testset_with_personas(
     if effective_workers <= 1:
         generate_size = int(testset_size * OVERGENERATE_FACTOR)
         questions = _worker_generate_from_kg(kg, personas, generate_size, query_distribution, project_id=project_id)
+        if on_batch and questions:
+            on_batch(questions)
         questions = _deduplicate_questions(questions)
         questions = questions[:testset_size]
     else:
@@ -1888,7 +1950,10 @@ def generate_testset_with_personas(
                         f.cancel()
                     break
                 try:
-                    all_questions.extend(future.result())
+                    batch = future.result()
+                    if on_batch and batch:
+                        on_batch(batch)
+                    all_questions.extend(batch)
                 except Exception:
                     logger.exception("Worker failed during persona-based generation")
 
@@ -2063,7 +2128,7 @@ def _generate_bridge_questions(
                         path = nx.shortest_path(G, sampled[i], sampled[j])
                         candidate_pairs.append((sampled[i], sampled[j], path))
                 except nx.NetworkXNoPath:
-                    continue
+                    pass
 
     if not candidate_pairs:
         logger.info("No node pairs with distance ≥ 3 found for bridge questions")
@@ -2361,6 +2426,7 @@ def generate_project_testset(
     graph_rag_kg_source: str = "chunks",
     node_sample_size: int = 0,
     fast_mode: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> dict:
     """Unified entry point for project-scoped test set generation.
 
@@ -2378,7 +2444,7 @@ def generate_project_testset(
     # Initialize progress tracking
     if project_id is not None:
         set_progress(project_id, {
-            "stage": "building_knowledge_graph",
+            "stage": "initializing",
             "questions_generated": 0,
             "target_size": testset_size,
         }, kg_source="testset")
@@ -2397,6 +2463,7 @@ def generate_project_testset(
             graph_rag_kg_source=graph_rag_kg_source,
             node_sample_size=node_sample_size,
             fast_mode=fast_mode,
+            on_batch=on_batch,
         )
     finally:
         if project_id is not None:
@@ -2416,6 +2483,7 @@ def _generate_project_testset_inner(
     graph_rag_kg_source: str = "chunks",
     node_sample_size: int = 0,
     fast_mode: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
 ) -> dict:
     # ---------------------------------------------------------------------------
     # Resolve effective chunks and prebuilt KG for KG-node sampling.
@@ -2436,6 +2504,7 @@ def _generate_project_testset_inner(
         if project_id is not None:
             kg_json = load_full_kg_json(project_id, kg_source=graph_rag_kg_source)
             if kg_json is not None:
+                import json as _json
                 num_nodes = len(_json.loads(kg_json).get("nodes", []))
                 sample_n = min(node_sample_size, num_nodes)
                 logger.info(
@@ -2469,6 +2538,7 @@ def _generate_project_testset_inner(
                 project_id=project_id,
                 prebuilt_kg=prebuilt_kg,
                 fast_mode=fast_mode,
+                on_batch=on_batch,
             )
         else:
             questions = generate_testset_from_chunks(
@@ -2478,6 +2548,7 @@ def _generate_project_testset_inner(
                 query_distribution=query_distribution,
                 num_workers=num_workers,
                 project_id=project_id,
+                on_batch=on_batch,
             )
             result = {"personas": [], "questions": questions}
         # Tag all questions as in_knowledge_base for consistency
@@ -2524,6 +2595,7 @@ def _generate_project_testset_inner(
                 project_id=project_id,
                 prebuilt_kg=prebuilt_kg,
                 fast_mode=fast_mode,
+                on_batch=on_batch,
             )
             all_personas = ragas_result.get("personas", [])
             ragas_questions = ragas_result.get("questions", [])
@@ -2535,6 +2607,7 @@ def _generate_project_testset_inner(
                 query_distribution=query_distribution,
                 num_workers=num_workers,
                 project_id=project_id,
+                on_batch=on_batch,
             )
 
         # Split ragas questions between typical and in_knowledge_base
@@ -2558,6 +2631,8 @@ def _generate_project_testset_inner(
         cat_questions = _generate_category_questions_via_llm(effective_chunks, cat, cat_count)
         for q in cat_questions:
             q["category"] = cat
+        if on_batch and cat_questions:
+            on_batch(cat_questions)
         all_questions.extend(cat_questions)
         if project_id is not None:
             increment_questions(project_id, len(cat_questions))
@@ -2609,6 +2684,8 @@ def _generate_project_testset_inner(
             cat_questions = generator(kg_for_graph, cat_count, llm_client)
             for q in cat_questions:
                 q["category"] = cat
+            if on_batch and cat_questions:
+                on_batch(cat_questions)
             all_questions.extend(cat_questions)
             if project_id is not None:
                 increment_questions(project_id, len(cat_questions))

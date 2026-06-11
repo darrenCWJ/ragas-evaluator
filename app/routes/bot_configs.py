@@ -131,8 +131,12 @@ async def update_bot_config(project_id: int, config_id: int, req: BotConfigUpdat
         updates.append("connector_type = ?")
         params.append(req.connector_type)
     if req.config_json is not None:
+        new_config = req.config_json
+        if new_config.get("api_key") == "***":
+            existing_config = json.loads(row["config_json"]) if row["config_json"] else {}
+            new_config["api_key"] = existing_config.get("api_key", "")
         updates.append("config_json = ?")
-        params.append(json.dumps(req.config_json))
+        params.append(json.dumps(new_config))
     if req.prompt_for_sources is not None:
         updates.append("prompt_for_sources = ?")
         params.append(req.prompt_for_sources)

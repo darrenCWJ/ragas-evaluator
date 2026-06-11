@@ -11,13 +11,16 @@ Supports:
 - Parallel batch generation for large test sets
 """
 
+import gc
 import hashlib
 import json as _json
 import logging
 import math
 import os
 import random
+import resource
 import signal
+import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -57,7 +60,7 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, get_thread_db, NOW_SQL
+from db.init import get_db, NOW_SQL
 
 
 logger = logging.getLogger(__name__)
@@ -90,6 +93,32 @@ def _register_shutdown_handler() -> None:
 # Progress tracking — in-memory, keyed by (project_id, kg_source).
 # Use kg_source="testset" for test-set generation progress.
 # ---------------------------------------------------------------------------
+
+def _log_memory(label: str = "") -> float:
+    """Log current RSS memory in MB. Returns MB value."""
+    try:
+        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            rss_mb = rss_bytes / (1024 * 1024)
+        else:
+            rss_mb = rss_bytes / 1024
+        logger.info("Memory [%s]: %.1f MB RSS", label, rss_mb)
+        return rss_mb
+    except Exception:
+        return 0.0
+
+
+def _release_memory() -> None:
+    """Force garbage collection and release freed memory back to the OS."""
+    gc.collect()
+    if sys.platform == "linux":
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+        except Exception:
+            pass
+
 
 _progress_lock = threading.Lock()
 _progress: dict[tuple[int, str], dict] = {}
@@ -278,6 +307,8 @@ def sample_kg_from_json(kg_json: str, n: int) -> tuple[KnowledgeGraph, list[str]
 
     If *n* ≥ total nodes the full KG is returned unchanged.
     """
+    import json as _json
+
     data = _json.loads(kg_json)
     nodes = data.get("nodes", [])
 
@@ -462,6 +493,7 @@ def _load_kg_safe(tmp_path: str) -> KnowledgeGraph:
         return KnowledgeGraph.load(tmp_path)
     except KeyError:
         logger.warning("KG JSON has dangling relationships — patching before load")
+        import json as _json
         data = _json.loads(Path(tmp_path).read_text(encoding="utf-8"))
         node_ids = {n["id"] for n in data.get("nodes", [])}
         original_rel_count = len(data.get("relationships", []))
@@ -574,7 +606,8 @@ def save_kg_to_db(
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     try:
         # Remove old entry for this project+source (content may have changed).
         conn.execute("DELETE FROM knowledge_graphs WHERE project_id = ? AND kg_source = ?", (project_id, kg_source))
@@ -604,7 +637,8 @@ def delete_kg_from_db(project_id: int, kg_source: str = "chunks") -> bool:
 
 def update_heartbeat(project_id: int, kg_source: str = "chunks") -> None:
     """Touch the heartbeat timestamp for the KG build of a project+source."""
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     try:
         conn.execute(
             f"UPDATE knowledge_graphs SET last_heartbeat = {NOW_SQL} "
@@ -658,6 +692,30 @@ def get_kg_info(project_id: int, kg_source: str = "chunks") -> dict | None:
 _KG_BATCH_SIZE = KG_BATCH_SIZE  # max chunks per apply_transforms call to avoid Ragas deadlock
 
 
+def _get_done_property(transform) -> str | None:
+    """Return the node property that indicates this transform already ran on a node.
+
+    Used to skip already-processed nodes when resuming from a sub-checkpoint.
+    Returns None for transforms that don't write a per-node property (e.g. filters,
+    splitters, relationship builders).
+    """
+    if isinstance(transform, EmbeddingExtractor):
+        return getattr(transform, "property_name", "summary_embedding")
+    if isinstance(transform, CombinedNodeExtractor):
+        return "keyphrases"
+    if isinstance(transform, KeyphrasesExtractor):
+        return getattr(transform, "property_name", "keyphrases")
+    if isinstance(transform, SummaryExtractor):
+        return getattr(transform, "property_name", "summary")
+    if isinstance(transform, HeadlinesExtractor):
+        return getattr(transform, "property_name", "headlines")
+    if isinstance(transform, ThemesExtractor):
+        return getattr(transform, "property_name", "themes")
+    if isinstance(transform, NERExtractor):
+        return getattr(transform, "property_name", "entities")
+    return None
+
+
 def _apply_transform_batched(
     kg: KnowledgeGraph,
     transform,
@@ -666,6 +724,7 @@ def _apply_transform_batched(
     stage_name: str | None = None,
     overlap_max_nodes: int | None = 500,
     kg_source: str = "chunks",
+    save_partial_fn=None,
 ) -> None:
     """Apply a transform to a KG in batches to work around Ragas hanging
     when the number of nodes is large (>~100).
@@ -704,15 +763,52 @@ def _apply_transform_batched(
             kg.relationships.append(rel)
         return
 
+    # Determine the "done marker" property for this transform so we can skip
+    # nodes that were already processed in a previous (killed) run.
+    _done_prop = _get_done_property(transform)
+
     if not needs_llm or len(kg.nodes) <= batch_size:
+        # For per-node extractors, skip nodes that already have the output property.
+        if _done_prop:
+            already_done = [n for n in kg.nodes if n.properties.get(_done_prop) is not None]
+            pending = [n for n in kg.nodes if n.properties.get(_done_prop) is None]
+            if already_done and pending:
+                logger.info(
+                    "  Sub-checkpoint resume (single-batch, prop=%s): %d done, %d remaining",
+                    _done_prop, len(already_done), len(pending),
+                )
+                mini_kg = KnowledgeGraph()
+                mini_kg.nodes = pending
+                apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+                kg.nodes = already_done + mini_kg.nodes
+                return
+            if already_done and not pending:
+                logger.info("  All %d nodes already have '%s' — skipping transform", len(already_done), _done_prop)
+                return
         apply_transforms(kg, transforms=[transform], run_config=RunConfig(max_workers=16))
         return
 
     # Process in batches — build a mini KG per batch, apply, collect nodes.
     all_nodes = list(kg.nodes)
     total_nodes = len(all_nodes)
-    total_batches = (total_nodes + batch_size - 1) // batch_size
     result_nodes = []
+
+    # Skip nodes that already carry the output property from a partial checkpoint.
+    if _done_prop:
+        already_done = [n for n in all_nodes if n.properties.get(_done_prop) is not None]
+        all_nodes = [n for n in all_nodes if n.properties.get(_done_prop) is None]
+        if already_done:
+            logger.info(
+                "  Sub-checkpoint resume (prop=%s): %d/%d nodes done, processing %d remaining",
+                _done_prop, len(already_done), total_nodes, len(all_nodes),
+            )
+        result_nodes = already_done
+        total_nodes = len(all_nodes)
+        if total_nodes == 0:
+            kg.nodes = result_nodes
+            return
+
+    total_batches = (total_nodes + batch_size - 1) // batch_size
     for batch_idx, start in enumerate(range(0, total_nodes, batch_size)):
         batch_nodes = all_nodes[start : start + batch_size]
         mini_kg = KnowledgeGraph()
@@ -736,8 +832,24 @@ def _apply_transform_batched(
                 nodes_total=total_nodes,
             )
             update_heartbeat(project_id)
-        apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+        # Use fewer workers for embedding to avoid saturating per-minute rate limits.
+        _workers = 2 if isinstance(transform, EmbeddingExtractor) else 16
+        apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=_workers))
         result_nodes.extend(mini_kg.nodes)
+        # Keep kg.nodes current after every batch so that if an exception
+        # propagates (e.g. daily API quota exceeded) the exception handler in
+        # build_knowledge_graph saves a checkpoint that includes the embeddings
+        # computed so far.  On the next run _apply_transform_batched will detect
+        # the already-embedded nodes above and skip them.
+        kg.nodes = result_nodes + all_nodes[start + batch_size :]
+        # Actively persist after each batch so a hard process kill (not just a
+        # Python exception) also survives — the next run picks up from here.
+        if save_partial_fn is not None:
+            save_partial_fn(kg)
+        # Free batch temporaries and release memory back to OS.
+        del mini_kg
+        _release_memory()
+        _log_memory(f"{stage_name} batch {batch_idx + 1}/{total_batches}")
 
     # Final update showing all nodes processed
     if project_id is not None and stage_name:
@@ -895,9 +1007,21 @@ def build_knowledge_graph(
                 total_steps=len(transform_steps),
             )
             update_heartbeat(project_id, kg_source=kg_source)
+        _log_memory(f"before {stage_name}")
         logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
         try:
-            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes, kg_source=kg_source)
+            # Save partial KG after each batch so a hard kill (OOM, timeout)
+            # doesn't lose the entire step — only the current batch is lost.
+            _save_partial_fn = None
+            if project_id is not None:
+                _curr_steps = completed_steps
+                _chunks_ref = chunks
+                _cid_ref = chunk_config_id
+                _src_ref = kg_source
+                _total_ref = len(transform_steps)
+                def _save_partial_fn(partial_kg, *, _pid=project_id, _cs=_curr_steps, _ch=_chunks_ref, _cid=_cid_ref, _src=_src_ref, _tot=_total_ref):
+                    save_kg_to_db(partial_kg, _pid, _ch, is_complete=False, completed_steps=_cs, total_steps=_tot, chunk_config_id=_cid, kg_source=_src)
+            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes, kg_source=kg_source, save_partial_fn=_save_partial_fn)
             # Fast mode: after combined extraction, filter nodes marked keep=False
             if fast_mode and stage_name == "kg_combined_extraction":
                 before_filter = len(kg.nodes)
@@ -943,6 +1067,8 @@ def build_knowledge_graph(
                         "Saved checkpoint after step %d/%d for project %d",
                         completed_steps, len(transform_steps), project_id,
                     )
+            _release_memory()
+            _log_memory(f"after step {completed_steps}/{len(transform_steps)}")
         except Exception:
             logger.exception(
                 "KG transform '%s' failed after %d/%d steps — saving partial KG",
@@ -977,8 +1103,9 @@ def build_kg_standalone(
     Designed to run in a background thread.  Uses the in-memory progress
     store so the frontend can poll for status.
     """
+    import db.init as _db
 
-    conn = get_thread_db()
+    conn = _db.get_thread_db()
     rows = conn.execute(
         "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (chunk_config_id,),
@@ -1007,7 +1134,8 @@ def build_kg_standalone(
 
 def _fetch_document_texts(project_id: int) -> list[str]:
     """Fetch full document texts for a project from the DB."""
-    conn = get_thread_db()
+    import db.init as _db
+    conn = _db.get_thread_db()
     rows = conn.execute(
         "SELECT content FROM documents WHERE project_id = ? ORDER BY id",
         (project_id,),
@@ -1126,7 +1254,8 @@ def rebuild_kg_links(
         # Get chunks for hash (needed by save_kg_to_db)
         chunk_config_id = row["chunk_config_id"]
         if chunk_config_id:
-            conn = get_db()
+            import db.init as _db
+            conn = _db.get_db()
             chunk_rows = conn.execute(
                 "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
                 (chunk_config_id,),
@@ -1225,9 +1354,10 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
+    import db.init as _db
     from ragas.run_config import RunConfig
 
-    conn = get_thread_db()
+    conn = _db.get_thread_db()
 
     # Load current chunks from DB
     chunk_rows = conn.execute(
@@ -1649,7 +1779,17 @@ def generate_personas(
         return [_merge_persona_fields(p) for p in raw]
 
     llm, embeddings, _ = _build_llm_and_embeddings()
-    kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id)
+
+    # Reuse an existing completed KG if available (avoids clobbering the main KG).
+    kg = None
+    if project_id is not None:
+        cached = load_cached_kg(project_id, chunks, allow_partial=False, kg_source="chunks")
+        if cached is not None:
+            logger.info("Reusing existing KG for persona generation (project %d)", project_id)
+            kg = cached
+
+    if kg is None:
+        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, kg_source="personas")
 
     # Ragas generate_personas_from_kg requires summary + summary_embedding
     # properties that our 4-step KG pipeline doesn't produce.  Check if the
@@ -2063,7 +2203,7 @@ def _generate_bridge_questions(
                         path = nx.shortest_path(G, sampled[i], sampled[j])
                         candidate_pairs.append((sampled[i], sampled[j], path))
                 except nx.NetworkXNoPath:
-                    continue
+                    pass
 
     if not candidate_pairs:
         logger.info("No node pairs with distance ≥ 3 found for bridge questions")
@@ -2436,6 +2576,7 @@ def _generate_project_testset_inner(
         if project_id is not None:
             kg_json = load_full_kg_json(project_id, kg_source=graph_rag_kg_source)
             if kg_json is not None:
+                import json as _json
                 num_nodes = len(_json.loads(kg_json).get("nodes", []))
                 sample_n = min(node_sample_size, num_nodes)
                 logger.info(

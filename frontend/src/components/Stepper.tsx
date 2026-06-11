@@ -110,6 +110,8 @@ export default function Stepper() {
   const currentPath = location.pathname.split("/").pop() ?? "";
 
   const isKgActive = currentPath === "knowledge-graph";
+  const isPersonasActive = currentPath === "personas";
+  const isWorkersActive = currentPath === "workers";
 
   return (
     <nav
@@ -238,6 +240,94 @@ export default function Stepper() {
           </span>
         </div>
         {isKgActive && (
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+        )}
+      </NavLink>
+
+      {/* Personas link */}
+      <NavLink
+        to="/personas"
+        className={`
+          group relative flex items-center gap-3 rounded-lg px-3 py-2.5
+          transition-all duration-200 outline-none
+          focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
+          ${
+            isPersonasActive
+              ? "bg-accent-glow text-text-primary"
+              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+          }
+        `}
+      >
+        <span
+          className={`
+            flex h-8 w-8 shrink-0 items-center justify-center rounded-md
+            transition-colors duration-200
+            ${
+              isPersonasActive
+                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
+                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+            }
+          `}
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+          </svg>
+        </span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-sm font-medium leading-tight truncate">
+            Personas
+          </span>
+          <span className="text-micro text-text-muted leading-tight truncate">
+            Edit & manage
+          </span>
+        </div>
+        {isPersonasActive && (
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+        )}
+      </NavLink>
+
+      {/* Workers dashboard link */}
+      <NavLink
+        to="/workers"
+        className={`
+          group relative flex items-center gap-3 rounded-lg px-3 py-2.5
+          transition-all duration-200 outline-none
+          focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
+          ${
+            isWorkersActive
+              ? "bg-accent-glow text-text-primary"
+              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+          }
+        `}
+      >
+        <span
+          className={`
+            flex h-8 w-8 shrink-0 items-center justify-center rounded-md
+            transition-colors duration-200
+            ${
+              isWorkersActive
+                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
+                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+            }
+          `}
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"
+            />
+          </svg>
+        </span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-sm font-medium leading-tight truncate">
+            Workers
+          </span>
+          <span className="text-micro text-text-muted leading-tight truncate">
+            Monitor & manage
+          </span>
+        </div>
+        {isWorkersActive && (
           <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
         )}
       </NavLink>

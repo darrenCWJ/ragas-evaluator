@@ -598,6 +598,8 @@ export interface TestSet {
     custom_personas: Record<string, unknown>[] | null;
     use_personas: boolean;
   };
+  generation_status?: string;
+  error_message?: string | null;
   created_at: string;
   total_questions: number;
   pending_count: number;
@@ -744,6 +746,17 @@ export async function savePersonasBulk(
   return data.personas;
 }
 
+export async function updatePersona(
+  projectId: number,
+  personaId: number,
+  updates: { name?: string; role_description?: string; question_style?: string },
+): Promise<void> {
+  await request<{ detail: string }>(
+    `/api/projects/${projectId}/personas/${personaId}`,
+    { method: "PUT", body: JSON.stringify(updates) },
+  );
+}
+
 export async function deletePersona(
   projectId: number,
   personaId: number,
@@ -842,6 +855,15 @@ export async function deleteTestSet(
 ): Promise<void> {
   await request<void>(`/api/projects/${projectId}/test-sets/${testSetId}`, {
     method: "DELETE",
+  });
+}
+
+export async function resumeTestSet(
+  projectId: number,
+  testSetId: number,
+): Promise<{ status: string; existing_questions: number; remaining: number }> {
+  return request(`/api/projects/${projectId}/test-sets/${testSetId}/resume`, {
+    method: "POST",
   });
 }
 
@@ -2101,8 +2123,16 @@ export async function updateKnowledgeGraph(
 
 // --- Knowledge Graph Explorer ---
 
+export interface KGBuildProgressInfo {
+  stage?: string;
+  completed_steps: number;
+  total_steps: number;
+  batch_current?: number;
+  batch_total?: number;
+}
+
 export interface KGListItem {
-  id: number;
+  id: number | null;
   project_id: number;
   project_name: string;
   kg_source: string;
@@ -2113,7 +2143,9 @@ export interface KGListItem {
   total_steps: number;
   chunk_config_id: number | null;
   chunks_stale: boolean;
-  created_at: string;
+  created_at: string | null;
+  building?: boolean;
+  build_progress?: KGBuildProgressInfo;
 }
 
 export interface KGGraphNode {
@@ -2223,4 +2255,73 @@ export function streamKnowledgeGraphData(
   })();
 
   return () => controller.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Worker status
+// ---------------------------------------------------------------------------
+
+export interface WorkerTask {
+  project_id: number;
+  experiment_id?: number;
+  type: "kg_build" | "persona_generation" | "experiment" | "testgen";
+  kg_source?: string;
+  started_at?: number;
+  num_personas?: number;
+  stale?: boolean;
+  stage?: string;
+  batch_current?: number;
+  batch_total?: number;
+  completed_steps?: number;
+  total_steps?: number;
+  phase?: string;
+  current?: number;
+  total?: number;
+  test_set_id?: number;
+  questions_generated?: number;
+}
+
+export interface WorkerInfo {
+  url: string;
+  reachable: boolean;
+  status?: string;
+  rss_mb?: number | null;
+  tasks?: WorkerTask[];
+  active_kg_builds?: number;
+  active_persona_builds?: number;
+  active_experiments?: number;
+  active_testgens?: number;
+  max_concurrent_kg?: number;
+  max_concurrent_personas?: number;
+  max_concurrent_experiments?: number;
+  max_concurrent_testgens?: number;
+  error?: string;
+}
+
+export interface WorkersStatusResponse {
+  workers: WorkerInfo[];
+  total_configured: number;
+}
+
+export async function fetchWorkersStatus(): Promise<WorkersStatusResponse> {
+  return request<WorkersStatusResponse>("/api/workers/status");
+}
+
+export async function clearWorkerPersonaTask(
+  projectId: number,
+): Promise<{ cleared: boolean }> {
+  return request<{ cleared: boolean }>(
+    `/api/workers/clear-personas/${projectId}`,
+    { method: "POST" },
+  );
+}
+
+export async function clearWorkerBuildTask(
+  projectId: number,
+  kgSource: string = "chunks",
+): Promise<{ cleared: boolean }> {
+  return request<{ cleared: boolean }>(
+    `/api/workers/clear-build/${projectId}?kg_source=${kgSource}`,
+    { method: "POST" },
+  );
 }

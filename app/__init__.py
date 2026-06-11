@@ -6,7 +6,6 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from config import APP_VERSION
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -38,6 +37,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI):
     from db.init import init_db
 
+    import asyncio
+
     try:
         init_db()
         from config import DATABASE_PATH
@@ -45,7 +46,64 @@ async def lifespan(application: FastAPI):
     except Exception as e:
         logger.error("Database initialization failed: %s", e)
         sys.exit(1)
+
+    # Background task: monitor worker-delegated experiments for liveness
+    async def _monitor_worker_experiments():
+        from app.routes.experiments import (
+            _experiment_worker, _experiment_worker_lock, _experiment_progress,
+        )
+        consecutive_failures: dict[int, int] = {}
+        while True:
+            await asyncio.sleep(30)
+            with _experiment_worker_lock:
+                entries = dict(_experiment_worker)
+            if not entries:
+                continue
+            import httpx
+            for eid, worker_url in entries.items():
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        resp = await client.get(f"{worker_url}/experiment-progress/{eid}")
+                    consecutive_failures.pop(eid, None)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data.get("active", True):
+                            with _experiment_worker_lock:
+                                _experiment_worker.pop(eid, None)
+                            _experiment_progress.pop(eid, None)
+                except Exception:
+                    consecutive_failures[eid] = consecutive_failures.get(eid, 0) + 1
+                    if consecutive_failures[eid] >= 3:
+                        logger.warning("Worker %s unreachable for experiment %d — marking failed", worker_url, eid)
+                        try:
+                            import db.init
+                            conn = db.init.get_db()
+                            row = conn.execute(
+                                "SELECT status FROM experiments WHERE id = ?", (eid,)
+                            ).fetchone()
+                            if row and row["status"] == "running":
+                                from datetime import datetime as dt
+                                conn.execute(
+                                    "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
+                                    (dt.now().isoformat(), eid),
+                                )
+                                conn.commit()
+                        except Exception as _db_err:
+                            logger.warning("Failed to mark experiment %d as failed: %s", eid, _db_err)
+                        with _experiment_worker_lock:
+                            _experiment_worker.pop(eid, None)
+                        _experiment_progress.pop(eid, None)
+                        consecutive_failures.pop(eid, None)
+
+    monitor_task = asyncio.create_task(_monitor_worker_experiments())
+
     yield
+
+    monitor_task.cancel()
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
     # Cleanup: close shared HTTP clients to avoid "Event loop is closed" warnings
     from evaluation.metrics.testgen import close_openai_clients
     from pipeline.llm import close_openai_client, close_anthropic_client, close_gemini_client
@@ -82,7 +140,7 @@ class _ApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Tribunal", version=APP_VERSION, lifespan=lifespan)
+    application = FastAPI(title="Ragas Evaluator", version="0.4.1-alpha", lifespan=lifespan)
 
     application.add_middleware(_ApiKeyMiddleware)
     application.add_middleware(

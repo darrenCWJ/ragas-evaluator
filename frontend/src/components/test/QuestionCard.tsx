@@ -217,7 +217,7 @@ export default function QuestionCard({
                     <span className="mr-1.5 font-medium text-text-muted">
                       [{i + 1}]
                     </span>
-                    {String(ctx)}
+                    {ctx}
                   </div>
                 ))}
               </div>

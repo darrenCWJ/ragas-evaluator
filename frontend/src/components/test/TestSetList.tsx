@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { TestSet } from "../../lib/api";
-import { deleteTestSet, ApiError } from "../../lib/api";
+import { deleteTestSet, resumeTestSet, ApiError } from "../../lib/api";
 
 interface Props {
   projectId: number;
@@ -18,6 +18,20 @@ export default function TestSetList({
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [resuming, setResuming] = useState<number | null>(null);
+
+  const handleResume = async (ts: TestSet) => {
+    setResuming(ts.id);
+    setDeleteError(null);
+    try {
+      await resumeTestSet(projectId, ts.id);
+      onTestSetsChanged();
+    } catch (err) {
+      setDeleteError((err as Error).message || "Resume failed");
+    } finally {
+      setResuming(null);
+    }
+  };
 
   const handleDelete = async (id: number) => {
     setDeleting(true);
@@ -94,10 +108,27 @@ export default function TestSetList({
                   <span className="text-text-muted">
                     {new Date(ts.created_at).toLocaleDateString()}
                   </span>
+                  {ts.generation_status === "failed" && (
+                    <>
+                      <span className="text-text-muted">·</span>
+                      <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-red-300">
+                        Failed{ts.total_questions > 0 ? ` (${ts.total_questions}/${ts.generation_config?.testset_size ?? "?"} saved)` : ""}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
+                {ts.generation_status === "failed" && (
+                  <button
+                    onClick={() => handleResume(ts)}
+                    disabled={resuming === ts.id}
+                    className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:opacity-40"
+                  >
+                    {resuming === ts.id ? "Resuming..." : "Resume"}
+                  </button>
+                )}
                 <button
                   onClick={() => onSelectTestSet(ts)}
                   className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition hover:border-accent hover:text-accent"

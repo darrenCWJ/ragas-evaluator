@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import db.init
-from config import PERSONA_SUBPROCESS_TIMEOUT
+from config import PERSONA_SUBPROCESS_TIMEOUT, KG_WORKER_URLS
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,10 @@ router = APIRouter(prefix="/api", tags=["personas"])
 # project_id → {"status": "generating"|"completed"|"error", "personas": [...], "detail": ""}
 _persona_tasks: dict[int, dict] = {}
 _persona_task_lock = threading.Lock()
+
+# Tracks which worker URL accepted persona generation for a given project.
+_persona_worker: dict[int, str] = {}
+_persona_worker_lock = threading.Lock()
 
 
 def _run_persona_subprocess(
@@ -45,6 +49,20 @@ def _run_persona_subprocess(
         if result.returncode != 0:
             raise RuntimeError("KG persona generation subprocess exited non-zero (check server logs)")
         personas = json.loads(result.stdout.strip().split("\n")[-1])
+        conn = db.init.get_db()
+        saved_count = 0
+        for p in personas:
+            name = (p.get("name") or "").strip()
+            role_desc = (p.get("role_description") or "").strip()
+            if not name or not role_desc:
+                continue
+            conn.execute(
+                "INSERT INTO personas (project_id, name, role_description, question_style) VALUES (?, ?, ?, ?)",
+                (project_id, name, role_desc, p.get("question_style", "")),
+            )
+            saved_count += 1
+        conn.commit()
+        logger.info("Persona generation completed: project=%d, %d personas saved to DB", project_id, saved_count)
         with _persona_task_lock:
             _persona_tasks[project_id] = {"status": "completed", "personas": personas}
     except Exception as exc:
@@ -158,17 +176,18 @@ async def update_persona(project_id: int, persona_id: int, req: PersonaUpdate):
     if row is None:
         raise HTTPException(status_code=404, detail="Persona not found")
 
+    # Map allowed Pydantic fields to their column names (whitelist).
+    allowed_columns = {
+        "name": req.name,
+        "role_description": req.role_description,
+        "question_style": req.question_style,
+    }
     updates = []
     values = []
-    if req.name is not None:
-        updates.append("name = ?")
-        values.append(req.name)
-    if req.role_description is not None:
-        updates.append("role_description = ?")
-        values.append(req.role_description)
-    if req.question_style is not None:
-        updates.append("question_style = ?")
-        values.append(req.question_style)
+    for col, val in allowed_columns.items():
+        if val is not None:
+            updates.append(f"{col} = ?")
+            values.append(val)
 
     if updates:
         values.append(persona_id)
@@ -210,7 +229,7 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
         raise HTTPException(status_code=404, detail="Chunk config not found")
 
     chunk_rows = conn.execute(
-        "SELECT content FROM chunks WHERE chunk_config_id = ?",
+        "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
         (req.chunk_config_id,),
     ).fetchall()
     if not chunk_rows:
@@ -222,11 +241,50 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
     chunks = [r["content"] for r in chunk_rows]
 
     if req.mode == "full":
-        # Check for a task already running for this project
+        # Check for a task already running for this project (local or worker)
+        with _persona_worker_lock:
+            if project_id in _persona_worker:
+                raise HTTPException(status_code=409, detail="Persona generation already in progress for this project")
         with _persona_task_lock:
             existing = _persona_tasks.get(project_id)
             if existing and existing["status"] == "generating":
                 raise HTTPException(status_code=409, detail="Persona generation already in progress for this project")
+
+        # Try delegating to worker(s) if configured
+        if KG_WORKER_URLS:
+            import httpx
+
+            payload = {
+                "project_id": project_id,
+                "chunk_config_id": req.chunk_config_id,
+                "num_personas": req.num_personas,
+            }
+            delegated = False
+            async with httpx.AsyncClient(timeout=10) as client:
+                for worker_url in KG_WORKER_URLS:
+                    try:
+                        resp = await client.post(f"{worker_url}/generate-personas", json=payload)
+                        if resp.status_code == 202:
+                            with _persona_worker_lock:
+                                _persona_worker[project_id] = worker_url
+                            logger.info("Persona generation delegated to worker: %s", worker_url)
+                            delegated = True
+                            break
+                        if resp.status_code == 409:
+                            raise HTTPException(status_code=409, detail="Persona generation already in progress for this project")
+                        # 503 = worker at capacity, try next
+                        logger.debug("Worker %s at capacity for personas, trying next", worker_url)
+                    except httpx.HTTPError as e:
+                        logger.warning("Worker %s unreachable for personas: %s", worker_url, e)
+                    except HTTPException:
+                        raise
+
+            if delegated:
+                return {"status": "generating"}
+            logger.info("All workers busy/unreachable — falling back to local persona generation")
+
+        # Local fallback: subprocess-based generation
+        with _persona_task_lock:
             _persona_tasks[project_id] = {"status": "generating"}
 
         script = (
@@ -268,6 +326,29 @@ async def generate_project_personas(project_id: int, req: PersonaGenerateRequest
         return {"status": "completed", "personas": personas}
 
 
+@router.post("/projects/{project_id}/generate-personas/clear")
+async def clear_persona_generation(project_id: int):
+    """Clear a stale persona generation lock for this project."""
+    cleared = False
+    with _persona_worker_lock:
+        if project_id in _persona_worker:
+            _persona_worker.pop(project_id)
+            cleared = True
+    with _persona_task_lock:
+        if project_id in _persona_tasks:
+            _persona_tasks.pop(project_id)
+            cleared = True
+    if KG_WORKER_URLS:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            for url in KG_WORKER_URLS:
+                try:
+                    await client.post(f"{url}/clear-personas/{project_id}")
+                except Exception:
+                    pass
+    return {"cleared": cleared, "project_id": project_id}
+
+
 @router.get("/projects/{project_id}/generate-personas/status")
 async def get_persona_generation_status(project_id: int):
     """Poll for the result of a full-mode persona generation task.
@@ -277,12 +358,41 @@ async def get_persona_generation_status(project_id: int):
       {"status": "completed", "personas": [...]}       — done (entry cleared after read)
       {"status": "error", "detail": "..."}             — failed
     """
+    # Check if delegated to a worker
+    with _persona_worker_lock:
+        worker_url = _persona_worker.get(project_id)
+
+    if worker_url:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{worker_url}/persona-progress/{project_id}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("active"):
+                        return {"status": "generating", "stage": data.get("stage")}
+                    if data.get("status") == "completed":
+                        with _persona_worker_lock:
+                            _persona_worker.pop(project_id, None)
+                        return {"status": "completed", "personas": data.get("personas", [])}
+                    if data.get("status") == "error":
+                        with _persona_worker_lock:
+                            _persona_worker.pop(project_id, None)
+                        return {"status": "error", "detail": data.get("detail", "Worker error")}
+                    # Worker returned active=False with no status — task was cleared
+                    with _persona_worker_lock:
+                        _persona_worker.pop(project_id, None)
+        except httpx.HTTPError as e:
+            logger.warning("Worker %s unreachable for persona status: %s", worker_url, e)
+            # Fall through to local check
+
+    # Local task check
     with _persona_task_lock:
         task = _persona_tasks.get(project_id)
     if task is None:
         raise HTTPException(status_code=404, detail="No persona generation task found for this project")
     if task["status"] == "completed":
-        # Clear after read so a new generation can start cleanly
         with _persona_task_lock:
             _persona_tasks.pop(project_id, None)
     return task

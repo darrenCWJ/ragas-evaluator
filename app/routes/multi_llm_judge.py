@@ -18,7 +18,8 @@ import random
 from fastapi import APIRouter, HTTPException, Query
 
 from app.models import ClaimAnnotationRequest
-from db.init import get_db, NOW_SQL
+import db.init
+from db.init import NOW_SQL
 from config import MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
 from evaluation.metrics.multi_llm_judge import aggregate_score, aggregate_criteria_score
 from app.routes.annotations import _validate_experiment
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["multi_llm_judge"])
 
 VALID_ANNOTATION_STATUSES = {"accurate", "inaccurate", "unsure"}
+
+# Verdict sets
+_BUILTIN_VERDICTS = {"positive", "mixed", "critical"}
+_CRITERIA_VERDICTS = {"good", "mixed", "bad"}
 
 # Normalise criteria verdicts → built-in labels for the frontend panel
 _CRITERIA_VERDICT_MAP = {"good": "positive", "bad": "critical", "mixed": "mixed"}
@@ -127,7 +132,7 @@ async def get_judge_evaluations(
 
     Pass ?metric_name=<name> for a criteria_judge metric; omit for the built-in judge.
     """
-    conn = get_db()
+    conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
     result_row = conn.execute(
@@ -154,7 +159,7 @@ async def get_judge_annotation_sample(
     Deterministic (seed = experiment_id). Only results that have evaluations
     for the requested metric are included.
     """
-    conn = get_db()
+    conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
     resolved_metric = metric_name or None
@@ -238,7 +243,7 @@ async def annotate_judge_claim(
     req: ClaimAnnotationRequest,
 ):
     """Upsert a human annotation on a specific evaluator claim."""
-    conn = get_db()
+    conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
     ev_row = conn.execute(
@@ -283,7 +288,7 @@ async def get_judge_reliability(
 
     Pass ?metric_name=<name> for a criteria_judge metric; omit for the built-in judge.
     """
-    conn = get_db()
+    conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
     resolved_metric = metric_name or None
@@ -396,7 +401,7 @@ async def get_judge_summary(
 
     Pass ?metric_name=<name> for a criteria_judge metric; omit for the built-in judge.
     """
-    conn = get_db()
+    conn = db.init.get_db()
     _validate_experiment(conn, project_id, experiment_id)
 
     resolved_metric = metric_name or None

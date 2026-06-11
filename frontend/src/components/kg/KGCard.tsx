@@ -73,6 +73,21 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
 
   // On mount, check if a build is already running on the backend (e.g. after page refresh)
   useEffect(() => {
+    if (kg.building && kg.build_progress) {
+      setBuilding(true);
+      if (kg.build_progress.stage) setBuildStage(kg.build_progress.stage);
+      setBuildStep({
+        completed: kg.build_progress.completed_steps,
+        total: kg.build_progress.total_steps,
+      });
+      if (kg.build_progress.batch_total != null) {
+        setBuildProgress({
+          batch_current: kg.build_progress.batch_current,
+          batch_total: kg.build_progress.batch_total,
+        });
+      }
+      return;
+    }
     fetchKGBuildProgress(kg.project_id, kg.kg_source).then((progress) => {
       if (progress.active) {
         setBuilding(true);
@@ -198,13 +213,15 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
         ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
         : "bg-red-500/15 text-red-400 border-red-500/30";
 
-  const date = new Date(kg.created_at).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const date = kg.created_at
+    ? new Date(kg.created_at).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
 
   return (
     <div

@@ -1,9 +1,7 @@
-| [README](README.md) | [Features Guide](docs/FEATURES.md) | [Workflow Guide](docs/WORKFLOW.md) |
-|---|---|---|
+| [README](README.md) | [Features Guide](docs/FEATURES.md) |
+|---|---|
 
-# Tribunal
-
-**LLM-as-a-judge evaluation platform for RAG chatbots.**
+# RAG Evaluator
 
 ## Problem Statement
 
@@ -11,7 +9,7 @@ As AI chatbots become increasingly accessible, more individuals and teams are bu
 
 Most RAG (Retrieval-Augmented Generation) systems are deployed with minimal evaluation. Builders rely on manual spot-checking or anecdotal feedback, leaving systemic issues — hallucinations, poor retrieval, irrelevant responses — undetected until users complain.
 
-Tribunal addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
+This project addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
 
 ## Design
 
@@ -55,8 +53,6 @@ Rather than treating evaluation as a one-off check, Tribunal enables an **iterat
   | kg store      |  DELETE /kg/{project_id}
   +---------------+
 ```
-
-The **KG Worker** is an optional sidecar service that offloads memory-intensive knowledge graph construction from the main app. Tribunal delegates via HTTP (`KG_WORKER_URL`) and polls for progress. Without a worker, KG builds run in-process.
 
 ### Suggestion Engine
 
@@ -174,18 +170,13 @@ cp .env.example .env  # add OPENAI_API_KEY
 # Backend
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-# Worker (optional — separate terminal)
-cd worker && pip install -r requirements.txt
-cp .env.example .env  # add OPENAI_API_KEY
-uvicorn main:app --host 0.0.0.0 --port 3000 --reload
-
 # Frontend (separate terminal)
 cd frontend && npm install && npm run dev  # dev server on :5173
 ```
 
 ### Authentication
 
-Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all Tribunal API requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
+Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
 
 ```bash
 # Generate a strong secret
