@@ -9,14 +9,22 @@ from unittest.mock import patch
 # level, but this sub-module was removed in langchain-community 0.3+. Provide a stub
 # so test collection succeeds without requiring the google-cloud-aiplatform stack.
 def _ensure_vertexai_stub() -> None:
-    if "langchain_community.chat_models.vertexai" not in sys.modules:
-        lc = sys.modules.setdefault("langchain_community", types.ModuleType("langchain_community"))
-        cm = sys.modules.setdefault("langchain_community.chat_models", types.ModuleType("langchain_community.chat_models"))
-        setattr(lc, "chat_models", cm)
-        stub = types.ModuleType("langchain_community.chat_models.vertexai")
+    stub_key = "langchain_community.chat_models.vertexai"
+    if stub_key in sys.modules:
+        return
+    # Ensure the real package is imported first so we don't shadow it with a fake module.
+    try:
+        import langchain_community  # noqa: F401
+        import langchain_community.chat_models  # noqa: F401
+    except ImportError:
+        pass
+    if stub_key not in sys.modules:
+        stub = types.ModuleType(stub_key)
         stub.ChatVertexAI = type("ChatVertexAI", (), {})  # type: ignore[attr-defined]
-        sys.modules["langchain_community.chat_models.vertexai"] = stub
-        setattr(cm, "vertexai", stub)
+        sys.modules[stub_key] = stub
+        parent = sys.modules.get("langchain_community.chat_models")
+        if parent is not None:
+            setattr(parent, "vertexai", stub)
 
 _ensure_vertexai_stub()
 
