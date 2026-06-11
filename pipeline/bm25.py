@@ -5,7 +5,6 @@ Uses atomic file writes (temp + rename) to prevent corruption from concurrent re
 """
 
 import json
-import logging
 import os
 import tempfile
 from pathlib import Path
@@ -13,8 +12,6 @@ from pathlib import Path
 from rank_bm25 import BM25Okapi
 
 from config import BM25_PATH
-
-logger = logging.getLogger(__name__)
 
 BM25_DATA_DIR = BM25_PATH
 
@@ -26,8 +23,7 @@ def _tokenize(text: str) -> list[str]:
 
 def get_index_path(project_id: int, config_id: int) -> str:
     """Return the standard index file path for a project/config pair."""
-    # %d format accepts only integers, breaking any string taint from the request.
-    return "%s/project_%d_embed_%d.json" % (BM25_DATA_DIR, int(project_id), int(config_id))
+    return f"{BM25_DATA_DIR}/project_{project_id}_embed_{config_id}.json"
 
 
 def build_bm25_index(texts: list[str]) -> tuple[BM25Okapi, list[list[str]]]:
@@ -70,7 +66,7 @@ def save_index(
         try:
             os.unlink(tmp_path)
         except OSError:
-            logger.debug("temp file cleanup failed", exc_info=True)
+            pass
         raise
 
 
@@ -149,5 +145,7 @@ def build_and_save_index(
 
 def delete_index(path: str) -> None:
     """Delete a BM25 index file. No-op if file doesn't exist."""
-    if os.path.exists(path):
+    try:
         os.unlink(path)
+    except FileNotFoundError:
+        pass

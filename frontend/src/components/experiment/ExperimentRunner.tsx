@@ -28,6 +28,7 @@ interface Props {
   onComplete: () => void;
 }
 
+
 const LLM_METRICS = [
   "faithfulness",
   "answer_relevancy",
@@ -250,7 +251,6 @@ export default function ExperimentRunner({
   const isCsvExperiment = connectorType === "csv";
   const [concurrency, setConcurrency] = useState(isCsvExperiment ? 10 : isBotExperiment ? 2 : 5);
   const [rubrics, setRubrics] = useState<Record<string, string>>({ ...DEFAULT_RUBRICS });
-
   // Multi-model judge state — seed with fallback list so dropdowns are usable immediately
   const FALLBACK_MODELS: JudgeModel[] = [
     { id: "gpt-4o",          name: "GPT-4o",          provider: "openai",    available: true  },

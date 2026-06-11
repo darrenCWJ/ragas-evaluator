@@ -77,6 +77,7 @@ TESTGEN_QUESTION_TEMPERATURE: float = 0.8
 # KG build concurrency
 # ---------------------------------------------------------------------------
 MAX_CONCURRENT_KG_BUILDS = int(os.environ.get("MAX_CONCURRENT_KG_BUILDS", "1"))
+MAX_CONCURRENT_PERSONA_BUILDS = int(os.environ.get("MAX_CONCURRENT_PERSONA_BUILDS", "2"))
 
 # ---------------------------------------------------------------------------
 # Batch sizes

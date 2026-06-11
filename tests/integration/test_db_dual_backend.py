@@ -14,8 +14,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import db.init as db_module
-
 
 # ---------------------------------------------------------------------------
 # TestSQLHelpers
@@ -28,12 +26,16 @@ class TestSQLHelpers:
 
     def test_now_sql_is_string(self):
         """NOW_SQL must be a non-empty string regardless of backend."""
-        assert isinstance(db_module.NOW_SQL, str)
-        assert len(db_module.NOW_SQL) > 0
+        from db.init import NOW_SQL
+
+        assert isinstance(NOW_SQL, str)
+        assert len(NOW_SQL) > 0
 
     def test_json_extract_sql_returns_string_with_column_and_key(self):
         """json_extract_sql must embed the column name and key in its output."""
-        result = db_module.json_extract_sql("metadata_json", "source")
+        from db.init import json_extract_sql
+
+        result = json_extract_sql("metadata_json", "source")
 
         assert isinstance(result, str)
         assert "metadata_json" in result
@@ -41,18 +43,24 @@ class TestSQLHelpers:
 
     def test_is_integrity_error_true_for_sqlite_integrity_error(self):
         """is_integrity_error returns True for sqlite3.IntegrityError."""
+        from db.init import is_integrity_error
+
         exc = sqlite3.IntegrityError("UNIQUE constraint failed: projects.name")
-        assert db_module.is_integrity_error(exc) is True
+        assert is_integrity_error(exc) is True
 
     def test_is_integrity_error_false_for_value_error(self):
         """is_integrity_error returns False for unrelated exception types."""
+        from db.init import is_integrity_error
+
         exc = ValueError("not an integrity error")
-        assert db_module.is_integrity_error(exc) is False
+        assert is_integrity_error(exc) is False
 
     def test_is_integrity_error_false_for_none(self):
         """is_integrity_error returns False when passed a plain Exception."""
+        from db.init import is_integrity_error
+
         exc = Exception("generic error")
-        assert db_module.is_integrity_error(exc) is False
+        assert is_integrity_error(exc) is False
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +149,8 @@ class TestPgConnectionShim:
 
     def test_placeholder_substitution_replaces_question_marks_with_percent_s(self):
         """_PgConnection.execute must replace every ? placeholder with %s."""
-        _PgConnection = db_module._PgConnection
+        import db.init as db_module
+        from db.init import _PgConnection
 
         mock_pg_conn, mock_cursor, mock_psycopg2 = self._build_mocks()
 
@@ -158,7 +167,8 @@ class TestPgConnectionShim:
 
     def test_insert_appends_returning_id(self):
         """_PgConnection.execute must append RETURNING id to INSERT statements."""
-        _PgConnection = db_module._PgConnection
+        import db.init as db_module
+        from db.init import _PgConnection
 
         mock_pg_conn, mock_cursor, mock_psycopg2 = self._build_mocks()
 
@@ -177,7 +187,8 @@ class TestPgConnectionShim:
 
     def test_select_does_not_append_returning(self):
         """_PgConnection.execute must NOT append RETURNING id to SELECT statements."""
-        _PgConnection = db_module._PgConnection
+        import db.init as db_module
+        from db.init import _PgConnection
 
         mock_pg_conn, mock_cursor, mock_psycopg2 = self._build_mocks()
 

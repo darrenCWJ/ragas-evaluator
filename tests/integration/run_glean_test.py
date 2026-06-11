@@ -5,7 +5,6 @@ Usage:
 """
 
 import json
-import logging
 import os
 import sqlite3
 import subprocess
@@ -15,8 +14,6 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 # Ensure project root is on sys.path
 _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
@@ -129,7 +126,7 @@ def main():
             if requests.get(f"{base}/api/health", timeout=2).ok:
                 break
         except Exception:
-            logger.debug("test cleanup error ignored", exc_info=True)
+            pass
         time.sleep(0.5)
     else:
         out = proc.stdout.read().decode() if proc.stdout else ""

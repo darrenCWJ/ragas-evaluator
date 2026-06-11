@@ -1,7 +1,5 @@
 """Unit tests for embedding/vectorstore.py."""
 
-import sys
-
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -16,7 +14,7 @@ from pipeline.vectorstore import (
 @pytest.fixture(autouse=True)
 def reset_client():
     """Reset the module-level client before each test."""
-    vs = sys.modules["pipeline.vectorstore"]
+    import pipeline.vectorstore as vs
     original = vs._client
     vs._client = None
     yield

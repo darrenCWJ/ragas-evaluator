@@ -1,7 +1,5 @@
 """Unit tests for llm/connector.py."""
 
-import sys
-
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -12,13 +10,14 @@ from pipeline.llm import (
     chat_completion,
     list_providers,
     _is_openai_model,
+    OPENAI_PREFIXES,
 )
 
 
 @pytest.fixture(autouse=True)
 def reset_client():
     """Reset the module-level client before each test."""
-    mod = sys.modules["pipeline.llm"]
+    import pipeline.llm as mod
     original = mod._openai_client
     mod._openai_client = None
     yield
