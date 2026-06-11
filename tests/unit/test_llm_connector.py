@@ -1,16 +1,15 @@
 """Unit tests for llm/connector.py."""
 
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import openai
+import pytest
 from fastapi import HTTPException
 
 from pipeline.llm import (
+    _is_openai_model,
     chat_completion,
     list_providers,
-    _is_openai_model,
-    OPENAI_PREFIXES,
 )
 
 

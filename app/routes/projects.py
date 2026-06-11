@@ -4,16 +4,15 @@ import csv
 import io
 import json
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile, File
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+import db.init
 from app.models import (
     ApiConfigCreate,
     ProjectCreate,
     ProjectUpdate,
-    MAX_BASELINE_CSV_SIZE,
-    MAX_BASELINE_ROWS,
 )
-import db.init
+from config import MAX_BASELINE_CSV_SIZE, MAX_BASELINE_ROWS
 from db.init import NOW_SQL, is_integrity_error
 
 router = APIRouter(prefix="/api", tags=["projects"])
@@ -38,7 +37,7 @@ async def create_project(req: ProjectCreate):
         return _format_project(row)
     except Exception as e:
         if is_integrity_error(e):
-            raise HTTPException(status_code=409, detail="Project name already exists")
+            raise HTTPException(status_code=409, detail="Project name already exists") from e
         raise
 
 
@@ -101,7 +100,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
         conn.commit()
     except Exception as e:
         if is_integrity_error(e):
-            raise HTTPException(status_code=409, detail="Project name already exists")
+            raise HTTPException(status_code=409, detail="Project name already exists") from e
         raise
     row = conn.execute(
         "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
@@ -113,8 +112,8 @@ async def update_project(project_id: int, req: ProjectUpdate):
 @router.get("/judge-models")
 async def list_judge_models():
     """Return judge-eligible models plus env-var defaults for the UI."""
+    from config import MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS, MULTI_LLM_JUDGE_TEMP_MAX, MULTI_LLM_JUDGE_TEMP_MIN
     from pipeline.llm import get_available_judge_models
-    from config import MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS, MULTI_LLM_JUDGE_TEMP_MIN, MULTI_LLM_JUDGE_TEMP_MAX
     return {
         "models": await get_available_judge_models(),
         "default_model_assignments": MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS,
@@ -153,8 +152,8 @@ def _parse_csv_text(content: bytes) -> tuple[str, csv.DictReader]:
         raise HTTPException(status_code=400, detail="File too large. Maximum 10MB.")
     try:
         text = content.decode("utf-8", errors="replace")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not decode file as UTF-8")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Could not decode file as UTF-8") from exc
     reader = csv.DictReader(io.StringIO(text))
     if reader.fieldnames is None:
         raise HTTPException(status_code=400, detail="CSV file is empty or has no headers")

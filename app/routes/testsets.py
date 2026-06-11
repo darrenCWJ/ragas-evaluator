@@ -8,22 +8,27 @@ import logging
 import threading
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import db.init
 from app.models import (
+    BULK_ACTION_TO_STATUS,
+    VALID_QUESTION_STATUSES,
+    BulkAnnotation,
+    QuestionAnnotation,
     TestGenRequest,
     TestSetCreate,
-    QuestionAnnotation,
-    BulkAnnotation,
-    VALID_QUESTION_STATUSES,
-    BULK_ACTION_TO_STATUS,
+)
+from config import (
+    KG_SUBPROCESS_TIMEOUT,
+    KG_THREAD_MODE,
+    KG_WORKER_URLS,
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
+    MAX_UPLOAD_SIZE,
 )
-from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URL, KG_WORKER_URLS, KG_THREAD_MODE
-import db.init
 from db.init import NOW_SQL, json_extract_sql
 
 router = APIRouter(prefix="/api", tags=["testsets"])
@@ -148,8 +153,9 @@ async def create_test_set(project_id: int, req: TestSetCreate):
     chunks: list[str] = []
 
     if req.use_kg_as_source:
-        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
         import json as _json
+
+        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
 
         _kg_json = _load_full_kg_json(project_id, "chunks")
         if _kg_json is None:
@@ -304,13 +310,13 @@ def _run_generation(
     asyncio.set_event_loop(loop)
 
     from evaluation.metrics.testgen import (
-        generate_project_testset,
-        register_cancel_flag,
         clear_cancel_flag,
+        generate_project_testset,
         is_cancelled,
+        register_cancel_flag,
     )
 
-    cancel_flag = register_cancel_flag(project_id)
+    register_cancel_flag(project_id)
     conn = db.init.get_thread_db()
     saved_count = 0
 
@@ -410,7 +416,7 @@ def _parse_upload_file(content: bytes, filename: str) -> list[dict]:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
+            raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}") from e
         if not isinstance(parsed, list):
             raise HTTPException(
                 status_code=422,
@@ -619,7 +625,7 @@ async def upload_test_set(
                         raise HTTPException(
                             status_code=422,
                             detail=f"Row {i + 1}, column '{col_name}': invalid JSON — {e}",
-                        )
+                        ) from e
 
     # Insert questions
     inserted = []
@@ -779,8 +785,9 @@ async def resume_test_set_generation(project_id: int, test_set_id: int):
 
     chunks: list[str] = []
     if use_kg_as_source:
-        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
         import json as _json
+
+        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
         _kg_json = _load_full_kg_json(project_id, "chunks")
         if _kg_json:
             _nodes = _json.loads(_kg_json).get("nodes", [])
@@ -1290,7 +1297,7 @@ async def get_knowledge_graph_info(project_id: int, kg_source: str = "chunks"):
     Includes a ``chunks_stale`` flag indicating whether the current source content
     differs from what was used to build the cached KG.
     """
-    from evaluation.metrics.testgen import get_kg_info, _chunks_hash
+    from evaluation.metrics.testgen import _chunks_hash, get_kg_info
 
     conn = db.init.get_db()
     project = conn.execute(
@@ -1386,7 +1393,7 @@ def _run_kg_in_thread(
     asyncio.set_event_loop(loop)
     try:
         logger.info("KG thread build starting: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import set_progress, clear_progress
+        from evaluation.metrics.testgen import clear_progress, set_progress
 
         set_progress(project_id, {"stage": "building_knowledge_graph", "kg_building": True}, kg_source=kg_source)
 
@@ -1436,7 +1443,7 @@ def _run_kg_subprocess(
 
     try:
         logger.info("KG subprocess thread started: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import set_progress, clear_progress
+        from evaluation.metrics.testgen import clear_progress, set_progress
         set_progress(project_id, {
             "stage": initial_stage,
             "kg_building": True,
@@ -1472,9 +1479,9 @@ def _run_kg_subprocess(
                         data.pop("_progress", None)
                         set_progress(proj_id, data, kg_source=src)
                     else:
-                        print(f"[KG-SUB] {line}", flush=True)
+                        pass
                 except (json.JSONDecodeError, AttributeError):
-                    print(f"[KG-SUB] {line}", flush=True)
+                    pass
         finally:
             kill_timer.cancel()
             proc.wait()
@@ -1494,7 +1501,6 @@ def _run_kg_subprocess(
 
         logger.info("KG operation '%s' completed for project %d", success_marker, project_id)
     except Exception as _exc:
-        print(f"[KG] EXCEPTION project={project_id}: {_exc}", flush=True)
         logger.exception("KG operation failed for project %d", project_id)
     finally:
         from evaluation.metrics.testgen import clear_progress
@@ -1663,7 +1669,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 @router.get("/projects/{project_id}/knowledge-graph/progress")
 async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
     """Poll knowledge graph build progress."""
-    from evaluation.metrics.testgen import get_progress, get_kg_info
+    from evaluation.metrics.testgen import get_kg_info, get_progress
 
     # When using worker(s), proxy progress — try the known worker first, then others
     if KG_WORKER_URLS:
@@ -1722,7 +1728,7 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
 @router.post("/projects/{project_id}/knowledge-graph/reset")
 async def kg_reset_stale(project_id: int, kg_source: str = "chunks"):
     """Delete a partial/stale KG checkpoint so a fresh build can start."""
-    from evaluation.metrics.testgen import get_kg_info, delete_kg_from_db, clear_progress
+    from evaluation.metrics.testgen import clear_progress, delete_kg_from_db, get_kg_info
 
     with _kg_lock:
         if _active_kg_builds.get((project_id, kg_source)):

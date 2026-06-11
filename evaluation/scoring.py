@@ -12,37 +12,36 @@ from openai import AsyncOpenAI, OpenAI
 # Ensure .env is loaded even when the app entry point is not main.py
 if not os.environ.get("OPENAI_API_KEY"):
     load_dotenv()
-from ragas.llms import llm_factory
 from ragas.embeddings.base import embedding_factory
-
-from evaluation.metrics import custom_metric
-from evaluation.metrics.custom_metric import CustomMetricConfig
+from ragas.llms import llm_factory
 
 from evaluation.metrics import (
-    faithfulness,
+    answer_accuracy,
     answer_relevancy,
+    aspect_critic,
+    bleu_score,
+    chrf_score,
+    context_entities_recall,
     context_precision,
     context_recall,
-    context_entities_recall,
-    noise_sensitivity,
-    factual_correctness,
-    semantic_similarity,
-    non_llm_string_similarity,
-    bleu_score,
-    rouge_score,
-    chrf_score,
+    context_relevance,
+    custom_metric,
+    datacompy_score,
     exact_match,
+    factual_correctness,
+    faithfulness,
+    instance_rubrics,
+    noise_sensitivity,
+    non_llm_string_similarity,
+    response_groundedness,
+    rouge_score,
+    rubrics_score,
+    semantic_similarity,
+    sql_semantic_equivalence,
     string_presence,
     summarization_score,
-    aspect_critic,
-    rubrics_score,
-    instance_rubrics,
-    answer_accuracy,
-    context_relevance,
-    response_groundedness,
-    sql_semantic_equivalence,
-    datacompy_score,
 )
+from evaluation.metrics.custom_metric import CustomMetricConfig
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +133,7 @@ def setup_scorers(
     """
     # None means "run all metrics"; [] means "run no built-in metrics" (e.g. judge-only runs)
     selected = metrics if metrics is not None else ALL_METRICS
-    from config import DEFAULT_EVAL_MODEL, DEFAULT_EVAL_EMBEDDING, DEFAULT_EVAL_MAX_TOKENS
+    from config import DEFAULT_EVAL_EMBEDDING, DEFAULT_EVAL_MAX_TOKENS, DEFAULT_EVAL_MODEL
 
     async_client = AsyncOpenAI()
     sync_client = OpenAI()
@@ -286,7 +285,7 @@ async def _score_builtin(
         if on_done:
             on_done(name)
         return name, val
-    except asyncio.TimeoutError:
+    except TimeoutError:
         from config import METRIC_SCORING_TIMEOUT
         logger.warning("Metric %s timed out after %.0fs (scored as None)", name, METRIC_SCORING_TIMEOUT)
         if on_done:
@@ -386,4 +385,4 @@ async def evaluate_experiment_row(
         )
 
     scored = await asyncio.gather(*tasks)
-    return {name: val for name, val in scored}
+    return dict(scored)

@@ -6,8 +6,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.routes.experiments import _sanitize_nan
 import db.init
+from app.routes.experiments import _sanitize_nan
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +275,7 @@ async def get_project_report(project_id: int):
 
     # Per-bot summary
     bot_summary = []
-    for bid, acc in bot_accum.items():
+    for _bid, acc in bot_accum.items():
         agg = _aggregate_metrics(acc["result_rows"])
         bot_summary.append({
             "bot_config_id": acc["bot_config_id"],

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
-import type { ChunkGenerateResult } from "../../lib/api";
-import { generateChunks } from "../../lib/api";
+import { useState, useEffect, useRef } from 'react';
+import type { ChunkGenerateResult } from '../../lib/api';
+import { generateChunks } from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -23,9 +23,7 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
     setError(null);
     generateChunks(projectId, configId, force)
       .then((data) => setResult(data))
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Generation failed"),
-      )
+      .catch((err) => setError(err instanceof Error ? err.message : 'Generation failed'))
       .finally(() => setGenerating(false));
   }, [confirmed, projectId, configId, force]);
 
@@ -60,7 +58,8 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
             {result.total_chunks} total chunks
             {result.skipped_documents > 0 && (
               <span className="ml-1 font-normal text-text-muted">
-                ({result.skipped_documents} doc{result.skipped_documents !== 1 ? "s" : ""} already chunked)
+                ({result.skipped_documents} doc{result.skipped_documents !== 1 ? 's' : ''} already
+                chunked)
               </span>
             )}
           </span>
@@ -78,9 +77,7 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
                   className="flex items-center justify-between rounded bg-card px-3 py-1.5 text-xs"
                 >
                   <span className="truncate text-text-secondary">{d.filename}</span>
-                  <span className="shrink-0 font-mono text-text-primary">
-                    {d.chunk_count}
-                  </span>
+                  <span className="shrink-0 font-mono text-text-primary">{d.chunk_count}</span>
                 </li>
               ))}
             </ul>
@@ -99,9 +96,7 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
                   className="flex items-center justify-between rounded bg-card px-3 py-1.5 text-xs opacity-60"
                 >
                   <span className="truncate text-text-secondary">{d.filename}</span>
-                  <span className="shrink-0 font-mono text-text-primary">
-                    {d.chunk_count}
-                  </span>
+                  <span className="shrink-0 font-mono text-text-primary">{d.chunk_count}</span>
                 </li>
               ))}
             </ul>
@@ -127,11 +122,7 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
   if (generating) {
     return (
       <div className="flex items-center gap-2 py-2 text-sm text-text-muted">
-        <svg
-          className="h-4 w-4 animate-spin"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
+        <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
           <circle
             className="opacity-25"
             cx="12"
@@ -146,7 +137,7 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
             d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
           />
         </svg>
-        Generating chunks{force ? " (full re-chunk)..." : "..."}
+        Generating chunks{force ? ' (full re-chunk)...' : '...'}
       </div>
     );
   }
@@ -155,15 +146,15 @@ export default function ChunkGenerate({ projectId, configId }: Props) {
     <div className="rounded-lg border border-score-mid/30 bg-score-mid/5 p-3">
       <p className="mb-3 text-xs text-text-secondary">
         {force
-          ? "This will re-chunk all documents from scratch. Continue?"
-          : "This will chunk any new documents. Already-chunked documents will be skipped."}
+          ? 'This will re-chunk all documents from scratch. Continue?'
+          : 'This will chunk any new documents. Already-chunked documents will be skipped.'}
       </p>
       <div className="flex gap-2">
         <button
           onClick={() => setConfirmed(true)}
           className="rounded-lg bg-score-mid/20 px-3 py-1 text-xs font-medium text-score-mid hover:bg-score-mid/30"
         >
-          {force ? "Yes, re-chunk all" : "Generate"}
+          {force ? 'Yes, re-chunk all' : 'Generate'}
         </button>
       </div>
     </div>

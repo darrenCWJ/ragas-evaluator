@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { bulkAnnotateQuestions } from "../../lib/api";
+import { useState } from 'react';
+import { bulkAnnotateQuestions } from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -22,7 +22,7 @@ export default function BulkActions({
   const [confirmRejectAll, setConfirmRejectAll] = useState(false);
 
   const run = async (
-    action: "approve" | "reject" | "approve_all" | "reject_all",
+    action: 'approve' | 'reject' | 'approve_all' | 'reject_all',
     ids?: number[],
   ) => {
     setBusy(true);
@@ -38,7 +38,7 @@ export default function BulkActions({
       setTimeout(() => setSuccess(null), 2000);
       onBulkComplete();
     } catch (err) {
-      setError((err as Error).message || "Bulk action failed");
+      setError((err as Error).message || 'Bulk action failed');
     } finally {
       setBusy(false);
     }
@@ -55,27 +55,23 @@ export default function BulkActions({
       {/* Selection actions */}
       {hasSelection && (
         <>
-          <span className="font-medium text-text-primary">
-            {selectedIds.size} selected
-          </span>
+          <span className="font-medium text-text-primary">{selectedIds.size} selected</span>
           <span className="text-text-muted">&mdash;</span>
           <button
-            onClick={() => run("approve", [...selectedIds])}
+            onClick={() => run('approve', [...selectedIds])}
             disabled={busy}
             className="rounded-md border border-green-500/30 px-2.5 py-1 font-medium text-green-400 transition hover:bg-green-500/10 disabled:opacity-40"
           >
             Approve Selected
           </button>
           <button
-            onClick={() => run("reject", [...selectedIds])}
+            onClick={() => run('reject', [...selectedIds])}
             disabled={busy}
             className="rounded-md border border-red-500/30 px-2.5 py-1 font-medium text-red-400 transition hover:bg-red-500/10 disabled:opacity-40"
           >
             Reject Selected
           </button>
-          {hasPending && (
-            <span className="mx-1 text-text-muted">|</span>
-          )}
+          {hasPending && <span className="mx-1 text-text-muted">|</span>}
         </>
       )}
 
@@ -83,7 +79,7 @@ export default function BulkActions({
       {hasPending && (
         <>
           <button
-            onClick={() => run("approve_all")}
+            onClick={() => run('approve_all')}
             disabled={busy}
             className="rounded-md border border-green-500/20 px-2.5 py-1 text-green-400/80 transition hover:bg-green-500/10 disabled:opacity-40"
           >
@@ -100,7 +96,7 @@ export default function BulkActions({
             </button>
           ) : (
             <button
-              onClick={() => run("reject_all")}
+              onClick={() => run('reject_all')}
               disabled={busy}
               className="rounded-md border border-red-500/50 bg-red-500/15 px-2.5 py-1 font-medium text-red-300 transition hover:bg-red-500/25 disabled:opacity-40"
             >
@@ -111,12 +107,8 @@ export default function BulkActions({
       )}
 
       {/* Feedback */}
-      {success && (
-        <span className="ml-auto text-green-400">{success}</span>
-      )}
-      {error && (
-        <span className="ml-auto text-red-400">{error}</span>
-      )}
+      {success && <span className="ml-auto text-green-400">{success}</span>}
+      {error && <span className="ml-auto text-red-400">{error}</span>}
     </div>
   );
 }

@@ -1,12 +1,5 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useCallback,
-  type ReactNode,
-} from "react";
-import type { Project } from "../lib/api";
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import type { Project } from '../lib/api';
 
 interface ProjectContextValue {
   project: Project | null;
@@ -16,7 +9,7 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
-const STORAGE_KEY = "ragas_selected_project";
+const STORAGE_KEY = 'ragas_selected_project';
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [project, setProjectState] = useState<Project | null>(() => {
@@ -48,6 +41,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
 export function useProject(): ProjectContextValue {
   const ctx = useContext(ProjectContext);
-  if (!ctx) throw new Error("useProject must be used within ProjectProvider");
+  if (!ctx) throw new Error('useProject must be used within ProjectProvider');
   return ctx;
 }

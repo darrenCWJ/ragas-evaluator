@@ -1,4 +1,4 @@
-from ragas.metrics.collections import NonLLMStringSimilarity, DistanceMeasure
+from ragas.metrics.collections import DistanceMeasure, NonLLMStringSimilarity
 
 
 def create_scorer(distance_measure=DistanceMeasure.LEVENSHTEIN):

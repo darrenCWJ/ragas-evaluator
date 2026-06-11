@@ -27,6 +27,10 @@ frontend/dist/
 # Playwright MCP logs
 .playwright-mcp/
 
+# Demo recordings and screenshots
+demo/*.webm
+screenshots/
+
 # Accidental pip output
 =*
 

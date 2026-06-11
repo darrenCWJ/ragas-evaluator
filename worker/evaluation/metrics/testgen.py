@@ -28,13 +28,17 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from openai import AsyncOpenAI, OpenAI
-from ragas.llms import llm_factory
 from ragas.embeddings import embedding_factory
+from ragas.llms import llm_factory
 from ragas.testset import TestsetGenerator
-from ragas.testset.persona import Persona, generate_personas_from_kg
 from ragas.testset.graph import KnowledgeGraph, Node, NodeType
+from ragas.testset.persona import Persona, generate_personas_from_kg
+from ragas.testset.synthesizers.multi_hop import (
+    MultiHopAbstractQuerySynthesizer,
+    MultiHopSpecificQuerySynthesizer,
+)
+from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
 from ragas.testset.transforms import (
-    apply_transforms,
     CosineSimilarityBuilder,
     EmbeddingExtractor,
     HeadlinesExtractor,
@@ -42,13 +46,9 @@ from ragas.testset.transforms import (
     KeyphrasesExtractor,
     OverlapScoreBuilder,
     SummaryExtractor,
+    apply_transforms,
 )
 from ragas.testset.transforms.default import CustomNodeFilter, NERExtractor, ThemesExtractor
-from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
-from ragas.testset.synthesizers.multi_hop import (
-    MultiHopAbstractQuerySynthesizer,
-    MultiHopSpecificQuerySynthesizer,
-)
 
 from config import (
     DEFAULT_EVAL_EMBEDDING,
@@ -60,8 +60,7 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, NOW_SQL
-
+from db.init import NOW_SQL, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +117,36 @@ def _release_memory() -> None:
             libc.malloc_trim(0)
         except Exception:
             pass
+
+
+def _extract_json(text: str) -> dict:
+    """Extract the first valid JSON object from text, handles markdown code fences.
+
+    Local copy of evaluation.metrics.multi_llm_judge._extract_json — the worker
+    image does not ship that module. The fork dropped the import but kept the
+    call site, so fast-KG extraction failed with NameError on every node (and
+    the broad except silently produced empty node properties).
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    start = text.find("{")
+    if start == -1:
+        return _json.loads(text)
+    # Walk backwards from the last } to find the shortest valid JSON object.
+    pos = len(text) - 1
+    while pos >= start:
+        pos = text.rfind("}", start, pos + 1)
+        if pos == -1:
+            break
+        try:
+            return _json.loads(text[start : pos + 1])
+        except _json.JSONDecodeError:
+            pos -= 1
+    return _json.loads(text[start:])
 
 
 _progress_lock = threading.Lock()
@@ -252,6 +281,7 @@ class CombinedNodeExtractor:
 
     def generate_execution_plan(self, kg: "KnowledgeGraph") -> list:  # type: ignore[return]
         from ragas.testset.graph import KnowledgeGraph as _KG  # noqa: F401
+
         from pipeline.llm import chat_completion
 
         async def _process(node) -> None:
@@ -1112,7 +1142,7 @@ def build_kg_standalone(
     ).fetchall()
     chunks = [r["content"] for r in rows]
     if not chunks:
-        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+        raise ValueError(f"No chunks found for chunk_config_id={chunk_config_id}")
 
     set_progress(project_id, {
         "stage": "building_knowledge_graph",
@@ -1158,7 +1188,7 @@ def build_kg_standalone_from_documents(
     """
     doc_texts = _fetch_document_texts(project_id)
     if not doc_texts:
-        raise ValueError("No documents found for project_id=%d" % project_id)
+        raise ValueError(f"No documents found for project_id={project_id}")
 
     set_progress(project_id, {
         "stage": "building_knowledge_graph",
@@ -1194,7 +1224,6 @@ def rebuild_kg_links(
     Much faster than a full rebuild since it skips headline and keyphrase
     extraction (the expensive LLM steps).
     """
-    from ragas.run_config import RunConfig
 
     db = get_db()
     row = db.execute(
@@ -1354,8 +1383,8 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
+
     import db.init as _db
-    from ragas.run_config import RunConfig
 
     conn = _db.get_thread_db()
 
@@ -1366,7 +1395,7 @@ def incremental_update_kg(
     ).fetchall()
     new_chunks = [r["content"] for r in chunk_rows]
     if not new_chunks:
-        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+        raise ValueError(f"No chunks found for chunk_config_id={chunk_config_id}")
 
     # Load existing KG
     row = conn.execute(
@@ -1475,7 +1504,7 @@ def incremental_update_kg(
             new_chunk_indices = [i for i in range(len(new_chunks)) if i not in matched_new_indices]
 
             new_kg = KnowledgeGraph()
-            for idx, chunk in zip(new_chunk_indices, added_chunks):
+            for idx, chunk in zip(new_chunk_indices, added_chunks, strict=False):
                 new_kg.nodes.append(
                     Node(
                         type=NodeType.DOCUMENT,
@@ -2178,8 +2207,9 @@ def _generate_bridge_questions(
     if count <= 0:
         return []
 
-    import networkx as nx
     import random
+
+    import networkx as nx
 
     G, node_lookup = _get_kg_graph(kg)
     if len(G.nodes) < 4:
@@ -2569,7 +2599,7 @@ def _generate_project_testset_inner(
     # the full chunk list because those questions rely on graph-wide
     # connectivity — sampling would degrade quality.
     # ---------------------------------------------------------------------------
-    prebuilt_kg: "KnowledgeGraph | None" = None
+    prebuilt_kg: KnowledgeGraph | None = None
     effective_chunks = chunks
 
     if node_sample_size > 0:

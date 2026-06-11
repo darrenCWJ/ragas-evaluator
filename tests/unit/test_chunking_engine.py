@@ -2,7 +2,7 @@
 
 import pytest
 
-from pipeline.chunking import chunk_text, chunk_text_pipeline, VALID_METHODS
+from pipeline.chunking import VALID_METHODS, chunk_text, chunk_text_pipeline
 
 
 class TestChunkText:

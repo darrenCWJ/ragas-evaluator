@@ -4,9 +4,9 @@ import json
 
 from fastapi import APIRouter, HTTPException
 
-from app.models import RagConfigCreate, RagConfigUpdate, RagQueryRequest
 import db.init
-from pipeline.rag import single_shot_query, multi_step_query
+from app.models import RagConfigCreate, RagConfigUpdate, RagQueryRequest
+from pipeline.rag import multi_step_query, single_shot_query
 
 router = APIRouter(prefix="/api", tags=["rag"])
 

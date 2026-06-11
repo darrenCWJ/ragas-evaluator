@@ -1,14 +1,14 @@
-import { Routes, Route, Navigate } from "react-router-dom";
-import { ProjectProvider } from "./contexts/ProjectContext";
-import WorkspaceLayout from "./layouts/WorkspaceLayout";
-import SetupPage from "./pages/SetupPage";
-import BuildPage from "./pages/BuildPage";
-import TestPage from "./pages/TestPage";
-import ExperimentPage from "./pages/ExperimentPage";
-import AnalyzePage from "./pages/AnalyzePage";
-import KnowledgeGraphPage from "./pages/KnowledgeGraphPage";
-import PersonasPage from "./pages/PersonasPage";
-import WorkersPage from "./pages/WorkersPage";
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { ProjectProvider } from './contexts/ProjectContext';
+import WorkspaceLayout from './layouts/WorkspaceLayout';
+import SetupPage from './pages/SetupPage';
+import BuildPage from './pages/BuildPage';
+import TestPage from './pages/TestPage';
+import ExperimentPage from './pages/ExperimentPage';
+import AnalyzePage from './pages/AnalyzePage';
+import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
+import PersonasPage from './pages/PersonasPage';
+import WorkersPage from './pages/WorkersPage';
 
 export default function App() {
   return (

@@ -7,28 +7,26 @@ import json
 import logging
 import math
 import threading
+from dataclasses import asdict
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+import db.init
 from app.models import (
     ExperimentCreate,
     ExperimentRunRequest,
-    DEFAULT_EXPERIMENT_METRICS,
 )
-from dataclasses import asdict
-
-from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
-from evaluation.metrics.custom_metric import CustomMetricConfig
-from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
-from evaluation.source_verification import verify_all_citations
-import db.init
-from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
-from pipeline.bot_connectors.factory import create_connector
 from app.routes.bot_configs import bot_config_returns_contexts
 from app.routes.projects import _sanitize_csv_value
-from pipeline.rag import single_shot_query, multi_step_query
+from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL, DEFAULT_EXPERIMENT_METRICS
+from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
+from evaluation.metrics.custom_metric import CustomMetricConfig
+from evaluation.scoring import ALL_METRICS, evaluate_experiment_row, setup_scorers
+from evaluation.source_verification import verify_all_citations
+from pipeline.bot_connectors.factory import create_connector
+from pipeline.rag import multi_step_query, single_shot_query
 
 logger = logging.getLogger(__name__)
 
@@ -482,8 +480,8 @@ async def compare_experiments(
     raw_parts = ids.split(",")
     try:
         experiment_ids = [int(p.strip()) for p in raw_parts if p.strip()]
-    except ValueError:
-        raise HTTPException(status_code=400, detail="All experiment IDs must be numeric")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="All experiment IDs must be numeric") from exc
 
     if len(experiment_ids) < 2 or len(experiment_ids) > 5:
         raise HTTPException(status_code=400, detail="Provide between 2 and 5 experiment IDs")
@@ -996,8 +994,8 @@ async def run_experiment(
                 if cm_name not in selected_metrics:
                     continue
                 if cr["metric_type"] == "criteria_judge":
-                    refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
-                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr.keys() and cr["few_shot_examples_json"] else None
+                    refined = cr.get("refined_prompt", None)
+                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr and cr["few_shot_examples_json"] else None
                     if refined:
                         criteria_judge_configs.append(
                             _multi_llm_judge_module.CriteriaJudgeConfig(
@@ -1010,8 +1008,8 @@ async def run_experiment(
                             )
                         )
                 elif cr["metric_type"] == "reference_judge":
-                    refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
-                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr.keys() and cr["few_shot_examples_json"] else None
+                    refined = cr.get("refined_prompt", None)
+                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr and cr["few_shot_examples_json"] else None
                     if refined:
                         reference_judge_configs.append(
                             _multi_llm_judge_module.ReferenceJudgeConfig(
@@ -1038,7 +1036,7 @@ async def run_experiment(
             # from setup_scorers — handled separately below.
             criteria_names = {cfg.metric_name for cfg in criteria_judge_configs}
             reference_names = {cfg.metric_name for cfg in reference_judge_configs}
-            judge_custom_names = criteria_names | reference_names
+            criteria_names | reference_names
             builtin_selected = [
                 m for m in selected_metrics
                 if m in ALL_METRICS and m != "multi_llm_judge"
@@ -1153,14 +1151,13 @@ async def run_experiment(
                             csv_match = csv_answer_lookup.get(question_text.strip().lower())
                             if csv_match:
                                 generated_answer = csv_match["answer"]
-                                source_text = csv_match["sources"]
+                                csv_match["sources"]
                             else:
                                 generated_answer = (
                                     q_row["user_edited_answer"]
                                     if q_row["user_edited_answer"]
                                     else q_row["reference_answer"]
                                 ) or ""
-                                source_text = ""
                             raw_contexts = json.loads(q_row["reference_contexts"]) if q_row["reference_contexts"] else []
                             full_context_dicts = [
                                 {"content": c, "source": "csv_upload"} if isinstance(c, str)
@@ -1305,7 +1302,7 @@ async def run_experiment(
                     break
                 try:
                     result = await asyncio.wait_for(progress_queue.get(), timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 finished += 1
                 qid = result["qid"]
@@ -1652,7 +1649,6 @@ async def experiment_progress(project_id: int, experiment_id: int):
     obs_test_set = obs_meta["test_set_name"] if obs_meta else ""
 
     async def _observe():
-        prev_current = -1
         prev_items_sent = 0
         sent_started = False
 

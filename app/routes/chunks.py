@@ -4,9 +4,9 @@ import json
 
 from fastapi import APIRouter, HTTPException
 
+import db.init
 from app.models import ChunkConfigCreate
 from pipeline.chunking import chunk_text_pipeline
-import db.init
 
 router = APIRouter(prefix="/api", tags=["chunks"])
 

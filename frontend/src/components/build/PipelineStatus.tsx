@@ -19,22 +19,22 @@ export default function PipelineStatus({
 }: Props) {
   const steps: PipelineStep[] = [
     {
-      label: "Documents",
+      label: 'Documents',
       count: documentCount,
       configured: documentCount > 0,
     },
     {
-      label: "Chunks",
+      label: 'Chunks',
       count: chunkConfigCount,
       configured: chunkConfigCount > 0,
     },
     {
-      label: "Embeddings",
+      label: 'Embeddings',
       count: embeddingConfigCount,
       configured: embeddingConfigCount > 0,
     },
     {
-      label: "RAG",
+      label: 'RAG',
       count: ragConfigCount,
       configured: ragConfigCount > 0,
     },
@@ -46,9 +46,7 @@ export default function PipelineStatus({
         <div key={step.label} className="flex items-center">
           <div
             className={`flex items-center gap-2 rounded-lg px-3 py-2 ${
-              step.configured
-                ? "bg-accent/10 text-accent"
-                : "bg-card text-text-muted"
+              step.configured ? 'bg-accent/10 text-accent' : 'bg-card text-text-muted'
             }`}
           >
             {/* Icon */}
@@ -60,11 +58,7 @@ export default function PipelineStatus({
                 stroke="currentColor"
                 strokeWidth={2}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M5 13l4 4L19 7"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             ) : (
               <svg
@@ -81,7 +75,7 @@ export default function PipelineStatus({
             <span className="text-xs font-medium">{step.label}</span>
             <span
               className={`font-mono text-2xs ${
-                step.configured ? "text-accent/70" : "text-text-muted"
+                step.configured ? 'text-accent/70' : 'text-text-muted'
               }`}
             >
               {step.count}
@@ -97,11 +91,7 @@ export default function PipelineStatus({
               stroke="currentColor"
               strokeWidth={2}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9 5l7 7-7 7"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           )}
         </div>

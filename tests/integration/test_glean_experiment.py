@@ -15,10 +15,9 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 import requests
@@ -346,31 +345,31 @@ class TestGleanExperiment:
             cfg = resp.json()
             assert cfg["config_json"]["agent_id"] == "agent-abc-123"
             assert cfg["returns_contexts"] is True
-            print(f"\n  Create with agent_id: PASSED")
+            print("\n  Create with agent_id: PASSED")
 
             resp = requests.get(f"{base_url}/api/projects/{pid}/bot-configs")
             assert resp.status_code == 200
             assert len(resp.json()) == 1
-            print(f"  List: PASSED")
+            print("  List: PASSED")
 
             resp = requests.put(f"{base_url}/api/projects/{pid}/bot-configs/{cfg['id']}",
                 json={"name": "Updated Glean", "config_json": {"api_key": "new-key", "base_url": glean_url}})
             assert resp.status_code == 200
             assert resp.json()["name"] == "Updated Glean"
-            print(f"  Update: PASSED")
+            print("  Update: PASSED")
 
             resp = requests.get(f"{base_url}/api/projects/{pid}/bot-configs/{cfg['id']}")
             assert resp.status_code == 200
             assert resp.json()["name"] == "Updated Glean"
-            print(f"  Get: PASSED")
+            print("  Get: PASSED")
 
             resp = requests.delete(f"{base_url}/api/projects/{pid}/bot-configs/{cfg['id']}")
             assert resp.status_code in (200, 204)
-            print(f"  Delete: PASSED")
+            print("  Delete: PASSED")
 
             resp = requests.get(f"{base_url}/api/projects/{pid}/bot-configs")
             assert len(resp.json()) == 0
-            print(f"  GLEAN CRUD: ALL PASSED")
+            print("  GLEAN CRUD: ALL PASSED")
         finally:
             _stop_server(proc)
             glean_srv.shutdown()

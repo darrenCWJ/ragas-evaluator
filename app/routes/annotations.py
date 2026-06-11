@@ -2,14 +2,13 @@
 
 import json
 import logging
-import math
 import random
 
 from fastapi import APIRouter, HTTPException
 
+import db.init
 from app.models import HumanAnnotationBatch
 from app.routes.experiments import _sanitize_nan
-import db.init
 
 logger = logging.getLogger(__name__)
 

@@ -1,35 +1,35 @@
-import { useState, useRef, useCallback } from "react";
-import { fetchExperimentHistory } from "../../lib/api";
-import type { HistoryExperiment } from "../../lib/api";
-import { scoreBgColor, scoreTextColor } from "./scoreUtils";
+import { useState, useRef, useCallback } from 'react';
+import { fetchExperimentHistory } from '../../lib/api';
+import type { HistoryExperiment } from '../../lib/api';
+import { scoreBgColor, scoreTextColor } from './scoreUtils';
 
 interface Props {
   projectId: number;
 }
 
 type LoadState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "loaded"; experiments: HistoryExperiment[] };
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'loaded'; experiments: HistoryExperiment[] };
 
 const DEFAULT_VISIBLE = 10;
 
 export default function ExperimentHistory({ projectId }: Props) {
   const [open, setOpen] = useState(false);
-  const [state, setState] = useState<LoadState>({ status: "idle" });
+  const [state, setState] = useState<LoadState>({ status: 'idle' });
   const [showAll, setShowAll] = useState(false);
   const hasLoaded = useRef(false);
 
   const load = useCallback(async () => {
-    setState({ status: "loading" });
+    setState({ status: 'loading' });
     try {
       const experiments = await fetchExperimentHistory(projectId);
-      setState({ status: "loaded", experiments });
+      setState({ status: 'loaded', experiments });
     } catch (err) {
       setState({
-        status: "error",
-        message: (err as Error).message || "Failed to load history",
+        status: 'error',
+        message: (err as Error).message || 'Failed to load history',
       });
     }
   }, [projectId]);
@@ -45,7 +45,7 @@ export default function ExperimentHistory({ projectId }: Props) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       handleToggle();
     }
@@ -81,49 +81,38 @@ export default function ExperimentHistory({ projectId }: Props) {
           </span>
         </div>
         <svg
-          className={`h-4 w-4 text-text-muted transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`h-4 w-4 text-text-muted transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
           strokeWidth={2}
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M19 9l-7 7-7-7"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </div>
 
       {/* Collapsible body */}
       <div
-        className={`grid transition-[grid-template-rows] duration-200 ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-200 ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
       >
         <div className="overflow-hidden">
           <div className="border-t border-border px-5 py-4">
             {/* Loading */}
-            {state.status === "loading" && (
+            {state.status === 'loading' && (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
-                  <div
-                    key={i}
-                    className="h-14 animate-pulse rounded-lg bg-elevated"
-                  />
+                  <div key={i} className="h-14 animate-pulse rounded-lg bg-elevated" />
                 ))}
               </div>
             )}
 
             {/* Idle — shouldn't be visible but safe fallback */}
-            {state.status === "idle" && (
-              <p className="text-sm text-text-muted">Loading...</p>
-            )}
+            {state.status === 'idle' && <p className="text-sm text-text-muted">Loading...</p>}
 
             {/* Error */}
-            {state.status === "error" && (
+            {state.status === 'error' && (
               <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-center">
-                <p className="text-sm font-medium text-red-300">
-                  Failed to load history
-                </p>
+                <p className="text-sm font-medium text-red-300">Failed to load history</p>
                 <p className="mt-1 text-xs text-red-300/70">{state.message}</p>
                 <button
                   onClick={load}
@@ -135,17 +124,16 @@ export default function ExperimentHistory({ projectId }: Props) {
             )}
 
             {/* Loaded — empty */}
-            {state.status === "loaded" && state.experiments.length === 0 && (
+            {state.status === 'loaded' && state.experiments.length === 0 && (
               <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
                 <p className="text-sm text-text-muted">
-                  No completed experiments yet. Run an experiment to see
-                  history.
+                  No completed experiments yet. Run an experiment to see history.
                 </p>
               </div>
             )}
 
             {/* Loaded — with data */}
-            {state.status === "loaded" && state.experiments.length > 0 && (
+            {state.status === 'loaded' && state.experiments.length > 0 && (
               <div className="space-y-5">
                 {/* Score trend sparkline */}
                 <ScoreTrend experiments={state.experiments} />
@@ -170,9 +158,7 @@ export default function ExperimentHistory({ projectId }: Props) {
                       onClick={() => setShowAll((p) => !p)}
                       className="mt-3 ml-2 text-xs font-medium text-accent transition hover:text-accent/80"
                     >
-                      {showAll
-                        ? "Show less"
-                        : `Show all (${state.experiments.length})`}
+                      {showAll ? 'Show less' : `Show all (${state.experiments.length})`}
                     </button>
                   )}
                 </div>
@@ -187,11 +173,7 @@ export default function ExperimentHistory({ projectId }: Props) {
 
 /* ── Score Trend Sparkline ── */
 
-function ScoreTrend({
-  experiments,
-}: {
-  experiments: HistoryExperiment[];
-}) {
+function ScoreTrend({ experiments }: { experiments: HistoryExperiment[] }) {
   // Show last 12 experiments, oldest on left, newest on right
   const recent = experiments.slice(0, 12).reverse();
 
@@ -207,28 +189,25 @@ function ScoreTrend({
           const score = exp.overall_score;
           const heightPct = score !== null ? Math.max(score * 100, 8) : 8;
           return (
-            <div
-              key={exp.id}
-              className="flex flex-1 flex-col items-center gap-1"
-            >
+            <div key={exp.id} className="flex flex-1 flex-col items-center gap-1">
               {/* Bar */}
               <div
                 className={`w-full max-w-[20px] rounded-t transition-all duration-300 ${
-                  score !== null ? scoreBarColor(score) : "bg-border"
+                  score !== null ? scoreBarColor(score) : 'bg-border'
                 }`}
                 style={{ height: `${heightPct * 0.4}px` }}
-                title={`${exp.name}: ${score !== null ? (score * 100).toFixed(0) + "%" : "N/A"}`}
+                title={`${exp.name}: ${score !== null ? (score * 100).toFixed(0) + '%' : 'N/A'}`}
               />
               {/* Dot */}
               <div
                 className={`h-2 w-2 rounded-full ${
-                  score !== null ? dotBgColor(score) : "bg-border"
+                  score !== null ? dotBgColor(score) : 'bg-border'
                 }`}
               />
               {/* Label for first/last */}
               {(i === 0 || i === recent.length - 1) && (
                 <span className="mt-0.5 text-[8px] text-text-muted truncate max-w-[40px]">
-                  {score !== null ? `${(score * 100).toFixed(0)}%` : "—"}
+                  {score !== null ? `${(score * 100).toFixed(0)}%` : '—'}
                 </span>
               )}
             </div>
@@ -241,45 +220,39 @@ function ScoreTrend({
 
 /** Bar color for sparkline (same thresholds, different use) */
 function scoreBarColor(v: number): string {
-  if (v >= 0.8) return "bg-score-high/60";
-  if (v >= 0.5) return "bg-score-mid/60";
-  return "bg-score-low/60";
+  if (v >= 0.8) return 'bg-score-high/60';
+  if (v >= 0.5) return 'bg-score-mid/60';
+  return 'bg-score-low/60';
 }
 
 function dotBgColor(v: number): string {
-  if (v >= 0.8) return "bg-score-high";
-  if (v >= 0.5) return "bg-score-mid";
-  return "bg-score-low";
+  if (v >= 0.8) return 'bg-score-high';
+  if (v >= 0.5) return 'bg-score-mid';
+  return 'bg-score-low';
 }
 
 /* ── Timeline Entry ── */
 
-function TimelineEntry({
-  experiment,
-}: {
-  experiment: HistoryExperiment;
-}) {
+function TimelineEntry({ experiment }: { experiment: HistoryExperiment }) {
   const score = experiment.overall_score;
 
   // Format date
-  const completedDate = experiment.completed_at
-    ? new Date(experiment.completed_at)
-    : null;
+  const completedDate = experiment.completed_at ? new Date(experiment.completed_at) : null;
   const dateStr = completedDate
     ? completedDate.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       })
-    : "Unknown date";
+    : 'Unknown date';
 
   return (
     <div className="relative flex items-start gap-3">
       {/* Timeline dot */}
       <div
         className={`absolute left-[-18px] top-2.5 h-3 w-3 rounded-full border-2 border-card ${
-          score !== null ? dotBgColor(score) : "bg-border"
+          score !== null ? dotBgColor(score) : 'bg-border'
         }`}
       />
 
@@ -287,15 +260,11 @@ function TimelineEntry({
       <div className="flex-1 rounded-lg border border-border/60 bg-elevated/30 px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-text-primary">
-              {experiment.name}
-            </p>
+            <p className="truncate text-sm font-medium text-text-primary">{experiment.name}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
               {experiment.rag_config_name && (
                 <>
-                  <span className="text-text-muted">
-                    {experiment.rag_config_name}
-                  </span>
+                  <span className="text-text-muted">{experiment.rag_config_name}</span>
                   <span className="text-text-muted/50">&middot;</span>
                 </>
               )}
@@ -303,9 +272,7 @@ function TimelineEntry({
               {experiment.result_count != null && (
                 <>
                   <span className="text-text-muted/50">&middot;</span>
-                  <span className="text-text-muted">
-                    {experiment.result_count} questions
-                  </span>
+                  <span className="text-text-muted">{experiment.result_count} questions</span>
                 </>
               )}
             </div>

@@ -9,12 +9,12 @@ import logging
 
 from fastapi import HTTPException
 
+from config import CONTEXT_CHAR_BUDGET
+from pipeline.bm25 import get_index_path, load_index, search_bm25
 from pipeline.embedding import embed_query_dispatch
 from pipeline.llm import chat_completion
 from pipeline.reranker import rerank
 from pipeline.vectorstore import search as vector_search
-from pipeline.bm25 import load_index, search_bm25, get_index_path
-from config import CONTEXT_CHAR_BUDGET
 
 logger = logging.getLogger(__name__)
 

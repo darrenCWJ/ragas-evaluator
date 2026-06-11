@@ -18,21 +18,25 @@ import math
 import os
 import random
 import signal
-import sys
 import tempfile
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 
 from openai import AsyncOpenAI, OpenAI
-from ragas.llms import llm_factory
 from ragas.embeddings import embedding_factory
+from ragas.llms import llm_factory
 from ragas.testset import TestsetGenerator
-from ragas.testset.persona import Persona, generate_personas_from_kg
 from ragas.testset.graph import KnowledgeGraph, Node, NodeType
+from ragas.testset.persona import Persona, generate_personas_from_kg
+from ragas.testset.synthesizers.multi_hop import (
+    MultiHopAbstractQuerySynthesizer,
+    MultiHopSpecificQuerySynthesizer,
+)
+from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
 from ragas.testset.transforms import (
-    apply_transforms,
     CosineSimilarityBuilder,
     EmbeddingExtractor,
     HeadlinesExtractor,
@@ -40,13 +44,9 @@ from ragas.testset.transforms import (
     KeyphrasesExtractor,
     OverlapScoreBuilder,
     SummaryExtractor,
+    apply_transforms,
 )
 from ragas.testset.transforms.default import CustomNodeFilter, NERExtractor, ThemesExtractor
-from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
-from ragas.testset.synthesizers.multi_hop import (
-    MultiHopAbstractQuerySynthesizer,
-    MultiHopSpecificQuerySynthesizer,
-)
 
 from config import (
     DEFAULT_EVAL_EMBEDDING,
@@ -58,9 +58,8 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, NOW_SQL
+from db.init import NOW_SQL, get_db
 from evaluation.metrics.multi_llm_judge import _extract_json
-
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +100,7 @@ def set_progress(project_id: int, data: dict, kg_source: str = "chunks") -> None
     with _progress_lock:
         _progress[(project_id, kg_source)] = data
     if os.environ.get("KG_PROGRESS_PIPE"):
-        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **data}), flush=True)
+        pass
 
 
 def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> None:
@@ -109,11 +108,11 @@ def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> Non
         key = (project_id, kg_source)
         if key in _progress:
             _progress[key].update(fields)
-            snapshot = dict(_progress[key])
+            dict(_progress[key])
         else:
-            snapshot = fields
+            pass
     if os.environ.get("KG_PROGRESS_PIPE"):
-        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **snapshot}), flush=True)
+        pass
 
 
 def get_progress(project_id: int, kg_source: str = "chunks") -> dict | None:
@@ -225,6 +224,7 @@ class CombinedNodeExtractor:
 
     def generate_execution_plan(self, kg: "KnowledgeGraph") -> list:  # type: ignore[return]
         from ragas.testset.graph import KnowledgeGraph as _KG  # noqa: F401
+
         from pipeline.llm import chat_completion
 
         async def _process(node) -> None:
@@ -993,7 +993,7 @@ def build_kg_standalone(
     ).fetchall()
     chunks = [r["content"] for r in rows]
     if not chunks:
-        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+        raise ValueError(f"No chunks found for chunk_config_id={chunk_config_id}")
 
     set_progress(project_id, {
         "stage": "building_knowledge_graph",
@@ -1039,7 +1039,7 @@ def build_kg_standalone_from_documents(
     """
     doc_texts = _fetch_document_texts(project_id)
     if not doc_texts:
-        raise ValueError("No documents found for project_id=%d" % project_id)
+        raise ValueError(f"No documents found for project_id={project_id}")
 
     set_progress(project_id, {
         "stage": "building_knowledge_graph",
@@ -1075,7 +1075,6 @@ def rebuild_kg_links(
     Much faster than a full rebuild since it skips headline and keyphrase
     extraction (the expensive LLM steps).
     """
-    from ragas.run_config import RunConfig
 
     db = get_db()
     row = db.execute(
@@ -1235,8 +1234,8 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
+
     import db.init as _db
-    from ragas.run_config import RunConfig
 
     conn = _db.get_thread_db()
 
@@ -1247,7 +1246,7 @@ def incremental_update_kg(
     ).fetchall()
     new_chunks = [r["content"] for r in chunk_rows]
     if not new_chunks:
-        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+        raise ValueError(f"No chunks found for chunk_config_id={chunk_config_id}")
 
     # Load existing KG
     row = conn.execute(
@@ -1356,7 +1355,7 @@ def incremental_update_kg(
             new_chunk_indices = [i for i in range(len(new_chunks)) if i not in matched_new_indices]
 
             new_kg = KnowledgeGraph()
-            for idx, chunk in zip(new_chunk_indices, added_chunks):
+            for idx, chunk in zip(new_chunk_indices, added_chunks, strict=False):
                 new_kg.nodes.append(
                     Node(
                         type=NodeType.DOCUMENT,
@@ -2103,8 +2102,9 @@ def _generate_bridge_questions(
     if count <= 0:
         return []
 
-    import networkx as nx
     import random
+
+    import networkx as nx
 
     G, node_lookup = _get_kg_graph(kg)
     if len(G.nodes) < 4:
@@ -2497,7 +2497,7 @@ def _generate_project_testset_inner(
     # the full chunk list because those questions rely on graph-wide
     # connectivity — sampling would degrade quality.
     # ---------------------------------------------------------------------------
-    prebuilt_kg: "KnowledgeGraph | None" = None
+    prebuilt_kg: KnowledgeGraph | None = None
     effective_chunks = chunks
 
     if node_sample_size > 0:

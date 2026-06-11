@@ -53,7 +53,7 @@ async def rerank(
     )
 
     reranked = []
-    for ctx, score in zip(contexts, scores):
+    for ctx, score in zip(contexts, scores, strict=False):
         reranked.append({**ctx, "score": float(score)})
 
     reranked.sort(key=lambda x: x["score"], reverse=True)

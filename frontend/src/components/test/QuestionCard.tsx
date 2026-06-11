@@ -1,44 +1,44 @@
-import { useState } from "react";
-import type { TestQuestion } from "../../lib/api";
-import { annotateQuestion } from "../../lib/api";
+import { useState } from 'react';
+import type { TestQuestion } from '../../lib/api';
+import { annotateQuestion } from '../../lib/api';
 
 const CATEGORY_COLORS: Record<string, string> = {
-  typical: "bg-indigo-500/15 text-indigo-300",
-  in_knowledge_base: "bg-teal-500/15 text-teal-300",
-  edge: "bg-orange-500/15 text-orange-300",
-  out_of_knowledge_base: "bg-purple-500/15 text-purple-300",
-  bridge: "bg-red-500/15 text-red-300",
-  comparative: "bg-cyan-500/15 text-cyan-300",
-  community: "bg-lime-500/15 text-lime-300",
+  typical: 'bg-indigo-500/15 text-indigo-300',
+  in_knowledge_base: 'bg-teal-500/15 text-teal-300',
+  edge: 'bg-orange-500/15 text-orange-300',
+  out_of_knowledge_base: 'bg-purple-500/15 text-purple-300',
+  bridge: 'bg-red-500/15 text-red-300',
+  comparative: 'bg-cyan-500/15 text-cyan-300',
+  community: 'bg-lime-500/15 text-lime-300',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
-  typical: "Typical",
-  in_knowledge_base: "In KB",
-  edge: "Edge",
-  out_of_knowledge_base: "Out of KB",
-  bridge: "Bridge",
-  comparative: "Comparative",
-  community: "Community",
+  typical: 'Typical',
+  in_knowledge_base: 'In KB',
+  edge: 'Edge',
+  out_of_knowledge_base: 'Out of KB',
+  bridge: 'Bridge',
+  comparative: 'Comparative',
+  community: 'Community',
 };
 
 const DIFFICULTY_COLORS: Record<string, string> = {
-  easy: "bg-green-500/15 text-green-300",
-  medium: "bg-yellow-500/15 text-yellow-300",
-  hard: "bg-red-500/15 text-red-300",
+  easy: 'bg-green-500/15 text-green-300',
+  medium: 'bg-yellow-500/15 text-yellow-300',
+  hard: 'bg-red-500/15 text-red-300',
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-yellow-500/15 text-yellow-300",
-  approved: "bg-green-500/15 text-green-300",
-  rejected: "bg-red-500/15 text-red-300",
-  edited: "bg-blue-500/15 text-blue-300",
+  pending: 'bg-yellow-500/15 text-yellow-300',
+  approved: 'bg-green-500/15 text-green-300',
+  rejected: 'bg-red-500/15 text-red-300',
+  edited: 'bg-blue-500/15 text-blue-300',
 };
 
 const FLASH_COLORS: Record<string, string> = {
-  approved: "border-green-400/60",
-  rejected: "border-red-400/60",
-  edited: "border-blue-400/60",
+  approved: 'border-green-400/60',
+  rejected: 'border-red-400/60',
+  edited: 'border-blue-400/60',
 };
 
 interface Props {
@@ -61,12 +61,12 @@ export default function QuestionCard({
   const [q, setQ] = useState<TestQuestion>(question);
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editAnswer, setEditAnswer] = useState("");
+  const [editAnswer, setEditAnswer] = useState('');
   const [editContexts, setEditContexts] = useState<string[]>([]);
-  const [editNotes, setEditNotes] = useState("");
-  const [editReferenceSql, setEditReferenceSql] = useState("");
+  const [editNotes, setEditNotes] = useState('');
+  const [editReferenceSql, setEditReferenceSql] = useState('');
   const [editSchemaContexts, setEditSchemaContexts] = useState<string[]>([]);
-  const [editReferenceData, setEditReferenceData] = useState("");
+  const [editReferenceData, setEditReferenceData] = useState('');
   const [showDomainFields, setShowDomainFields] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,10 +77,10 @@ export default function QuestionCard({
     setQ(question);
   }
 
-  const refAnswer = q.reference_answer || "";
+  const refAnswer = q.reference_answer || '';
   const needsTruncate = refAnswer.length > 150;
 
-  const doAnnotate = async (status: "approved" | "rejected") => {
+  const doAnnotate = async (status: 'approved' | 'rejected') => {
     setSaving(true);
     setError(null);
     try {
@@ -91,7 +91,7 @@ export default function QuestionCard({
       triggerFlash(status);
       onAnnotated();
     } catch (err) {
-      setError((err as Error).message || "Annotation failed");
+      setError((err as Error).message || 'Annotation failed');
     } finally {
       setSaving(false);
     }
@@ -110,38 +110,36 @@ export default function QuestionCard({
       if (editReferenceData.trim()) metadata.reference_data = editReferenceData.trim();
 
       const updated = await annotateQuestion(projectId, testSetId, q.id, {
-        status: "edited",
+        status: 'edited',
         user_edited_answer: editAnswer,
-        user_edited_contexts: editContexts.some((c) => c.trim()) ? editContexts.filter((c) => c.trim()) : undefined,
+        user_edited_contexts: editContexts.some((c) => c.trim())
+          ? editContexts.filter((c) => c.trim())
+          : undefined,
         user_notes: editNotes || undefined,
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       });
       setQ(updated);
       setEditing(false);
-      triggerFlash("edited");
+      triggerFlash('edited');
       onAnnotated();
     } catch (err) {
-      setError((err as Error).message || "Save failed");
+      setError((err as Error).message || 'Save failed');
     } finally {
       setSaving(false);
     }
   };
 
   const openEdit = () => {
-    setEditAnswer(q.user_edited_answer || q.reference_answer || "");
+    setEditAnswer(q.user_edited_answer || q.reference_answer || '');
     setEditContexts(q.user_edited_contexts || q.reference_contexts || []);
-    setEditNotes(q.user_notes || "");
+    setEditNotes(q.user_notes || '');
     const meta = q.metadata || {};
-    setEditReferenceSql((meta.reference_sql as string) || "");
+    setEditReferenceSql((meta.reference_sql as string) || '');
     setEditSchemaContexts(
-      Array.isArray(meta.schema_contexts)
-        ? (meta.schema_contexts as string[])
-        : [],
+      Array.isArray(meta.schema_contexts) ? (meta.schema_contexts as string[]) : [],
     );
-    setEditReferenceData((meta.reference_data as string) || "");
-    setShowDomainFields(
-      !!(meta.reference_sql || meta.schema_contexts || meta.reference_data),
-    );
+    setEditReferenceData((meta.reference_data as string) || '');
+    setShowDomainFields(!!(meta.reference_sql || meta.schema_contexts || meta.reference_data));
     setEditing(true);
     setError(null);
   };
@@ -157,8 +155,8 @@ export default function QuestionCard({
   };
 
   const borderClass = flash
-    ? `${FLASH_COLORS[flash] || "border-border"} transition-colors duration-300`
-    : "border-border";
+    ? `${FLASH_COLORS[flash] || 'border-border'} transition-colors duration-300`
+    : 'border-border';
 
   return (
     <div className={`rounded-xl border ${borderClass} bg-card px-4 py-3`}>
@@ -182,16 +180,14 @@ export default function QuestionCard({
             <div className="mt-2">
               <p className="text-xs text-text-muted">Reference answer:</p>
               <p className="mt-0.5 text-sm text-text-secondary">
-                {expanded || !needsTruncate
-                  ? refAnswer
-                  : refAnswer.slice(0, 150) + "\u2026"}
+                {expanded || !needsTruncate ? refAnswer : refAnswer.slice(0, 150) + '\u2026'}
               </p>
               {needsTruncate && (
                 <button
                   onClick={() => setExpanded(!expanded)}
                   className="mt-1 text-xs text-accent hover:underline"
                 >
-                  {expanded ? "Show less" : "Show more"}
+                  {expanded ? 'Show less' : 'Show more'}
                 </button>
               )}
             </div>
@@ -203,9 +199,7 @@ export default function QuestionCard({
               <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
                 <span className="ml-0.5">
                   Reference contexts ({(q.user_edited_contexts || q.reference_contexts).length})
-                  {q.user_edited_contexts && (
-                    <span className="ml-1 text-blue-400">(edited)</span>
-                  )}
+                  {q.user_edited_contexts && <span className="ml-1 text-blue-400">(edited)</span>}
                 </span>
               </summary>
               <div className="mt-2 space-y-2">
@@ -214,9 +208,7 @@ export default function QuestionCard({
                     key={i}
                     className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed"
                   >
-                    <span className="mr-1.5 font-medium text-text-muted">
-                      [{i + 1}]
-                    </span>
+                    <span className="mr-1.5 font-medium text-text-muted">[{i + 1}]</span>
                     {ctx}
                   </div>
                 ))}
@@ -225,56 +217,70 @@ export default function QuestionCard({
           )}
 
           {/* Domain-specific metadata (read-only) */}
-          {!editing && q.metadata && !!(q.metadata.reference_sql || q.metadata.reference_data || q.metadata.schema_contexts) && (
-            <details className="mt-2 group">
-              <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
-                <span className="ml-0.5">Domain-specific data</span>
-              </summary>
-              <div className="mt-2 space-y-2">
-                {!!q.metadata.reference_sql && (
-                  <div className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed">
-                    <span className="font-medium text-teal-400">Reference SQL:</span>
-                    <pre className="mt-1 whitespace-pre-wrap font-mono">{String(q.metadata.reference_sql)}</pre>
-                  </div>
-                )}
-                {Array.isArray(q.metadata.schema_contexts) && (q.metadata.schema_contexts as string[]).length > 0 && (
-                  <div className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed">
-                    <span className="font-medium text-teal-400">Schema contexts:</span>
-                    {(q.metadata.schema_contexts as string[]).map((sc, i) => (
-                      <pre key={i} className="mt-1 whitespace-pre-wrap font-mono">{String(sc)}</pre>
-                    ))}
-                  </div>
-                )}
-                {!!q.metadata.reference_data && (
-                  <div className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed">
-                    <span className="font-medium text-teal-400">Reference data:</span>
-                    <pre className="mt-1 whitespace-pre-wrap font-mono">{String(q.metadata.reference_data)}</pre>
-                  </div>
-                )}
-              </div>
-            </details>
-          )}
+          {!editing &&
+            q.metadata &&
+            !!(
+              q.metadata.reference_sql ||
+              q.metadata.reference_data ||
+              q.metadata.schema_contexts
+            ) && (
+              <details className="mt-2 group">
+                <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
+                  <span className="ml-0.5">Domain-specific data</span>
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {!!q.metadata.reference_sql && (
+                    <div className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed">
+                      <span className="font-medium text-teal-400">Reference SQL:</span>
+                      <pre className="mt-1 whitespace-pre-wrap font-mono">
+                        {String(q.metadata.reference_sql)}
+                      </pre>
+                    </div>
+                  )}
+                  {Array.isArray(q.metadata.schema_contexts) &&
+                    (q.metadata.schema_contexts as string[]).length > 0 && (
+                      <div className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed">
+                        <span className="font-medium text-teal-400">Schema contexts:</span>
+                        {(q.metadata.schema_contexts as string[]).map((sc, i) => (
+                          <pre key={i} className="mt-1 whitespace-pre-wrap font-mono">
+                            {String(sc)}
+                          </pre>
+                        ))}
+                      </div>
+                    )}
+                  {!!q.metadata.reference_data && (
+                    <div className="rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary leading-relaxed">
+                      <span className="font-medium text-teal-400">Reference data:</span>
+                      <pre className="mt-1 whitespace-pre-wrap font-mono">
+                        {String(q.metadata.reference_data)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </details>
+            )}
 
           {/* Graph path (bridge / comparative / community questions) */}
-          {!editing && !!q.metadata?.graph_path && Array.isArray(q.metadata.graph_path) && (q.metadata.graph_path as string[]).length > 0 && (
-            <details className="mt-2 group">
-              <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
-                <span className="ml-0.5">Graph path</span>
-              </summary>
-              <div className="mt-1.5 rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary font-mono leading-relaxed">
-                {(q.metadata.graph_path as string[]).join(" → ")}
-              </div>
-            </details>
-          )}
+          {!editing &&
+            !!q.metadata?.graph_path &&
+            Array.isArray(q.metadata.graph_path) &&
+            (q.metadata.graph_path as string[]).length > 0 && (
+              <details className="mt-2 group">
+                <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
+                  <span className="ml-0.5">Graph path</span>
+                </summary>
+                <div className="mt-1.5 rounded-lg bg-deep px-3 py-2 text-xs text-text-secondary font-mono leading-relaxed">
+                  {(q.metadata.graph_path as string[]).join(' → ')}
+                </div>
+              </details>
+            )}
 
           {/* Edit mode */}
           {editing && (
             <div className="mt-3 space-y-3">
               {/* Original answer — read-only context */}
               <div>
-                <p className="text-xs font-medium text-text-muted">
-                  Original reference answer
-                </p>
+                <p className="text-xs font-medium text-text-muted">Original reference answer</p>
                 <p className="mt-1 rounded-lg bg-deep px-3 py-2 text-xs text-text-muted">
                   {refAnswer}
                 </p>
@@ -303,7 +309,9 @@ export default function QuestionCard({
                 <div className="mt-1 space-y-2">
                   {editContexts.map((ctx, i) => (
                     <div key={i} className="flex gap-2">
-                      <span className="mt-2 text-xs font-medium text-text-muted shrink-0">[{i + 1}]</span>
+                      <span className="mt-2 text-xs font-medium text-text-muted shrink-0">
+                        [{i + 1}]
+                      </span>
                       <textarea
                         value={ctx}
                         onChange={(e) => {
@@ -319,14 +327,24 @@ export default function QuestionCard({
                         className="mt-1 shrink-0 text-xs text-red-400 hover:text-red-300"
                         title="Remove context"
                       >
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        <svg
+                          className="h-4 w-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
                         </svg>
                       </button>
                     </div>
                   ))}
                   <button
-                    onClick={() => setEditContexts([...editContexts, ""])}
+                    onClick={() => setEditContexts([...editContexts, ''])}
                     className="text-xs text-accent hover:text-accent/80 transition"
                   >
                     + Add context
@@ -342,8 +360,11 @@ export default function QuestionCard({
                   className="flex w-full items-center gap-1.5 text-xs font-medium text-teal-400 hover:text-teal-300 transition"
                 >
                   <svg
-                    className={`h-3 w-3 transition-transform ${showDomainFields ? "rotate-90" : ""}`}
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                    className={`h-3 w-3 transition-transform ${showDomainFields ? 'rotate-90' : ''}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
@@ -387,18 +408,30 @@ export default function QuestionCard({
                               placeholder="CREATE TABLE users (id INT, name TEXT, ...);"
                             />
                             <button
-                              onClick={() => setEditSchemaContexts(editSchemaContexts.filter((_, j) => j !== i))}
+                              onClick={() =>
+                                setEditSchemaContexts(editSchemaContexts.filter((_, j) => j !== i))
+                              }
                               className="mt-1 shrink-0 text-xs text-red-400 hover:text-red-300"
                               title="Remove"
                             >
-                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              <svg
+                                className="h-4 w-4"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M6 18L18 6M6 6l12 12"
+                                />
                               </svg>
                             </button>
                           </div>
                         ))}
                         <button
-                          onClick={() => setEditSchemaContexts([...editSchemaContexts, ""])}
+                          onClick={() => setEditSchemaContexts([...editSchemaContexts, ''])}
                           className="text-xs text-teal-400 hover:text-teal-300 transition"
                         >
                           + Add schema context
@@ -409,7 +442,7 @@ export default function QuestionCard({
                     {/* Reference data */}
                     <div>
                       <label className="text-xs font-medium text-text-secondary">
-                        Reference data{" "}
+                        Reference data{' '}
                         <span className="font-normal text-text-muted">(CSV/tabular)</span>
                       </label>
                       <textarea
@@ -417,7 +450,7 @@ export default function QuestionCard({
                         onChange={(e) => setEditReferenceData(e.target.value)}
                         rows={4}
                         className="mt-1 w-full resize-y rounded-lg border border-border bg-input px-3 py-2 font-mono text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
-                        placeholder={"col1,col2,col3\nval1,val2,val3\n..."}
+                        placeholder={'col1,col2,col3\nval1,val2,val3\n...'}
                       />
                     </div>
                   </div>
@@ -427,8 +460,7 @@ export default function QuestionCard({
               {/* Notes */}
               <div>
                 <label className="text-xs font-medium text-text-secondary">
-                  Notes{" "}
-                  <span className="font-normal text-text-muted">(optional)</span>
+                  Notes <span className="font-normal text-text-muted">(optional)</span>
                 </label>
                 <textarea
                   value={editNotes}
@@ -446,7 +478,7 @@ export default function QuestionCard({
                   disabled={saving || !editAnswer.trim()}
                   className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-500 disabled:opacity-40"
                 >
-                  {saving ? "Saving\u2026" : "Save"}
+                  {saving ? 'Saving\u2026' : 'Save'}
                 </button>
                 <button
                   onClick={cancelEdit}
@@ -460,15 +492,13 @@ export default function QuestionCard({
           )}
 
           {/* Error */}
-          {error && (
-            <p className="mt-2 text-xs text-red-400">{error}</p>
-          )}
+          {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
 
           {/* Badges + action buttons */}
           <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
             {/* Status badge */}
             <span
-              className={`rounded-full px-2 py-0.5 font-medium ${STATUS_COLORS[q.status] || "bg-gray-500/15 text-gray-300"}`}
+              className={`rounded-full px-2 py-0.5 font-medium ${STATUS_COLORS[q.status] || 'bg-gray-500/15 text-gray-300'}`}
             >
               {q.status}
             </span>
@@ -476,7 +506,7 @@ export default function QuestionCard({
             {/* Category badge */}
             {q.category && (
               <span
-                className={`rounded-full px-2 py-0.5 font-medium ${CATEGORY_COLORS[q.category] || "bg-gray-500/15 text-gray-300"}`}
+                className={`rounded-full px-2 py-0.5 font-medium ${CATEGORY_COLORS[q.category] || 'bg-gray-500/15 text-gray-300'}`}
               >
                 {CATEGORY_LABELS[q.category] || q.category}
               </span>
@@ -485,9 +515,10 @@ export default function QuestionCard({
             {/* Difficulty badge */}
             {(q.metadata?.difficulty as string | undefined) && (
               <span
-                className={`rounded-full px-2 py-0.5 font-medium ${DIFFICULTY_COLORS[q.metadata!.difficulty as string] ?? "bg-gray-500/15 text-gray-300"}`}
+                className={`rounded-full px-2 py-0.5 font-medium ${DIFFICULTY_COLORS[q.metadata!.difficulty as string] ?? 'bg-gray-500/15 text-gray-300'}`}
               >
-                {(q.metadata!.difficulty as string).charAt(0).toUpperCase() + (q.metadata!.difficulty as string).slice(1)}
+                {(q.metadata!.difficulty as string).charAt(0).toUpperCase() +
+                  (q.metadata!.difficulty as string).slice(1)}
               </span>
             )}
 
@@ -499,9 +530,7 @@ export default function QuestionCard({
             )}
 
             {/* Persona badge */}
-            {q.persona && (
-              <span className="text-text-muted italic">{q.persona}</span>
-            )}
+            {q.persona && <span className="text-text-muted italic">{q.persona}</span>}
 
             {/* Spacer */}
             <span className="flex-1" />
@@ -509,18 +538,18 @@ export default function QuestionCard({
             {/* Annotation actions */}
             {!editing && (
               <div className="flex gap-1.5">
-                {q.status !== "approved" && (
+                {q.status !== 'approved' && (
                   <button
-                    onClick={() => doAnnotate("approved")}
+                    onClick={() => doAnnotate('approved')}
                     disabled={saving}
                     className="rounded-md border border-green-500/30 px-2 py-1 text-green-400 transition hover:bg-green-500/10 disabled:opacity-40"
                   >
                     Approve
                   </button>
                 )}
-                {q.status !== "rejected" && (
+                {q.status !== 'rejected' && (
                   <button
-                    onClick={() => doAnnotate("rejected")}
+                    onClick={() => doAnnotate('rejected')}
                     disabled={saving}
                     className="rounded-md border border-red-500/30 px-2 py-1 text-red-400 transition hover:bg-red-500/10 disabled:opacity-40"
                   >

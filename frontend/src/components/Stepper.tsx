@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { NavLink, useLocation } from "react-router-dom";
-import { useProject } from "../contexts/ProjectContext";
+import { useState, useEffect } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { useProject } from '../contexts/ProjectContext';
 import {
   fetchDocuments,
   fetchChunkConfigs,
@@ -8,38 +8,38 @@ import {
   fetchRagConfigs,
   fetchTestSets,
   fetchExperiments,
-} from "../lib/api";
+} from '../lib/api';
 
 const stages = [
   {
-    path: "setup",
-    label: "Setup",
-    desc: "Project & documents",
-    icon: "01",
+    path: 'setup',
+    label: 'Setup',
+    desc: 'Project & documents',
+    icon: '01',
   },
   {
-    path: "build",
-    label: "Build",
-    desc: "Chunking, embedding, RAG",
-    icon: "02",
+    path: 'build',
+    label: 'Build',
+    desc: 'Chunking, embedding, RAG',
+    icon: '02',
   },
   {
-    path: "test",
-    label: "Test",
-    desc: "Generate & annotate",
-    icon: "03",
+    path: 'test',
+    label: 'Test',
+    desc: 'Generate & annotate',
+    icon: '03',
   },
   {
-    path: "experiment",
-    label: "Experiment",
-    desc: "Configure & run",
-    icon: "04",
+    path: 'experiment',
+    label: 'Experiment',
+    desc: 'Configure & run',
+    icon: '04',
   },
   {
-    path: "analyze",
-    label: "Analyze",
-    desc: "Results & iterate",
-    icon: "05",
+    path: 'analyze',
+    label: 'Analyze',
+    desc: 'Results & iterate',
+    icon: '05',
   },
 ] as const;
 
@@ -58,32 +58,23 @@ function useStageCompletion(projectId: number | null) {
 
     async function check() {
       try {
-        const [docs, chunks, embeddings, rags, testSets, experiments] =
-          await Promise.all([
-            fetchDocuments(projectId!),
-            fetchChunkConfigs(projectId!),
-            fetchEmbeddingConfigs(projectId!),
-            fetchRagConfigs(projectId!),
-            fetchTestSets(projectId!),
-            fetchExperiments(projectId!),
-          ]);
+        const [docs, chunks, embeddings, rags, testSets, experiments] = await Promise.all([
+          fetchDocuments(projectId!),
+          fetchChunkConfigs(projectId!),
+          fetchEmbeddingConfigs(projectId!),
+          fetchRagConfigs(projectId!),
+          fetchTestSets(projectId!),
+          fetchExperiments(projectId!),
+        ]);
 
         if (cancelled) return;
 
-        const hasCompletedExperiment = experiments.some(
-          (e) => e.status === "completed",
-        );
+        const hasCompletedExperiment = experiments.some((e) => e.status === 'completed');
 
         setCompleted({
           setup: true, // always true when project exists
-          build:
-            docs.length > 0 &&
-            chunks.length > 0 &&
-            embeddings.length > 0 &&
-            rags.length > 0,
-          test:
-            testSets.length > 0 &&
-            testSets.some((ts) => ts.approved_count > 0),
+          build: docs.length > 0 && chunks.length > 0 && embeddings.length > 0 && rags.length > 0,
+          test: testSets.length > 0 && testSets.some((ts) => ts.approved_count > 0),
           experiment: hasCompletedExperiment,
           analyze: hasCompletedExperiment,
         });
@@ -107,28 +98,24 @@ export default function Stepper() {
   const location = useLocation();
   const completed = useStageCompletion(project?.id ?? null);
 
-  const currentPath = location.pathname.split("/").pop() ?? "";
+  const currentPath = location.pathname.split('/').pop() ?? '';
 
-  const isKgActive = currentPath === "knowledge-graph";
-  const isPersonasActive = currentPath === "personas";
-  const isWorkersActive = currentPath === "workers";
+  const isKgActive = currentPath === 'knowledge-graph';
+  const isPersonasActive = currentPath === 'personas';
+  const isWorkersActive = currentPath === 'workers';
 
   return (
-    <nav
-      role="navigation"
-      aria-label="Pipeline stages"
-      className="flex flex-col gap-1 px-3 py-4"
-    >
+    <nav role="navigation" aria-label="Pipeline stages" className="flex flex-col gap-1 px-3 py-4">
       {stages.map((stage) => {
         const isActive = currentPath === stage.path;
-        const isLocked = !project && stage.path !== "setup";
+        const isLocked = !project && stage.path !== 'setup';
         const isComplete = !!completed[stage.path] && !isActive;
 
         return (
           <NavLink
             key={stage.path}
-            to={isLocked ? "#" : `/${stage.path}`}
-            aria-current={isActive ? "step" : undefined}
+            to={isLocked ? '#' : `/${stage.path}`}
+            aria-current={isActive ? 'step' : undefined}
             aria-disabled={isLocked}
             onClick={(e) => {
               if (isLocked) e.preventDefault();
@@ -139,10 +126,10 @@ export default function Stepper() {
               focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
               ${
                 isActive
-                  ? "bg-accent-glow text-text-primary"
+                  ? 'bg-accent-glow text-text-primary'
                   : isLocked
-                    ? "cursor-not-allowed opacity-40"
-                    : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+                    ? 'cursor-not-allowed opacity-40'
+                    : 'text-text-secondary hover:bg-elevated hover:text-text-primary'
               }
             `}
           >
@@ -154,10 +141,10 @@ export default function Stepper() {
                 transition-colors duration-200
                 ${
                   isActive
-                    ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
+                    ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
                     : isComplete
-                      ? "bg-emerald-500/15 text-emerald-400"
-                      : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
                 }
               `}
             >
@@ -179,9 +166,7 @@ export default function Stepper() {
             </span>
 
             <div className="flex flex-col min-w-0">
-              <span className="text-sm font-medium leading-tight truncate">
-                {stage.label}
-              </span>
+              <span className="text-sm font-medium leading-tight truncate">{stage.label}</span>
               <span className="text-micro text-text-muted leading-tight truncate">
                 {stage.desc}
               </span>
@@ -207,8 +192,8 @@ export default function Stepper() {
           focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
           ${
             isKgActive
-              ? "bg-accent-glow text-text-primary"
-              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+              ? 'bg-accent-glow text-text-primary'
+              : 'text-text-secondary hover:bg-elevated hover:text-text-primary'
           }
         `}
       >
@@ -218,12 +203,18 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isKgActive
-                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
-                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -232,9 +223,7 @@ export default function Stepper() {
           </svg>
         </span>
         <div className="flex flex-col min-w-0">
-          <span className="text-sm font-medium leading-tight truncate">
-            Knowledge Graphs
-          </span>
+          <span className="text-sm font-medium leading-tight truncate">Knowledge Graphs</span>
           <span className="text-micro text-text-muted leading-tight truncate">
             Explore & visualize
           </span>
@@ -253,8 +242,8 @@ export default function Stepper() {
           focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
           ${
             isPersonasActive
-              ? "bg-accent-glow text-text-primary"
-              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+              ? 'bg-accent-glow text-text-primary'
+              : 'text-text-secondary hover:bg-elevated hover:text-text-primary'
           }
         `}
       >
@@ -264,22 +253,28 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isPersonasActive
-                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
-                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"
+            />
           </svg>
         </span>
         <div className="flex flex-col min-w-0">
-          <span className="text-sm font-medium leading-tight truncate">
-            Personas
-          </span>
-          <span className="text-micro text-text-muted leading-tight truncate">
-            Edit & manage
-          </span>
+          <span className="text-sm font-medium leading-tight truncate">Personas</span>
+          <span className="text-micro text-text-muted leading-tight truncate">Edit & manage</span>
         </div>
         {isPersonasActive && (
           <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
@@ -295,8 +290,8 @@ export default function Stepper() {
           focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base
           ${
             isWorkersActive
-              ? "bg-accent-glow text-text-primary"
-              : "text-text-secondary hover:bg-elevated hover:text-text-primary"
+              ? 'bg-accent-glow text-text-primary'
+              : 'text-text-secondary hover:bg-elevated hover:text-text-primary'
           }
         `}
       >
@@ -306,12 +301,18 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isWorkersActive
-                ? "bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]"
-                : "bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary"
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -320,9 +321,7 @@ export default function Stepper() {
           </svg>
         </span>
         <div className="flex flex-col min-w-0">
-          <span className="text-sm font-medium leading-tight truncate">
-            Workers
-          </span>
+          <span className="text-sm font-medium leading-tight truncate">Workers</span>
           <span className="text-micro text-text-muted leading-tight truncate">
             Monitor & manage
           </span>

@@ -4,16 +4,7 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
-_LLM_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:\-/]{0,127}$")
-
 from config import (
-    ALLOWED_FILE_TYPES,
-    DEFAULT_EXPERIMENT_METRICS,
-    MAX_BASELINE_CSV_SIZE,
-    MAX_BASELINE_ROWS,
-    MAX_CHUNKS_FOR_GENERATION,
-    MAX_UPLOAD_QA_ROWS,
-    MAX_UPLOAD_SIZE,
     VALID_CHUNK_METHODS,
     VALID_CONNECTOR_TYPES,
     VALID_EMBEDDING_TYPES,
@@ -21,6 +12,7 @@ from config import (
     VALID_SEARCH_TYPES,
 )
 
+_LLM_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:\-/]{0,127}$")
 
 # --- Validation sets ---
 

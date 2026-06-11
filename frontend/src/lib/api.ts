@@ -11,7 +11,7 @@ export interface Project {
 export interface JudgeModel {
   id: string;
   name: string;
-  provider: "openai" | "anthropic" | "gemini" | "gateway";
+  provider: 'openai' | 'anthropic' | 'gemini' | 'gateway';
   available: boolean;
 }
 
@@ -193,7 +193,7 @@ export class ApiError extends Error {
     message: string,
   ) {
     super(message);
-    this.name = "ApiError";
+    this.name = 'ApiError';
   }
 }
 
@@ -201,18 +201,20 @@ export class ApiError extends Error {
  * Send a FormData request and parse the response, extracting error detail on failure.
  */
 async function formRequest<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(path, { method: "POST", body: form });
+  const res = await fetch(path, { method: 'POST', body: form });
   if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
+    const body = await res.text().catch(() => 'Unknown error');
     let detail = body;
     try {
       const parsed = JSON.parse(body);
       if (parsed.detail) {
         detail = Array.isArray(parsed.detail)
-          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join("; ")
+          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join('; ')
           : String(parsed.detail);
       }
-    } catch { /* use raw body */ }
+    } catch {
+      /* use raw body */
+    }
     throw new ApiError(res.status, detail);
   }
   return res.json() as Promise<T>;
@@ -222,19 +224,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      'Content-Type': 'application/json',
       ...init?.headers,
     },
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
+    const body = await res.text().catch(() => 'Unknown error');
     let detail = body;
     try {
       const parsed = JSON.parse(body);
       if (parsed.detail) {
         detail = Array.isArray(parsed.detail)
-          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join("; ")
+          ? parsed.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join('; ')
           : String(parsed.detail);
       }
     } catch {
@@ -260,34 +262,32 @@ let _configCache: ConfigDefaults | null = null;
 
 export async function fetchConfigDefaults(): Promise<ConfigDefaults> {
   if (_configCache) return _configCache;
-  _configCache = await request<ConfigDefaults>("/api/config/defaults");
+  _configCache = await request<ConfigDefaults>('/api/config/defaults');
   return _configCache;
 }
 
 export async function fetchProjects(): Promise<Project[]> {
-  return request<Project[]>("/api/projects");
+  return request<Project[]>('/api/projects');
 }
 
 export async function fetchProject(projectId: number): Promise<Project> {
   return request<Project>(`/api/projects/${projectId}`);
 }
 
-export async function createProject(
-  payload: CreateProjectPayload,
-): Promise<Project> {
-  return request<Project>("/api/projects", {
-    method: "POST",
+export async function createProject(payload: CreateProjectPayload): Promise<Project> {
+  return request<Project>('/api/projects', {
+    method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
 export async function fetchJudgeModels(): Promise<JudgeModelsResponse> {
-  return request<JudgeModelsResponse>("/api/judge-models");
+  return request<JudgeModelsResponse>('/api/judge-models');
 }
 
 export async function deleteProject(projectId: number): Promise<void> {
   await request<{ detail: string }>(`/api/projects/${projectId}`, {
-    method: "DELETE",
+    method: 'DELETE',
   });
 }
 
@@ -296,20 +296,17 @@ export async function updateProjectJudgeDefaults(
   assignments: string[] | null,
 ): Promise<Project> {
   return request<Project>(`/api/projects/${projectId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ judge_model_assignments: assignments }),
   });
 }
 
 // --- External Baseline API ---
 
-export async function previewBaselineCsv(
-  projectId: number,
-  file: File,
-): Promise<CsvPreviewResult> {
+export async function previewBaselineCsv(projectId: number, file: File): Promise<CsvPreviewResult> {
   const form = new FormData();
-  form.append("file", file);
+  form.append('file', file);
   return formRequest<CsvPreviewResult>(`/api/projects/${projectId}/baselines/preview-csv`, form);
 }
 
@@ -325,38 +322,28 @@ export async function uploadBaselineCsv(
   },
 ): Promise<CsvUploadResult> {
   const form = new FormData();
-  form.append("file", file);
-  form.append("question_col", columnMapping.questionCol);
-  form.append("answer_col", columnMapping.answerCol);
-  if (columnMapping.referenceAnswerCol) form.append("reference_answer_col", columnMapping.referenceAnswerCol);
-  if (columnMapping.contextCol) form.append("context_col", columnMapping.contextCol);
-  if (columnMapping.configName) form.append("config_name", columnMapping.configName);
+  form.append('file', file);
+  form.append('question_col', columnMapping.questionCol);
+  form.append('answer_col', columnMapping.answerCol);
+  if (columnMapping.referenceAnswerCol)
+    form.append('reference_answer_col', columnMapping.referenceAnswerCol);
+  if (columnMapping.contextCol) form.append('context_col', columnMapping.contextCol);
+  if (columnMapping.configName) form.append('config_name', columnMapping.configName);
   return formRequest<CsvUploadResult>(`/api/projects/${projectId}/baselines/upload-csv`, form);
 }
 
-export async function fetchBaselines(
-  projectId: number,
-): Promise<ExternalBaseline[]> {
+export async function fetchBaselines(projectId: number): Promise<ExternalBaseline[]> {
   return request<ExternalBaseline[]>(`/api/projects/${projectId}/baselines`);
 }
 
-export async function deleteBaseline(
-  projectId: number,
-  baselineId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/baselines/${baselineId}`,
-    { method: "DELETE" },
-  );
+export async function deleteBaseline(projectId: number, baselineId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/baselines/${baselineId}`, {
+    method: 'DELETE',
+  });
 }
 
-export async function clearBaselines(
-  projectId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/baselines`,
-    { method: "DELETE" },
-  );
+export async function clearBaselines(projectId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/baselines`, { method: 'DELETE' });
 }
 
 // --- API Config API ---
@@ -366,24 +353,17 @@ export async function saveApiConfig(
   payload: ApiConfigCreate,
 ): Promise<ApiConfig> {
   return request<ApiConfig>(`/api/projects/${projectId}/api-config`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
-export async function fetchApiConfig(
-  projectId: number,
-): Promise<ApiConfig> {
+export async function fetchApiConfig(projectId: number): Promise<ApiConfig> {
   return request<ApiConfig>(`/api/projects/${projectId}/api-config`);
 }
 
-export async function deleteApiConfig(
-  projectId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/api-config`,
-    { method: "DELETE" },
-  );
+export async function deleteApiConfig(projectId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/api-config`, { method: 'DELETE' });
 }
 
 // --- Document API ---
@@ -392,39 +372,25 @@ export async function fetchDocuments(projectId: number): Promise<Document[]> {
   return request<Document[]>(`/api/projects/${projectId}/documents`);
 }
 
-export async function uploadDocument(
-  projectId: number,
-  file: File,
-): Promise<Document> {
+export async function uploadDocument(projectId: number, file: File): Promise<Document> {
   const form = new FormData();
-  form.append("file", file);
+  form.append('file', file);
   return formRequest<Document>(`/api/projects/${projectId}/documents`, form);
 }
 
-export async function deleteDocument(
-  projectId: number,
-  docId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/documents/${docId}`,
-    { method: "DELETE" },
-  );
+export async function deleteDocument(projectId: number, docId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/documents/${docId}`, {
+    method: 'DELETE',
+  });
 }
 
-export async function deleteAllDocuments(
-  projectId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/documents`,
-    { method: "DELETE" },
-  );
+export async function deleteAllDocuments(projectId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/documents`, { method: 'DELETE' });
 }
 
 // --- Chunk Config API ---
 
-export async function fetchChunkConfigs(
-  projectId: number,
-): Promise<ChunkConfig[]> {
+export async function fetchChunkConfigs(projectId: number): Promise<ChunkConfig[]> {
   return request<ChunkConfig[]>(`/api/projects/${projectId}/chunk-configs`);
 }
 
@@ -433,19 +399,15 @@ export async function createChunkConfig(
   config: ChunkConfigCreate,
 ): Promise<ChunkConfig> {
   return request<ChunkConfig>(`/api/projects/${projectId}/chunk-configs`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify(config),
   });
 }
 
-export async function deleteChunkConfig(
-  projectId: number,
-  configId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/chunk-configs/${configId}`,
-    { method: "DELETE" },
-  );
+export async function deleteChunkConfig(projectId: number, configId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/chunk-configs/${configId}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function previewChunks(
@@ -455,7 +417,7 @@ export async function previewChunks(
 ): Promise<ChunkPreviewResult> {
   return request<ChunkPreviewResult>(
     `/api/projects/${projectId}/chunk-configs/${configId}/preview?document_id=${documentId}`,
-    { method: "POST" },
+    { method: 'POST' },
   );
 }
 
@@ -464,41 +426,33 @@ export async function generateChunks(
   configId: number,
   force: boolean = false,
 ): Promise<ChunkGenerateResult> {
-  const query = force ? "?force=true" : "";
+  const query = force ? '?force=true' : '';
   return request<ChunkGenerateResult>(
     `/api/projects/${projectId}/chunk-configs/${configId}/generate${query}`,
-    { method: "POST" },
+    { method: 'POST' },
   );
 }
 
 // --- Embedding Config API ---
 
-export async function fetchEmbeddingConfigs(
-  projectId: number,
-): Promise<EmbeddingConfig[]> {
-  return request<EmbeddingConfig[]>(
-    `/api/projects/${projectId}/embedding-configs`,
-  );
+export async function fetchEmbeddingConfigs(projectId: number): Promise<EmbeddingConfig[]> {
+  return request<EmbeddingConfig[]>(`/api/projects/${projectId}/embedding-configs`);
 }
 
 export async function createEmbeddingConfig(
   projectId: number,
   config: EmbeddingConfigCreate,
 ): Promise<EmbeddingConfig> {
-  return request<EmbeddingConfig>(
-    `/api/projects/${projectId}/embedding-configs`,
-    { method: "POST", body: JSON.stringify(config) },
-  );
+  return request<EmbeddingConfig>(`/api/projects/${projectId}/embedding-configs`, {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
 }
 
-export async function deleteEmbeddingConfig(
-  projectId: number,
-  configId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/embedding-configs/${configId}`,
-    { method: "DELETE" },
-  );
+export async function deleteEmbeddingConfig(projectId: number, configId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/embedding-configs/${configId}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function embedChunks(
@@ -507,16 +461,13 @@ export async function embedChunks(
   chunkConfigId: number,
   useContextualPrefix: boolean = false,
 ): Promise<EmbedResult> {
-  return request<EmbedResult>(
-    `/api/projects/${projectId}/embedding-configs/${configId}/embed`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        chunk_config_id: chunkConfigId,
-        use_contextual_prefix: useContextualPrefix,
-      }),
-    },
-  );
+  return request<EmbedResult>(`/api/projects/${projectId}/embedding-configs/${configId}/embed`, {
+    method: 'POST',
+    body: JSON.stringify({
+      chunk_config_id: chunkConfigId,
+      use_contextual_prefix: useContextualPrefix,
+    }),
+  });
 }
 
 export async function updateDocumentContextLabel(
@@ -527,7 +478,7 @@ export async function updateDocumentContextLabel(
   return request<{ detail: string; context_label: string }>(
     `/api/projects/${projectId}/documents/${documentId}/context-label`,
     {
-      method: "PATCH",
+      method: 'PATCH',
       body: JSON.stringify({ context_label: contextLabel }),
     },
   );
@@ -535,9 +486,7 @@ export async function updateDocumentContextLabel(
 
 // --- RAG Config API ---
 
-export async function fetchRagConfigs(
-  projectId: number,
-): Promise<RagConfig[]> {
+export async function fetchRagConfigs(projectId: number): Promise<RagConfig[]> {
   return request<RagConfig[]>(`/api/projects/${projectId}/rag-configs`);
 }
 
@@ -546,14 +495,12 @@ export async function createRagConfig(
   config: RagConfigCreate,
 ): Promise<RagConfig> {
   return request<RagConfig>(`/api/projects/${projectId}/rag-configs`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify(config),
   });
 }
 
-export async function fetchRagConfigsExpanded(
-  projectId: number,
-): Promise<RagConfigExpanded[]> {
+export async function fetchRagConfigsExpanded(projectId: number): Promise<RagConfigExpanded[]> {
   return request<RagConfigExpanded[]>(`/api/projects/${projectId}/rag-configs/expanded`);
 }
 
@@ -564,14 +511,10 @@ export async function fetchRagConfigExpanded(
   return request<RagConfigExpanded>(`/api/projects/${projectId}/rag-configs/${configId}/expanded`);
 }
 
-export async function deleteRagConfig(
-  projectId: number,
-  configId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/rag-configs/${configId}`,
-    { method: "DELETE" },
-  );
+export async function deleteRagConfig(projectId: number, configId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/rag-configs/${configId}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function queryRag(
@@ -579,10 +522,10 @@ export async function queryRag(
   configId: number,
   query: string,
 ): Promise<RagQueryResult> {
-  return request<RagQueryResult>(
-    `/api/projects/${projectId}/rag-configs/${configId}/query`,
-    { method: "POST", body: JSON.stringify({ query }) },
-  );
+  return request<RagQueryResult>(`/api/projects/${projectId}/rag-configs/${configId}/query`, {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  });
 }
 
 // --- Test Set Types ---
@@ -673,8 +616,11 @@ export async function previewTestSetUpload(
   file: File,
 ): Promise<UploadPreviewResult> {
   const form = new FormData();
-  form.append("file", file);
-  return formRequest<UploadPreviewResult>(`/api/projects/${projectId}/test-sets/upload/preview`, form);
+  form.append('file', file);
+  return formRequest<UploadPreviewResult>(
+    `/api/projects/${projectId}/test-sets/upload/preview`,
+    form,
+  );
 }
 
 export async function confirmTestSetUpload(
@@ -691,23 +637,21 @@ export async function confirmTestSetUpload(
   },
 ): Promise<UploadConfirmResult> {
   const form = new FormData();
-  form.append("file", file);
-  form.append("question_column", questionColumn);
-  form.append("answer_column", answerColumn);
-  if (opts?.contextsColumn) form.append("contexts_column", opts.contextsColumn);
-  if (opts?.referenceSqlColumn) form.append("reference_sql_column", opts.referenceSqlColumn);
-  if (opts?.schemaContextsColumn) form.append("schema_contexts_column", opts.schemaContextsColumn);
-  if (opts?.referenceDataColumn) form.append("reference_data_column", opts.referenceDataColumn);
-  if (opts?.name) form.append("name", opts.name);
+  form.append('file', file);
+  form.append('question_column', questionColumn);
+  form.append('answer_column', answerColumn);
+  if (opts?.contextsColumn) form.append('contexts_column', opts.contextsColumn);
+  if (opts?.referenceSqlColumn) form.append('reference_sql_column', opts.referenceSqlColumn);
+  if (opts?.schemaContextsColumn) form.append('schema_contexts_column', opts.schemaContextsColumn);
+  if (opts?.referenceDataColumn) form.append('reference_data_column', opts.referenceDataColumn);
+  if (opts?.name) form.append('name', opts.name);
   return formRequest<UploadConfirmResult>(`/api/projects/${projectId}/test-sets/upload`, form);
 }
 
 // --- Test Set API ---
 
 export async function fetchTestSets(projectId: number): Promise<TestSet[]> {
-  const data = await request<{ test_sets: TestSet[] }>(
-    `/api/projects/${projectId}/test-sets`,
-  );
+  const data = await request<{ test_sets: TestSet[] }>(`/api/projects/${projectId}/test-sets`);
   return data.test_sets;
 }
 
@@ -723,12 +667,8 @@ export interface SavedPersona {
 
 // --- Persona API ---
 
-export async function fetchPersonas(
-  projectId: number,
-): Promise<SavedPersona[]> {
-  const data = await request<{ personas: SavedPersona[] }>(
-    `/api/projects/${projectId}/personas`,
-  );
+export async function fetchPersonas(projectId: number): Promise<SavedPersona[]> {
+  const data = await request<{ personas: SavedPersona[] }>(`/api/projects/${projectId}/personas`);
   return data.personas;
 }
 
@@ -739,7 +679,7 @@ export async function savePersonasBulk(
   const data = await request<{ personas: SavedPersona[] }>(
     `/api/projects/${projectId}/personas/bulk`,
     {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify(personas),
     },
   );
@@ -751,34 +691,30 @@ export async function updatePersona(
   personaId: number,
   updates: { name?: string; role_description?: string; question_style?: string },
 ): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/personas/${personaId}`,
-    { method: "PUT", body: JSON.stringify(updates) },
-  );
+  await request<{ detail: string }>(`/api/projects/${projectId}/personas/${personaId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
 }
 
-export async function deletePersona(
-  projectId: number,
-  personaId: number,
-): Promise<void> {
-  await request<{ detail: string }>(
-    `/api/projects/${projectId}/personas/${personaId}`,
-    { method: "DELETE" },
-  );
+export async function deletePersona(projectId: number, personaId: number): Promise<void> {
+  await request<{ detail: string }>(`/api/projects/${projectId}/personas/${personaId}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function generatePersonas(
   projectId: number,
   chunkConfigId: number,
   numPersonas: number = 3,
-  mode: "fast" | "full" = "fast",
+  mode: 'fast' | 'full' = 'fast',
   signal?: AbortSignal,
 ): Promise<{ name: string; role_description: string; question_style: string }[]> {
   type PersonaResult = { name: string; role_description: string; question_style: string };
   type StartResponse = { status: string; personas?: PersonaResult[] };
 
   const start = await request<StartResponse>(`/api/projects/${projectId}/generate-personas`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify({ chunk_config_id: chunkConfigId, num_personas: numPersonas, mode }),
     signal,
   });
@@ -787,10 +723,14 @@ export async function generatePersonas(
   if (start.personas) return start.personas;
 
   // Full mode: poll until completed or error
-  const sleep = (ms: number) => new Promise<void>((res, rej) => {
-    const t = setTimeout(res, ms);
-    signal?.addEventListener("abort", () => { clearTimeout(t); rej(new DOMException("Aborted", "AbortError")); });
-  });
+  const sleep = (ms: number) =>
+    new Promise<void>((res, rej) => {
+      const t = setTimeout(res, ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(t);
+        rej(new DOMException('Aborted', 'AbortError'));
+      });
+    });
 
   while (true) {
     await sleep(4000);
@@ -798,8 +738,8 @@ export async function generatePersonas(
       `/api/projects/${projectId}/generate-personas/status`,
       { signal },
     );
-    if (poll.status === "completed" && poll.personas) return poll.personas;
-    if (poll.status === "error") throw new Error(poll.detail ?? "Persona generation failed");
+    if (poll.status === 'completed' && poll.personas) return poll.personas;
+    if (poll.status === 'error') throw new Error(poll.detail ?? 'Persona generation failed');
   }
 }
 
@@ -808,7 +748,7 @@ export interface GenerationProgress {
   stage?: string;
   questions_generated?: number;
   target_size?: number;
-  status?: "generating" | "completed" | "failed" | "cancelled";
+  status?: 'generating' | 'completed' | 'failed' | 'cancelled';
   test_set_id?: number;
   error_message?: string;
 }
@@ -817,15 +757,11 @@ export interface CreateTestSetResponse {
   id: number;
   name: string;
   project_id: number;
-  status: "generating";
+  status: 'generating';
 }
 
-export async function fetchGenerationProgress(
-  projectId: number,
-): Promise<GenerationProgress> {
-  return request<GenerationProgress>(
-    `/api/projects/${projectId}/test-sets/generation-progress`,
-  );
+export async function fetchGenerationProgress(projectId: number): Promise<GenerationProgress> {
+  return request<GenerationProgress>(`/api/projects/${projectId}/test-sets/generation-progress`);
 }
 
 export async function cancelTestSetGeneration(
@@ -833,7 +769,7 @@ export async function cancelTestSetGeneration(
   testSetId: number,
 ): Promise<{ status: string; test_set_id: number }> {
   return request(`/api/projects/${projectId}/test-sets/${testSetId}/cancel`, {
-    method: "POST",
+    method: 'POST',
   });
 }
 
@@ -843,18 +779,15 @@ export async function createTestSet(
   signal?: AbortSignal,
 ): Promise<CreateTestSetResponse> {
   return request<CreateTestSetResponse>(`/api/projects/${projectId}/test-sets`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify(config),
     signal,
   });
 }
 
-export async function deleteTestSet(
-  projectId: number,
-  testSetId: number,
-): Promise<void> {
+export async function deleteTestSet(projectId: number, testSetId: number): Promise<void> {
   await request<void>(`/api/projects/${projectId}/test-sets/${testSetId}`, {
-    method: "DELETE",
+    method: 'DELETE',
   });
 }
 
@@ -863,7 +796,7 @@ export async function resumeTestSet(
   testSetId: number,
 ): Promise<{ status: string; existing_questions: number; remaining: number }> {
   return request(`/api/projects/${projectId}/test-sets/${testSetId}/resume`, {
-    method: "POST",
+    method: 'POST',
   });
 }
 
@@ -872,7 +805,7 @@ export async function fetchTestQuestions(
   testSetId: number,
   status?: string,
 ): Promise<TestQuestion[]> {
-  const qs = status ? `?status=${status}` : "";
+  const qs = status ? `?status=${status}` : '';
   const data = await request<{ questions: TestQuestion[] }>(
     `/api/projects/${projectId}/test-sets/${testSetId}/questions${qs}`,
   );
@@ -883,15 +816,13 @@ export async function fetchTestSetSummary(
   projectId: number,
   testSetId: number,
 ): Promise<TestSetSummary> {
-  return request<TestSetSummary>(
-    `/api/projects/${projectId}/test-sets/${testSetId}/summary`,
-  );
+  return request<TestSetSummary>(`/api/projects/${projectId}/test-sets/${testSetId}/summary`);
 }
 
 // --- Annotation Types ---
 
 export interface QuestionAnnotation {
-  status: "approved" | "rejected" | "edited";
+  status: 'approved' | 'rejected' | 'edited';
   user_edited_answer?: string;
   user_edited_contexts?: string[];
   user_notes?: string;
@@ -899,7 +830,7 @@ export interface QuestionAnnotation {
 }
 
 export interface BulkAnnotation {
-  action: "approve" | "reject" | "approve_all" | "reject_all";
+  action: 'approve' | 'reject' | 'approve_all' | 'reject_all';
   question_ids?: number[];
 }
 
@@ -917,7 +848,7 @@ export async function annotateQuestion(
 ): Promise<TestQuestion> {
   return request<TestQuestion>(
     `/api/projects/${projectId}/test-sets/${testSetId}/questions/${questionId}`,
-    { method: "PATCH", body: JSON.stringify(annotation) },
+    { method: 'PATCH', body: JSON.stringify(annotation) },
   );
 }
 
@@ -928,7 +859,7 @@ export async function bulkAnnotateQuestions(
 ): Promise<BulkAnnotationResult> {
   return request<BulkAnnotationResult>(
     `/api/projects/${projectId}/test-sets/${testSetId}/questions/bulk`,
-    { method: "POST", body: JSON.stringify(bulk) },
+    { method: 'POST', body: JSON.stringify(bulk) },
   );
 }
 
@@ -947,7 +878,7 @@ export interface Experiment {
   rag_config_id: number;
   bot_config_id: number | null;
   baseline_experiment_id: number | null;
-  status: "pending" | "running" | "completed" | "failed";
+  status: 'pending' | 'running' | 'completed' | 'failed';
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -987,9 +918,7 @@ export interface ExperimentResult {
 
 // --- Experiment API ---
 
-export async function fetchExperiments(
-  projectId: number,
-): Promise<Experiment[]> {
+export async function fetchExperiments(projectId: number): Promise<Experiment[]> {
   return request<Experiment[]>(`/api/projects/${projectId}/experiments`);
 }
 
@@ -998,7 +927,7 @@ export async function createExperiment(
   data: ExperimentCreate,
 ): Promise<Experiment> {
   return request<Experiment>(`/api/projects/${projectId}/experiments`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify(data),
   });
 }
@@ -1007,29 +936,22 @@ export async function fetchExperiment(
   projectId: number,
   experimentId: number,
 ): Promise<Experiment> {
-  return request<Experiment>(
-    `/api/projects/${projectId}/experiments/${experimentId}`,
-  );
+  return request<Experiment>(`/api/projects/${projectId}/experiments/${experimentId}`);
 }
 
-export async function deleteExperiment(
-  projectId: number,
-  experimentId: number,
-): Promise<void> {
-  await request<void>(
-    `/api/projects/${projectId}/experiments/${experimentId}`,
-    { method: "DELETE" },
-  );
+export async function deleteExperiment(projectId: number, experimentId: number): Promise<void> {
+  await request<void>(`/api/projects/${projectId}/experiments/${experimentId}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function resetExperiment(
   projectId: number,
   experimentId: number,
 ): Promise<Experiment> {
-  return request<Experiment>(
-    `/api/projects/${projectId}/experiments/${experimentId}/reset`,
-    { method: "POST" },
-  );
+  return request<Experiment>(`/api/projects/${projectId}/experiments/${experimentId}/reset`, {
+    method: 'POST',
+  });
 }
 
 export async function cancelExperiment(
@@ -1038,7 +960,7 @@ export async function cancelExperiment(
 ): Promise<{ status: string; experiment_id: number }> {
   return request<{ status: string; experiment_id: number }>(
     `/api/projects/${projectId}/experiments/${experimentId}/cancel`,
-    { method: "POST" },
+    { method: 'POST' },
   );
 }
 
@@ -1096,7 +1018,7 @@ export interface SSECompletionItem {
 
 export interface InFlightDetail {
   question: string;
-  phase: "querying" | "scoring";
+  phase: 'querying' | 'scoring';
   metrics_done: string[];
   metrics_active: string[];
   metrics_pending: string[];
@@ -1151,25 +1073,22 @@ export function runExperimentSSE(
   (async () => {
     try {
       // Fire the run endpoint (returns JSON immediately, starts background task)
-      const runRes = await fetch(
-        `/api/projects/${projectId}/experiments/${experimentId}/run`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            metrics,
-            rubrics: rubrics ?? null,
-            concurrency: concurrency ?? 5,
-            multi_llm_judge_evaluators: multiLlmJudgeEvaluators ?? 5,
-            judge_model_assignments: judgeModelAssignments ?? null,
-            judge_temperature_assignments: judgeTemperatureAssignments ?? null,
-          }),
-          signal: controller.signal,
-        },
-      );
+      const runRes = await fetch(`/api/projects/${projectId}/experiments/${experimentId}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          metrics,
+          rubrics: rubrics ?? null,
+          concurrency: concurrency ?? 5,
+          multi_llm_judge_evaluators: multiLlmJudgeEvaluators ?? 5,
+          judge_model_assignments: judgeModelAssignments ?? null,
+          judge_temperature_assignments: judgeTemperatureAssignments ?? null,
+        }),
+        signal: controller.signal,
+      });
 
       if (!runRes.ok) {
-        const body = await runRes.text().catch(() => "");
+        const body = await runRes.text().catch(() => '');
         let message = `HTTP ${runRes.status}`;
         try {
           const parsed = JSON.parse(body);
@@ -1188,17 +1107,17 @@ export function runExperimentSSE(
         experiment_id: runData.experiment_id,
         total_questions: 0,
         metrics: runData.metrics ?? [],
-        experiment_name: "",
-        model: "",
-        test_set_name: "",
+        experiment_name: '',
+        model: '',
+        test_set_name: '',
       });
 
       // Now observe progress via the SSE progress endpoint
       const handle = observeExperimentProgress(projectId, experimentId, callbacks);
       // Wire abort through to the progress observer
-      controller.signal.addEventListener("abort", () => handle.abort());
+      controller.signal.addEventListener('abort', () => handle.abort());
     } catch (err) {
-      if ((err as DOMException).name === "AbortError") return;
+      if ((err as DOMException).name === 'AbortError') return;
       callbacks.onConnectionError?.(err as Error, null);
     }
   })();
@@ -1224,47 +1143,46 @@ export function observeExperimentProgress(
       // registered in the progress dict yet when called right after /run
       let res: Response | null = null;
       for (let attempt = 0; attempt < 10; attempt++) {
-        res = await fetch(
-          `/api/projects/${projectId}/experiments/${experimentId}/progress`,
-          { signal: controller.signal },
-        );
+        res = await fetch(`/api/projects/${projectId}/experiments/${experimentId}/progress`, {
+          signal: controller.signal,
+        });
         if (res.ok || res.status !== 409) break;
         await new Promise((r) => setTimeout(r, 500));
       }
 
       if (!res || !res.ok) {
-        const body = await res?.text().catch(() => "Unknown error") ?? "No response";
+        const body = (await res?.text().catch(() => 'Unknown error')) ?? 'No response';
         callbacks.onError?.({ message: `${res?.status}: ${body}` });
         return;
       }
 
       const reader = res.body?.getReader();
       if (!reader) {
-        callbacks.onError?.({ message: "No response stream" });
+        callbacks.onError?.({ message: 'No response stream' });
         return;
       }
 
       const decoder = new TextDecoder();
-      let buffer = "";
+      let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() ?? "";
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
 
         for (const part of parts) {
           if (!part.trim()) continue;
 
-          let eventType = "message";
-          let dataStr = "";
+          let eventType = 'message';
+          let dataStr = '';
 
-          for (const line of part.split("\n")) {
-            if (line.startsWith("event:")) {
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event:')) {
               eventType = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
+            } else if (line.startsWith('data:')) {
               dataStr = line.slice(5).trim();
             }
           }
@@ -1275,17 +1193,17 @@ export function observeExperimentProgress(
             const data = JSON.parse(dataStr);
 
             switch (eventType) {
-              case "started":
+              case 'started':
                 callbacks.onStarted?.(data as SSEStartedEvent);
                 break;
-              case "progress":
+              case 'progress':
                 lastProgress = data as SSEProgressEvent;
                 callbacks.onProgress?.(lastProgress);
                 break;
-              case "completed":
+              case 'completed':
                 callbacks.onCompleted?.(data as SSECompletedEvent);
                 break;
-              case "error":
+              case 'error':
                 callbacks.onError?.(data as SSEErrorEvent);
                 break;
             }
@@ -1295,7 +1213,7 @@ export function observeExperimentProgress(
         }
       }
     } catch (err) {
-      if ((err as DOMException).name === "AbortError") return;
+      if ((err as DOMException).name === 'AbortError') return;
       callbacks.onConnectionError?.(err as Error, lastProgress);
     }
   })();
@@ -1311,7 +1229,7 @@ export interface Suggestion {
   category: string;
   signal: string;
   suggestion: string;
-  priority: "high" | "medium" | "low";
+  priority: 'high' | 'medium' | 'low';
   config_field: string | null;
   suggested_value: string | null;
   implemented: boolean;
@@ -1367,7 +1285,7 @@ export async function generateSuggestions(
 ): Promise<{ suggestions: Suggestion[]; count: number }> {
   return request<{ suggestions: Suggestion[]; count: number }>(
     `/api/projects/${projectId}/experiments/${experimentId}/suggestions/generate`,
-    { method: "POST" },
+    { method: 'POST' },
   );
 }
 
@@ -1390,7 +1308,7 @@ export async function applySuggestionsBatch(
   return request<BatchApplyResult>(
     `/api/projects/${projectId}/experiments/${experimentId}/suggestions/apply-batch`,
     {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify({
         items,
         experiment_name: experimentName || undefined,
@@ -1405,9 +1323,7 @@ export async function fetchExperimentDelta(
   projectId: number,
   experimentId: number,
 ): Promise<DeltaResult> {
-  return request<DeltaResult>(
-    `/api/projects/${projectId}/experiments/${experimentId}/delta`,
-  );
+  return request<DeltaResult>(`/api/projects/${projectId}/experiments/${experimentId}/delta`);
 }
 
 // --- Export API ---
@@ -1415,24 +1331,24 @@ export async function fetchExperimentDelta(
 export async function exportExperiment(
   projectId: number,
   experimentId: number,
-  format: "csv" | "json",
+  format: 'csv' | 'json',
 ): Promise<void> {
   const res = await fetch(
     `/api/projects/${projectId}/experiments/${experimentId}/export?format=${format}`,
   );
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "Unknown error");
+    const body = await res.text().catch(() => 'Unknown error');
     throw new ApiError(res.status, body);
   }
 
   const blob = await res.blob();
-  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const disposition = res.headers.get('Content-Disposition') ?? '';
   const match = disposition.match(/filename="?([^"]+)"?/);
   const filename = match?.[1] ?? `export.${format}`;
 
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   document.body.appendChild(a);
@@ -1476,17 +1392,13 @@ export async function compareExperiments(
   projectId: number,
   experimentIds: number[],
 ): Promise<CompareResult> {
-  const ids = experimentIds.join(",");
-  return request<CompareResult>(
-    `/api/projects/${projectId}/experiments/compare?ids=${ids}`,
-  );
+  const ids = experimentIds.join(',');
+  return request<CompareResult>(`/api/projects/${projectId}/experiments/compare?ids=${ids}`);
 }
 
 // --- History API ---
 
-export async function fetchExperimentHistory(
-  projectId: number,
-): Promise<HistoryExperiment[]> {
+export async function fetchExperimentHistory(projectId: number): Promise<HistoryExperiment[]> {
   const data = await request<{ experiments: HistoryExperiment[] }>(
     `/api/projects/${projectId}/experiments/history`,
   );
@@ -1495,7 +1407,14 @@ export async function fetchExperimentHistory(
 
 // --- Bot Config API ---
 
-export type ConnectorType = "glean" | "openai" | "claude" | "deepseek" | "gemini" | "custom" | "csv";
+export type ConnectorType =
+  | 'glean'
+  | 'openai'
+  | 'claude'
+  | 'deepseek'
+  | 'gemini'
+  | 'custom'
+  | 'csv';
 
 export interface BotConfig {
   id: number;
@@ -1525,7 +1444,7 @@ export async function createBotConfig(
   payload: BotConfigCreatePayload,
 ): Promise<BotConfig> {
   return request<BotConfig>(`/api/projects/${projectId}/bot-configs`, {
-    method: "POST",
+    method: 'POST',
     body: JSON.stringify(payload),
   });
 }
@@ -1536,17 +1455,14 @@ export async function updateBotConfig(
   payload: Partial<BotConfigCreatePayload>,
 ): Promise<BotConfig> {
   return request<BotConfig>(`/api/projects/${projectId}/bot-configs/${configId}`, {
-    method: "PUT",
+    method: 'PUT',
     body: JSON.stringify(payload),
   });
 }
 
-export async function deleteBotConfig(
-  projectId: number,
-  configId: number,
-): Promise<void> {
+export async function deleteBotConfig(projectId: number, configId: number): Promise<void> {
   return request<void>(`/api/projects/${projectId}/bot-configs/${configId}`, {
-    method: "DELETE",
+    method: 'DELETE',
   });
 }
 
@@ -1579,7 +1495,7 @@ export interface SourceVerification {
   citation_index: number;
   title: string | null;
   url: string | null;
-  status: "verified" | "hallucinated" | "inaccessible" | "unverifiable";
+  status: 'verified' | 'hallucinated' | 'inaccessible' | 'unverifiable';
   details: string | null;
   created_at: string;
 }
@@ -1633,7 +1549,7 @@ export interface AnnotationSampleResult {
 
 export interface HumanAnnotationCreate {
   experiment_result_id: number;
-  rating: "accurate" | "partially_accurate" | "inaccurate";
+  rating: 'accurate' | 'partially_accurate' | 'inaccurate';
   notes?: string | null;
 }
 
@@ -1677,7 +1593,7 @@ export async function submitAnnotations(
 ): Promise<{ experiment_id: number; submitted: number }> {
   return request<{ experiment_id: number; submitted: number }>(
     `/api/projects/${projectId}/experiments/${experimentId}/annotations`,
-    { method: "POST", body: JSON.stringify({ annotations }) },
+    { method: 'POST', body: JSON.stringify({ annotations }) },
   );
 }
 
@@ -1756,9 +1672,7 @@ export interface ProjectReport {
 
 // --- Project Report API ---
 
-export async function fetchProjectReport(
-  projectId: number,
-): Promise<ProjectReport> {
+export async function fetchProjectReport(projectId: number): Promise<ProjectReport> {
   return request<ProjectReport>(`/api/projects/${projectId}/report`);
 }
 
@@ -1777,7 +1691,13 @@ export interface CustomMetric {
   id: number;
   project_id: number;
   name: string;
-  metric_type: "integer_range" | "similarity" | "rubrics" | "instance_rubrics" | "criteria_judge" | "reference_judge";
+  metric_type:
+    | 'integer_range'
+    | 'similarity'
+    | 'rubrics'
+    | 'instance_rubrics'
+    | 'criteria_judge'
+    | 'reference_judge';
   prompt: string | null;
   rubrics: Record<string, string> | null;
   min_score: number;
@@ -1798,9 +1718,7 @@ export interface CustomMetricCreate {
   few_shot_examples?: FewShotExample[] | null;
 }
 
-export async function fetchCustomMetrics(
-  projectId: number,
-): Promise<CustomMetric[]> {
+export async function fetchCustomMetrics(projectId: number): Promise<CustomMetric[]> {
   return request<CustomMetric[]>(`/api/projects/${projectId}/custom-metrics`);
 }
 
@@ -1809,8 +1727,8 @@ export async function createCustomMetric(
   data: CustomMetricCreate,
 ): Promise<CustomMetric> {
   return request<CustomMetric>(`/api/projects/${projectId}/custom-metrics`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 }
@@ -1821,8 +1739,8 @@ export async function updateCustomMetric(
   data: CustomMetricCreate,
 ): Promise<CustomMetric> {
   return request<CustomMetric>(`/api/projects/${projectId}/custom-metrics/${metricId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
 }
@@ -1834,21 +1752,17 @@ export async function refineMetricDescription(
   return request<{ refined_prompt: string }>(
     `/api/projects/${projectId}/custom-metrics/refine-description`,
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description }),
     },
   );
 }
 
-export async function deleteCustomMetric(
-  projectId: number,
-  metricId: number,
-): Promise<void> {
-  await request<{ deleted: boolean }>(
-    `/api/projects/${projectId}/custom-metrics/${metricId}`,
-    { method: "DELETE" },
-  );
+export async function deleteCustomMetric(projectId: number, metricId: number): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/projects/${projectId}/custom-metrics/${metricId}`, {
+    method: 'DELETE',
+  });
 }
 
 // --- Knowledge Graph ---
@@ -1889,7 +1803,7 @@ export interface KGBuildProgress {
 // --- Multi-LLM Judge Types ---
 
 export interface JudgeClaim {
-  type: "praise" | "critique";
+  type: 'praise' | 'critique';
   response_quote: string;
   chunk_reference: string | null;
   chunk_quote: string | null;
@@ -1897,7 +1811,7 @@ export interface JudgeClaim {
 }
 
 export interface ClaimAnnotation {
-  status: "accurate" | "inaccurate" | "unsure";
+  status: 'accurate' | 'inaccurate' | 'unsure';
   comment: string | null;
   annotated_at: string;
 }
@@ -1905,7 +1819,7 @@ export interface ClaimAnnotation {
 export interface JudgeEvaluation {
   id: number;
   evaluator_index: number;
-  verdict: "positive" | "mixed" | "critical";
+  verdict: 'positive' | 'mixed' | 'critical';
   score: number;
   reasoning: string | null;
   claims: JudgeClaim[];
@@ -2001,12 +1915,12 @@ export async function annotateJudgeClaim(
   resultId: number,
   evaluationId: number,
   claimIndex: number,
-  status: "accurate" | "inaccurate" | "unsure",
+  status: 'accurate' | 'inaccurate' | 'unsure',
   comment?: string,
 ): Promise<{ evaluation_id: number; claim_index: number; status: string }> {
   return request(
     `/api/projects/${projectId}/experiments/${experimentId}/results/${resultId}/judge-evaluations/${evaluationId}/claims/${claimIndex}/annotate`,
-    { method: "POST", body: JSON.stringify({ status, comment: comment ?? null }) },
+    { method: 'POST', body: JSON.stringify({ status, comment: comment ?? null }) },
   );
 }
 
@@ -2034,7 +1948,7 @@ export async function fetchJudgeSummary(
 
 export async function fetchKnowledgeGraphInfo(
   projectId: number,
-  kgSource: string = "chunks",
+  kgSource: string = 'chunks',
 ): Promise<KnowledgeGraphInfo> {
   return request<KnowledgeGraphInfo>(
     `/api/projects/${projectId}/knowledge-graph?kg_source=${encodeURIComponent(kgSource)}`,
@@ -2045,26 +1959,23 @@ export async function buildKnowledgeGraph(
   projectId: number,
   chunkConfigId: number | null,
   overlapMaxNodes: number | null = 500,
-  kgSource: string = "chunks",
+  kgSource: string = 'chunks',
   fastMode: boolean = false,
 ): Promise<{ status: string }> {
-  return request<{ status: string }>(
-    `/api/projects/${projectId}/build-knowledge-graph`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        chunk_config_id: chunkConfigId,
-        overlap_max_nodes: overlapMaxNodes,
-        fast_mode: fastMode || undefined,
-        kg_source: kgSource,
-      }),
-    },
-  );
+  return request<{ status: string }>(`/api/projects/${projectId}/build-knowledge-graph`, {
+    method: 'POST',
+    body: JSON.stringify({
+      chunk_config_id: chunkConfigId,
+      overlap_max_nodes: overlapMaxNodes,
+      fast_mode: fastMode || undefined,
+      kg_source: kgSource,
+    }),
+  });
 }
 
 export async function fetchKGBuildProgress(
   projectId: number,
-  kgSource: string = "chunks",
+  kgSource: string = 'chunks',
 ): Promise<KGBuildProgress> {
   return request<KGBuildProgress>(
     `/api/projects/${projectId}/knowledge-graph/progress?kg_source=${encodeURIComponent(kgSource)}`,
@@ -2073,21 +1984,21 @@ export async function fetchKGBuildProgress(
 
 export async function deleteKnowledgeGraph(
   projectId: number,
-  kgSource: string = "chunks",
+  kgSource: string = 'chunks',
 ): Promise<void> {
   await request<void>(
     `/api/projects/${projectId}/knowledge-graph?kg_source=${encodeURIComponent(kgSource)}`,
-    { method: "DELETE" },
+    { method: 'DELETE' },
   );
 }
 
 export async function resetKnowledgeGraph(
   projectId: number,
-  kgSource: string = "chunks",
+  kgSource: string = 'chunks',
 ): Promise<{ deleted: boolean; was_complete?: boolean }> {
   return request<{ deleted: boolean; was_complete?: boolean }>(
     `/api/projects/${projectId}/knowledge-graph/reset?kg_source=${encodeURIComponent(kgSource)}`,
-    { method: "POST" },
+    { method: 'POST' },
   );
 }
 
@@ -2095,13 +2006,10 @@ export async function rebuildKGLinks(
   projectId: number,
   overlapMaxNodes: number | null = 500,
 ): Promise<{ status: string }> {
-  return request<{ status: string }>(
-    `/api/projects/${projectId}/knowledge-graph/rebuild-links`,
-    {
-      method: "POST",
-      body: JSON.stringify({ overlap_max_nodes: overlapMaxNodes }),
-    },
-  );
+  return request<{ status: string }>(`/api/projects/${projectId}/knowledge-graph/rebuild-links`, {
+    method: 'POST',
+    body: JSON.stringify({ overlap_max_nodes: overlapMaxNodes }),
+  });
 }
 
 export async function updateKnowledgeGraph(
@@ -2109,16 +2017,13 @@ export async function updateKnowledgeGraph(
   chunkConfigId: number,
   overlapMaxNodes: number | null = 500,
 ): Promise<{ status: string }> {
-  return request<{ status: string }>(
-    `/api/projects/${projectId}/knowledge-graph/update`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        chunk_config_id: chunkConfigId,
-        overlap_max_nodes: overlapMaxNodes,
-      }),
-    },
-  );
+  return request<{ status: string }>(`/api/projects/${projectId}/knowledge-graph/update`, {
+    method: 'POST',
+    body: JSON.stringify({
+      chunk_config_id: chunkConfigId,
+      overlap_max_nodes: overlapMaxNodes,
+    }),
+  });
 }
 
 // --- Knowledge Graph Explorer ---
@@ -2169,15 +2074,11 @@ export interface KGGraphData {
 }
 
 export async function fetchAllKnowledgeGraphs(): Promise<KGListItem[]> {
-  return request<KGListItem[]>("/api/knowledge-graphs");
+  return request<KGListItem[]>('/api/knowledge-graphs');
 }
 
-export async function fetchKnowledgeGraphData(
-  projectId: number,
-): Promise<KGGraphData> {
-  return request<KGGraphData>(
-    `/api/projects/${projectId}/knowledge-graph/data`,
-  );
+export async function fetchKnowledgeGraphData(projectId: number): Promise<KGGraphData> {
+  return request<KGGraphData>(`/api/projects/${projectId}/knowledge-graph/data`);
 }
 
 export interface KGStreamCallbacks {
@@ -2196,49 +2097,48 @@ export function streamKnowledgeGraphData(
 
   (async () => {
     try {
-      const res = await fetch(
-        `/api/projects/${projectId}/knowledge-graph/stream`,
-        { signal: controller.signal },
-      );
+      const res = await fetch(`/api/projects/${projectId}/knowledge-graph/stream`, {
+        signal: controller.signal,
+      });
       if (!res.ok) {
-        const body = await res.text().catch(() => "Unknown error");
+        const body = await res.text().catch(() => 'Unknown error');
         callbacks.onError(body);
         return;
       }
 
       const reader = res.body?.getReader();
       if (!reader) {
-        callbacks.onError("No response body");
+        callbacks.onError('No response body');
         return;
       }
 
       const decoder = new TextDecoder();
-      let buffer = "";
+      let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
+          if (!line.startsWith('data: ')) continue;
           const json = line.slice(6);
           try {
             const event = JSON.parse(json);
             switch (event.type) {
-              case "meta":
+              case 'meta':
                 callbacks.onMeta(event);
                 break;
-              case "nodes":
+              case 'nodes':
                 callbacks.onNodes(event.batch);
                 break;
-              case "edges":
+              case 'edges':
                 callbacks.onEdges(event.batch);
                 break;
-              case "done":
+              case 'done':
                 callbacks.onDone();
                 break;
             }
@@ -2248,8 +2148,8 @@ export function streamKnowledgeGraphData(
         }
       }
     } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        callbacks.onError((err as Error).message || "Stream failed");
+      if ((err as Error).name !== 'AbortError') {
+        callbacks.onError((err as Error).message || 'Stream failed');
       }
     }
   })();
@@ -2264,7 +2164,7 @@ export function streamKnowledgeGraphData(
 export interface WorkerTask {
   project_id: number;
   experiment_id?: number;
-  type: "kg_build" | "persona_generation" | "experiment" | "testgen";
+  type: 'kg_build' | 'persona_generation' | 'experiment' | 'testgen';
   kg_source?: string;
   started_at?: number;
   num_personas?: number;
@@ -2304,24 +2204,21 @@ export interface WorkersStatusResponse {
 }
 
 export async function fetchWorkersStatus(): Promise<WorkersStatusResponse> {
-  return request<WorkersStatusResponse>("/api/workers/status");
+  return request<WorkersStatusResponse>('/api/workers/status');
 }
 
-export async function clearWorkerPersonaTask(
-  projectId: number,
-): Promise<{ cleared: boolean }> {
-  return request<{ cleared: boolean }>(
-    `/api/workers/clear-personas/${projectId}`,
-    { method: "POST" },
-  );
+export async function clearWorkerPersonaTask(projectId: number): Promise<{ cleared: boolean }> {
+  return request<{ cleared: boolean }>(`/api/workers/clear-personas/${projectId}`, {
+    method: 'POST',
+  });
 }
 
 export async function clearWorkerBuildTask(
   projectId: number,
-  kgSource: string = "chunks",
+  kgSource: string = 'chunks',
 ): Promise<{ cleared: boolean }> {
   return request<{ cleared: boolean }>(
     `/api/workers/clear-build/${projectId}?kg_source=${kgSource}`,
-    { method: "POST" },
+    { method: 'POST' },
   );
 }

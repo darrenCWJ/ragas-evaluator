@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
-import type { TestQuestion, TestSetSummary, TestSet } from "../../lib/api";
-import { fetchTestQuestions, fetchTestSetSummary } from "../../lib/api";
-import QuestionCard from "./QuestionCard";
-import BulkActions from "./BulkActions";
+import { useState, useEffect, useCallback } from 'react';
+import type { TestQuestion, TestSetSummary, TestSet } from '../../lib/api';
+import { fetchTestQuestions, fetchTestSetSummary } from '../../lib/api';
+import QuestionCard from './QuestionCard';
+import BulkActions from './BulkActions';
 
 function escapeCsvField(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
@@ -13,42 +13,42 @@ function escapeCsvField(value: string): string {
 
 function downloadCsv(questions: TestQuestion[], testSetName: string) {
   const headers = [
-    "question",
-    "reference_answer",
-    "reference_contexts",
-    "question_type",
-    "category",
-    "persona",
-    "status",
-    "user_edited_answer",
-    "user_notes",
+    'question',
+    'reference_answer',
+    'reference_contexts',
+    'question_type',
+    'category',
+    'persona',
+    'status',
+    'user_edited_answer',
+    'user_notes',
   ];
   const rows = questions.map((q) =>
     [
       q.question,
       q.reference_answer,
-      q.reference_contexts.join(" | "),
+      q.reference_contexts.join(' | '),
       q.question_type,
-      q.category ?? "",
-      q.persona ?? "",
+      q.category ?? '',
+      q.persona ?? '',
       q.status,
-      q.user_edited_answer ?? "",
-      q.user_notes ?? "",
+      q.user_edited_answer ?? '',
+      q.user_notes ?? '',
     ]
       .map(escapeCsvField)
-      .join(","),
+      .join(','),
   );
-  const csv = [headers.join(","), ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  const a = document.createElement('a');
   a.href = url;
-  a.download = `${testSetName.replace(/[^a-zA-Z0-9_-]/g, "_")}.csv`;
+  a.download = `${testSetName.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-const STATUS_FILTERS = ["all", "pending", "approved", "rejected", "edited"] as const;
+const STATUS_FILTERS = ['all', 'pending', 'approved', 'rejected', 'edited'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 interface Props {
@@ -57,16 +57,12 @@ interface Props {
   onBack: () => void;
 }
 
-export default function QuestionList({
-  projectId,
-  testSet,
-  onBack,
-}: Props) {
+export default function QuestionList({ projectId, testSet, onBack }: Props) {
   const [questions, setQuestions] = useState<TestQuestion[]>([]);
   const [summary, setSummary] = useState<TestSetSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [filter, setFilter] = useState<StatusFilter>('all');
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const loadQuestions = useCallback(
@@ -77,11 +73,11 @@ export default function QuestionList({
         const qs = await fetchTestQuestions(
           projectId,
           testSet.id,
-          status === "all" ? undefined : status,
+          status === 'all' ? undefined : status,
         );
         setQuestions(qs);
       } catch (err) {
-        setError((err as Error).message || "Failed to load questions");
+        setError((err as Error).message || 'Failed to load questions');
       } finally {
         setLoading(false);
       }
@@ -158,9 +154,7 @@ export default function QuestionList({
           </svg>
         </button>
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-medium text-text-primary">
-            {testSet.name}
-          </h3>
+          <h3 className="truncate font-medium text-text-primary">{testSet.name}</h3>
           <p className="text-xs text-text-muted">
             {testSet.generation_config.testset_size} questions requested
             {testSet.generation_config.use_personas &&
@@ -172,9 +166,7 @@ export default function QuestionList({
       {/* Summary bar — always shows unfiltered totals */}
       {summary && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-xs">
-          <span className="font-medium text-text-primary">
-            {summary.total} total
-          </span>
+          <span className="font-medium text-text-primary">{summary.total} total</span>
           <span className="text-text-muted">|</span>
           <span className="text-yellow-300">{summary.pending} pending</span>
           <span className="text-text-muted">|</span>
@@ -207,8 +199,8 @@ export default function QuestionList({
               onClick={() => setFilter(f)}
               className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${
                 filter === f
-                  ? "bg-accent/15 text-accent"
-                  : "text-text-muted hover:text-text-secondary"
+                  ? 'bg-accent/15 text-accent'
+                  : 'text-text-muted hover:text-text-secondary'
               }`}
             >
               {f}
@@ -221,7 +213,7 @@ export default function QuestionList({
               onClick={toggleSelectAll}
               className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-muted transition hover:border-accent hover:text-accent"
             >
-              {allSelected ? "Deselect All" : "Select All"}
+              {allSelected ? 'Deselect All' : 'Select All'}
             </button>
             <button
               onClick={() => downloadCsv(questions, testSet.name)}
@@ -242,18 +234,14 @@ export default function QuestionList({
 
       {/* Loading */}
       {loading && (
-        <div className="py-8 text-center text-sm text-text-muted">
-          Loading questions…
-        </div>
+        <div className="py-8 text-center text-sm text-text-muted">Loading questions…</div>
       )}
 
       {/* Question cards */}
       {!loading && questions.length === 0 && (
         <div className="rounded-xl border border-dashed border-border bg-card/50 p-8 text-center">
           <p className="text-sm text-text-muted">
-            {filter === "all"
-              ? "No questions in this test set."
-              : `No ${filter} questions.`}
+            {filter === 'all' ? 'No questions in this test set.' : `No ${filter} questions.`}
           </p>
         </div>
       )}

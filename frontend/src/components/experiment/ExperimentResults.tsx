@@ -1,20 +1,15 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from 'react';
 import {
   fetchExperiment,
   fetchExperimentResults,
   fetchCustomMetrics,
   exportExperiment,
   ApiError,
-} from "../../lib/api";
-import type { Experiment, ExperimentResult } from "../../lib/api";
-import QuestionResultRow from "./QuestionResultRow";
-import MultiLLMJudgeDashboard from "./MultiLLMJudgeDashboard";
-import {
-  humanizeMetric,
-  scoreBarColor,
-  scoreBgColor,
-  scoreTextColor,
-} from "./scoreUtils";
+} from '../../lib/api';
+import type { Experiment, ExperimentResult } from '../../lib/api';
+import QuestionResultRow from './QuestionResultRow';
+import MultiLLMJudgeDashboard from './MultiLLMJudgeDashboard';
+import { humanizeMetric, scoreBarColor, scoreBgColor, scoreTextColor } from './scoreUtils';
 
 interface Props {
   projectId: number;
@@ -22,34 +17,34 @@ interface Props {
 }
 
 type LoadState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "loaded"; experiment: Experiment; results: ExperimentResult[] };
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'loaded'; experiment: Experiment; results: ExperimentResult[] };
 
 export default function ExperimentResults({ projectId, experimentId }: Props) {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [criteriaMetricNames, setCriteriaMetricNames] = useState<string[]>([]);
   // Active judge metric for the dashboard tab (undefined = built-in multi-LLM judge)
   const [activeJudgeMetric, setActiveJudgeMetric] = useState<string | undefined>(undefined);
 
   const load = useCallback(async () => {
-    setState({ status: "loading" });
+    setState({ status: 'loading' });
     try {
       const [exp, results, customMetrics] = await Promise.all([
         fetchExperiment(projectId, experimentId),
         fetchExperimentResults(projectId, experimentId),
         fetchCustomMetrics(projectId),
       ]);
-      setState({ status: "loaded", experiment: exp, results });
+      setState({ status: 'loaded', experiment: exp, results });
       setCriteriaMetricNames(
         customMetrics
-          .filter((m) => m.metric_type === "criteria_judge" || m.metric_type === "reference_judge")
+          .filter((m) => m.metric_type === 'criteria_judge' || m.metric_type === 'reference_judge')
           .map((m) => m.name),
       );
     } catch (err) {
       setState({
-        status: "error",
-        message: (err as Error).message || "Failed to load results",
+        status: 'error',
+        message: (err as Error).message || 'Failed to load results',
       });
     }
   }, [projectId, experimentId]);
@@ -59,7 +54,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }, [load]);
 
   // Must be at top level — before any conditional returns
-  const [activeTab, setActiveTab] = useState<"results" | "judge">("results");
+  const [activeTab, setActiveTab] = useState<'results' | 'judge'>('results');
   // Live judge score overrides (keyed by metric name) — updated when exclusions change
   const [judgeScoreOverrides, setJudgeScoreOverrides] = useState<Record<string, number>>({});
   const handleJudgeScoreUpdate = useCallback((metricKey: string, avg: number) => {
@@ -67,10 +62,10 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }, []);
 
   /* ── Export handler ── */
-  const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const handleExport = async (format: "csv" | "json") => {
+  const handleExport = async (format: 'csv' | 'json') => {
     setExporting(format);
     setExportError(null);
     try {
@@ -84,24 +79,18 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   };
 
   /* ── Loading skeleton ── */
-  if (state.status === "loading") {
+  if (state.status === 'loading') {
     return (
       <div className="space-y-4">
         <div className="h-6 w-48 animate-pulse rounded-lg bg-elevated" />
         <div className="grid grid-cols-3 gap-3">
           {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-16 animate-pulse rounded-xl bg-elevated"
-            />
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-elevated" />
           ))}
         </div>
         <div className="space-y-2">
           {[1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className="h-12 animate-pulse rounded-lg bg-elevated"
-            />
+            <div key={i} className="h-12 animate-pulse rounded-lg bg-elevated" />
           ))}
         </div>
       </div>
@@ -109,12 +98,10 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }
 
   /* ── Error state with retry ── */
-  if (state.status === "error") {
+  if (state.status === 'error') {
     return (
       <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-center">
-        <p className="text-sm font-medium text-red-300">
-          Failed to load results
-        </p>
+        <p className="text-sm font-medium text-red-300">Failed to load results</p>
         <p className="mt-1 text-xs text-red-300/70">{state.message}</p>
         <button
           onClick={load}
@@ -127,7 +114,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
   }
 
   const { experiment, results } = state;
-  const hasBuiltinJudge = results.some((r) => "multi_llm_judge" in r.metrics);
+  const hasBuiltinJudge = results.some((r) => 'multi_llm_judge' in r.metrics);
   const criteriaJudgesInResults = criteriaMetricNames.filter((n) =>
     results.some((r) => n in r.metrics),
   );
@@ -141,13 +128,9 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
 
   if (agg) {
     const merged = { ...agg, ...judgeScoreOverrides };
-    metricEntries = Object.entries(merged).filter(
-      (e): e is [string, number] => e[1] !== null,
-    );
+    metricEntries = Object.entries(merged).filter((e): e is [string, number] => e[1] !== null);
     if (metricEntries.length > 0) {
-      overallScore =
-        metricEntries.reduce((sum, [, v]) => sum + v, 0) /
-        metricEntries.length;
+      overallScore = metricEntries.reduce((sum, [, v]) => sum + v, 0) / metricEntries.length;
     }
   }
 
@@ -157,22 +140,22 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1 border-b border-border">
           <button
-            onClick={() => setActiveTab("results")}
+            onClick={() => setActiveTab('results')}
             className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
-              activeTab === "results"
-                ? "border-accent text-accent"
-                : "border-transparent text-text-muted hover:text-text-secondary"
+              activeTab === 'results'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-muted hover:text-text-secondary'
             }`}
           >
             Results
           </button>
           {hasJudge && (
             <button
-              onClick={() => setActiveTab("judge")}
+              onClick={() => setActiveTab('judge')}
               className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
-                activeTab === "judge"
-                  ? "border-accent text-accent"
-                  : "border-transparent text-text-muted hover:text-text-secondary"
+                activeTab === 'judge'
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-text-muted hover:text-text-secondary'
               }`}
             >
               Judge Reliability
@@ -181,33 +164,53 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-text-muted">
-            {results.length} question{results.length !== 1 ? "s" : ""} evaluated
+            {results.length} question{results.length !== 1 ? 's' : ''} evaluated
           </span>
           {/* Export buttons */}
           <button
-            onClick={() => handleExport("csv")}
+            onClick={() => handleExport('csv')}
             disabled={exporting !== null}
             className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-micro font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
           >
-            {exporting === "csv" ? (
+            {exporting === 'csv' ? (
               <span className="h-3 w-3 animate-spin rounded-full border border-text-secondary border-t-transparent" />
             ) : (
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                />
               </svg>
             )}
             CSV
           </button>
           <button
-            onClick={() => handleExport("json")}
+            onClick={() => handleExport('json')}
             disabled={exporting !== null}
             className="flex items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-micro font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
           >
-            {exporting === "json" ? (
+            {exporting === 'json' ? (
               <span className="h-3 w-3 animate-spin rounded-full border border-text-secondary border-t-transparent" />
             ) : (
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                />
               </svg>
             )}
             JSON
@@ -226,9 +229,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
       {agg === null || agg === undefined || metricEntries.length === 0 ? (
         /* Null / empty aggregate metrics */
         <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-6 text-center">
-          <p className="text-sm text-text-muted">
-            Metrics not computed for this experiment.
-          </p>
+          <p className="text-sm text-text-muted">Metrics not computed for this experiment.</p>
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-card p-5">
@@ -241,12 +242,10 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
                 {(overallScore * 100).toFixed(0)}
               </div>
               <div>
-                <p className="text-sm font-semibold text-text-primary">
-                  Overall Score
-                </p>
+                <p className="text-sm font-semibold text-text-primary">Overall Score</p>
                 <p className="text-xs text-text-secondary">
                   Average across {metricEntries.length} metric
-                  {metricEntries.length !== 1 ? "s" : ""}
+                  {metricEntries.length !== 1 ? 's' : ''}
                 </p>
               </div>
             </div>
@@ -278,14 +277,12 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
         </div>
       )}
 
-      {activeTab === "results" && (
+      {activeTab === 'results' && (
         <>
           {/* ── Empty results ── */}
           {results.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
-              <p className="text-sm text-text-muted">
-                No per-question results available.
-              </p>
+              <p className="text-sm text-text-muted">No per-question results available.</p>
             </div>
           ) : (
             /* ── Per-question results ── */
@@ -304,7 +301,7 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
         </>
       )}
 
-      {activeTab === "judge" && hasJudge && (
+      {activeTab === 'judge' && hasJudge && (
         <>
           {/* Selector when multiple judge metrics exist */}
           {(hasBuiltinJudge ? 1 : 0) + criteriaJudgesInResults.length > 1 && (
@@ -314,8 +311,8 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
                   onClick={() => setActiveJudgeMetric(undefined)}
                   className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
                     activeJudgeMetric === undefined
-                      ? "border-accent/50 bg-accent/10 text-accent"
-                      : "border-border text-text-secondary hover:border-border-focus"
+                      ? 'border-accent/50 bg-accent/10 text-accent'
+                      : 'border-border text-text-secondary hover:border-border-focus'
                   }`}
                 >
                   Multi-LLM Judge
@@ -327,11 +324,11 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
                   onClick={() => setActiveJudgeMetric(n)}
                   className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
                     activeJudgeMetric === n
-                      ? "border-purple-500/50 bg-purple-500/10 text-purple-300"
-                      : "border-border text-text-secondary hover:border-border-focus"
+                      ? 'border-purple-500/50 bg-purple-500/10 text-purple-300'
+                      : 'border-border text-text-secondary hover:border-border-focus'
                   }`}
                 >
-                  {n.replace(/_/g, " ")}
+                  {n.replace(/_/g, ' ')}
                 </button>
               ))}
             </div>

@@ -10,11 +10,11 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from config import BOT_QUERY_TIMEOUT, CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
-from config import CONNECTOR_DEFAULT_MODELS, BOT_QUERY_TIMEOUT
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"

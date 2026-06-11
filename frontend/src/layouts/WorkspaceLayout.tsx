@@ -1,9 +1,9 @@
-import { useState, useCallback, useEffect } from "react";
-import { version } from "../../package.json";
-import { Outlet, Navigate, useLocation } from "react-router-dom";
-import { useProject } from "../contexts/ProjectContext";
-import Stepper from "../components/Stepper";
-import ProjectSelector from "../components/ProjectSelector";
+import { useState, useCallback, useEffect } from 'react';
+import { version } from '../../package.json';
+import { Outlet, Navigate, useLocation } from 'react-router-dom';
+import { useProject } from '../contexts/ProjectContext';
+import Stepper from '../components/Stepper';
+import ProjectSelector from '../components/ProjectSelector';
 
 export default function WorkspaceLayout() {
   const { project } = useProject();
@@ -20,7 +20,10 @@ export default function WorkspaceLayout() {
   }, []);
 
   // Route guard: redirect to setup if no project (except setup itself)
-  const isSetup = location.pathname.endsWith("/setup") || location.pathname === "/app" || location.pathname === "/app/";
+  const isSetup =
+    location.pathname.endsWith('/setup') ||
+    location.pathname === '/app' ||
+    location.pathname === '/app/';
   if (!project && !isSetup) {
     return <Navigate to="/setup" replace />;
   }
@@ -36,7 +39,9 @@ export default function WorkspaceLayout() {
           </div>
           <div>
             <div className="text-sm font-semibold text-text-primary leading-tight">Ragas</div>
-            <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">Platform</div>
+            <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
+              Platform
+            </div>
           </div>
         </div>
 
@@ -65,7 +70,7 @@ export default function WorkspaceLayout() {
           fixed inset-y-0 left-0 z-50 w-60 flex-col border-r border-border bg-base
           transition-transform duration-200
           md:hidden
-          ${mobileNavOpen ? "flex translate-x-0" : "flex -translate-x-full"}
+          ${mobileNavOpen ? 'flex translate-x-0' : 'flex -translate-x-full'}
         `}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
@@ -75,7 +80,9 @@ export default function WorkspaceLayout() {
             </div>
             <div>
               <div className="text-sm font-semibold text-text-primary leading-tight">Ragas</div>
-              <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">Platform</div>
+              <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
+                Platform
+              </div>
             </div>
           </div>
           <button
@@ -84,7 +91,11 @@ export default function WorkspaceLayout() {
             aria-label="Close navigation"
           >
             <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              <path
+                fillRule="evenodd"
+                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                clipRule="evenodd"
+              />
             </svg>
           </button>
         </div>
@@ -108,12 +119,14 @@ export default function WorkspaceLayout() {
               aria-label="Open navigation"
             >
               <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
+                <path
+                  fillRule="evenodd"
+                  d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"
+                  clipRule="evenodd"
+                />
               </svg>
             </button>
-            <h1 className="text-sm font-medium text-text-secondary">
-              Pipeline Workspace
-            </h1>
+            <h1 className="text-sm font-medium text-text-secondary">Pipeline Workspace</h1>
           </div>
           <ProjectSelector />
         </header>

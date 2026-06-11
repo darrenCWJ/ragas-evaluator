@@ -4,16 +4,14 @@ import json
 
 from fastapi import APIRouter, HTTPException
 
-from app.routes.experiments import _sanitize_nan
-
+import db.init
 from app.models import (
     ApplySuggestionRequest,
     BatchApplyRequest,
     SuggestionUpdate,
 )
-from app.routes.experiments import _parse_experiment_row
+from app.routes.experiments import _parse_experiment_row, _sanitize_nan
 from evaluation.suggestions import apply_config_change, generate_suggestions
-import db.init
 
 router = APIRouter(prefix="/api", tags=["analyze"])
 
@@ -245,7 +243,7 @@ async def apply_suggestion(
             dict(rag_config), config_field, suggested_value, req.override_value
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     # Count existing iterations for naming
     iteration_count = conn.execute(
@@ -447,7 +445,7 @@ async def apply_suggestions_batch(
             raise HTTPException(
                 status_code=400,
                 detail=f"Suggestion {s['id']} ({s['config_field']}): {e}",
-            )
+            ) from e
 
     # Count existing iterations for naming
     iteration_count = conn.execute(

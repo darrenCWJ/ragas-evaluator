@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
-import { useProject } from "../contexts/ProjectContext";
-import { fetchTestSets, fetchChunkConfigs } from "../lib/api";
-import type { TestSet, ChunkConfig } from "../lib/api";
-import TestSetGenerate from "../components/test/TestSetGenerate";
-import TestSetUpload from "../components/test/TestSetUpload";
-import TestSetList from "../components/test/TestSetList";
-import QuestionList from "../components/test/QuestionList";
-import Card from "../components/ui/Card";
+import { useState, useEffect, useCallback } from 'react';
+import { useProject } from '../contexts/ProjectContext';
+import { fetchTestSets, fetchChunkConfigs } from '../lib/api';
+import type { TestSet, ChunkConfig } from '../lib/api';
+import TestSetGenerate from '../components/test/TestSetGenerate';
+import TestSetUpload from '../components/test/TestSetUpload';
+import TestSetList from '../components/test/TestSetList';
+import QuestionList from '../components/test/QuestionList';
+import Card from '../components/ui/Card';
 
 export default function TestPage() {
   const { project } = useProject();
@@ -22,7 +22,7 @@ export default function TestPage() {
       const ts = await fetchTestSets(project.id);
       setTestSets(ts);
     } catch (err) {
-      setError((err as Error).message || "Failed to load test sets");
+      setError((err as Error).message || 'Failed to load test sets');
     }
   }, [project]);
 
@@ -39,9 +39,7 @@ export default function TestPage() {
   useEffect(() => {
     if (!project) return;
     setLoading(true);
-    Promise.all([loadTestSets(), loadChunkConfigs()]).finally(() =>
-      setLoading(false),
-    );
+    Promise.all([loadTestSets(), loadChunkConfigs()]).finally(() => setLoading(false));
   }, [project, loadTestSets, loadChunkConfigs]);
 
   if (!project) return null;
@@ -53,7 +51,10 @@ export default function TestPage() {
         <QuestionList
           projectId={project.id}
           testSet={selectedTestSet}
-          onBack={() => { setSelectedTestSet(null); loadTestSets(); }}
+          onBack={() => {
+            setSelectedTestSet(null);
+            loadTestSets();
+          }}
         />
       </div>
     );
@@ -81,9 +82,7 @@ export default function TestPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold text-text-primary">Test</h1>
-          <p className="text-sm text-text-secondary">
-            Generate test sets and browse questions.
-          </p>
+          <p className="text-sm text-text-secondary">Generate test sets and browse questions.</p>
         </div>
       </div>
 
@@ -96,17 +95,12 @@ export default function TestPage() {
 
       {/* Loading */}
       {loading ? (
-        <div className="py-12 text-center text-sm text-text-muted">
-          Loading…
-        </div>
+        <div className="py-12 text-center text-sm text-text-muted">Loading…</div>
       ) : (
         <div className="space-y-8">
           {/* Upload custom Q&A */}
           <Card padding="lg" className="p-5">
-            <TestSetUpload
-              projectId={project.id}
-              onTestSetCreated={loadTestSets}
-            />
+            <TestSetUpload projectId={project.id} onTestSetCreated={loadTestSets} />
           </Card>
 
           {/* Generation form */}

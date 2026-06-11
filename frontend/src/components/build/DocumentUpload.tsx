@@ -1,7 +1,7 @@
-import { useState, useRef, type DragEvent } from "react";
-import { uploadDocument } from "../../lib/api";
+import { useState, useRef, type DragEvent } from 'react';
+import { uploadDocument } from '../../lib/api';
 
-const ALLOWED_EXTENSIONS = [".pdf", ".txt", ".docx"];
+const ALLOWED_EXTENSIONS = ['.pdf', '.txt', '.docx'];
 const MAX_SIZE = 50 * 1024 * 1024; // 50MB
 
 interface Props {
@@ -17,7 +17,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   function validate(file: File): string | null {
-    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       return `Unsupported file type "${ext}". Only .pdf, .txt, and .docx allowed.`;
     }
@@ -51,16 +51,16 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
       try {
         await uploadDocument(projectId, fileArray[i]!);
       } catch (err) {
-        errors.push(`${fileArray[i]!.name}: ${err instanceof Error ? err.message : "failed"}`);
+        errors.push(`${fileArray[i]!.name}: ${err instanceof Error ? err.message : 'failed'}`);
       }
     }
 
     setUploading(false);
     setProgress(null);
-    if (inputRef.current) inputRef.current.value = "";
+    if (inputRef.current) inputRef.current.value = '';
 
     if (errors.length > 0) {
-      setError(errors.join("\n"));
+      setError(errors.join('\n'));
     }
     onUploaded();
   }
@@ -89,9 +89,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
         className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
-          dragging
-            ? "border-accent bg-accent-glow"
-            : "border-border hover:border-text-muted"
+          dragging ? 'border-accent bg-accent-glow' : 'border-border hover:border-text-muted'
         }`}
       >
         <input
@@ -105,11 +103,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
 
         {uploading ? (
           <div className="flex flex-col items-center gap-2">
-            <svg
-              className="h-6 w-6 animate-spin text-accent"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
+            <svg className="h-6 w-6 animate-spin text-accent" fill="none" viewBox="0 0 24 24">
               <circle
                 className="opacity-25"
                 cx="12"
@@ -127,7 +121,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
             <span className="text-sm text-text-secondary">
               {progress && progress.total > 1
                 ? `Uploading ${progress.current} of ${progress.total}...`
-                : "Uploading..."}
+                : 'Uploading...'}
             </span>
           </div>
         ) : (
@@ -146,8 +140,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
               />
             </svg>
             <p className="text-sm text-text-secondary">
-              Drag & drop files here, or{" "}
-              <span className="text-accent underline">browse</span>
+              Drag & drop files here, or <span className="text-accent underline">browse</span>
             </p>
             <p className="text-xs text-text-muted">.pdf, .txt, .docx — max 50 MB</p>
           </div>

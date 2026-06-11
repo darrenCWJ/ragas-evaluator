@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from 'react';
 import {
   fetchBotConfigs,
   fetchConfigDefaults,
@@ -7,19 +7,19 @@ import {
   deleteBotConfig,
   type BotConfig,
   type ConnectorType,
-} from "../../lib/api";
+} from '../../lib/api';
 
 interface Props {
   projectId: number;
 }
 
 const CONNECTOR_OPTIONS: { value: ConnectorType; label: string; description: string }[] = [
-  { value: "glean", label: "Glean", description: "Glean conversational search API" },
-  { value: "openai", label: "OpenAI", description: "GPT models via OpenAI API" },
-  { value: "claude", label: "Claude", description: "Anthropic Claude models" },
-  { value: "deepseek", label: "DeepSeek", description: "DeepSeek chat models" },
-  { value: "gemini", label: "Gemini", description: "Google Gemini models" },
-  { value: "custom", label: "Custom API", description: "Any HTTP endpoint" },
+  { value: 'glean', label: 'Glean', description: 'Glean conversational search API' },
+  { value: 'openai', label: 'OpenAI', description: 'GPT models via OpenAI API' },
+  { value: 'claude', label: 'Claude', description: 'Anthropic Claude models' },
+  { value: 'deepseek', label: 'DeepSeek', description: 'DeepSeek chat models' },
+  { value: 'gemini', label: 'Gemini', description: 'Google Gemini models' },
+  { value: 'custom', label: 'Custom API', description: 'Any HTTP endpoint' },
 ];
 
 export default function BotConnectorConfig({ projectId }: Props) {
@@ -32,21 +32,21 @@ export default function BotConnectorConfig({ projectId }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Form state
-  const [selectedType, setSelectedType] = useState<ConnectorType>("glean");
-  const [name, setName] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("");
+  const [selectedType, setSelectedType] = useState<ConnectorType>('glean');
+  const [name, setName] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [promptForSources, setPromptForSources] = useState(false);
   // Glean-specific
-  const [agentId, setAgentId] = useState("");
+  const [agentId, setAgentId] = useState('');
   // Custom connector fields
-  const [endpointUrl, setEndpointUrl] = useState("");
-  const [headersJson, setHeadersJson] = useState("");
+  const [endpointUrl, setEndpointUrl] = useState('');
+  const [headersJson, setHeadersJson] = useState('');
   const [requestBodyTemplate, setRequestBodyTemplate] = useState('{"question": "{{question}}"}');
-  const [responseAnswerPath, setResponseAnswerPath] = useState("$.answer");
-  const [responseCitationsPath, setResponseCitationsPath] = useState("");
+  const [responseAnswerPath, setResponseAnswerPath] = useState('$.answer');
+  const [responseCitationsPath, setResponseCitationsPath] = useState('');
   const [showCustomGuide, setShowCustomGuide] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -78,18 +78,18 @@ export default function BotConnectorConfig({ projectId }: Props) {
   }, [load]);
 
   function resetForm() {
-    setName("");
-    setApiKey("");
-    setBaseUrl("");
-    setModel("");
-    setSystemPrompt("");
+    setName('');
+    setApiKey('');
+    setBaseUrl('');
+    setModel('');
+    setSystemPrompt('');
     setPromptForSources(false);
-    setAgentId("");
-    setEndpointUrl("");
-    setHeadersJson("");
+    setAgentId('');
+    setEndpointUrl('');
+    setHeadersJson('');
     setRequestBodyTemplate('{"question": "{{question}}"}');
-    setResponseAnswerPath("$.answer");
-    setResponseCitationsPath("");
+    setResponseAnswerPath('$.answer');
+    setResponseCitationsPath('');
     setShowCustomGuide(false);
     setEditingId(null);
     setConfirmDelete(false);
@@ -97,13 +97,13 @@ export default function BotConnectorConfig({ projectId }: Props) {
 
   function handleTypeChange(type: ConnectorType) {
     setSelectedType(type);
-    setModel(defaultModels[type] ?? "");
+    setModel(defaultModels[type] ?? '');
     if (!editingId) {
-      setApiKey("");
-      setBaseUrl("");
-      setSystemPrompt("");
-      setEndpointUrl("");
-      setHeadersJson("");
+      setApiKey('');
+      setBaseUrl('');
+      setSystemPrompt('');
+      setEndpointUrl('');
+      setHeadersJson('');
     }
   }
 
@@ -113,26 +113,26 @@ export default function BotConnectorConfig({ projectId }: Props) {
     setName(cfg.name);
     setPromptForSources(cfg.prompt_for_sources);
     const c = cfg.config_json as Record<string, string>;
-    setApiKey(c.api_key ?? "");
-    setBaseUrl(c.base_url ?? "");
-    setModel(c.model ?? defaultModels[cfg.connector_type] ?? "");
-    setSystemPrompt(c.system_prompt ?? "");
-    setAgentId(c.agent_id ?? "");
-    setEndpointUrl(c.endpoint_url ?? "");
-    setHeadersJson(c.headers ? JSON.stringify(c.headers, null, 2) : "");
+    setApiKey(c.api_key ?? '');
+    setBaseUrl(c.base_url ?? '');
+    setModel(c.model ?? defaultModels[cfg.connector_type] ?? '');
+    setSystemPrompt(c.system_prompt ?? '');
+    setAgentId(c.agent_id ?? '');
+    setEndpointUrl(c.endpoint_url ?? '');
+    setHeadersJson(c.headers ? JSON.stringify(c.headers, null, 2) : '');
     setRequestBodyTemplate(c.request_body_template ?? '{"question": "{{question}}"}');
-    setResponseAnswerPath(c.response_answer_path ?? "$.answer");
-    setResponseCitationsPath(c.response_citations_path ?? "");
+    setResponseAnswerPath(c.response_answer_path ?? '$.answer');
+    setResponseCitationsPath(c.response_citations_path ?? '');
   }
 
   function buildConfigJson(): Record<string, unknown> {
-    if (selectedType === "glean") {
+    if (selectedType === 'glean') {
       const cfg: Record<string, unknown> = { api_key: apiKey };
       if (baseUrl.trim()) cfg.base_url = baseUrl.trim();
       if (agentId.trim()) cfg.agent_id = agentId.trim();
       return cfg;
     }
-    if (selectedType === "custom") {
+    if (selectedType === 'custom') {
       const cfg: Record<string, unknown> = {
         endpoint_url: endpointUrl.trim(),
         request_body_template: requestBodyTemplate,
@@ -145,7 +145,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
         try {
           cfg.headers = JSON.parse(headersJson);
         } catch {
-          throw new Error("Custom headers must be valid JSON");
+          throw new Error('Custom headers must be valid JSON');
         }
       }
       return cfg;
@@ -163,15 +163,15 @@ export default function BotConnectorConfig({ projectId }: Props) {
 
     const trimmedName = name.trim();
     if (!trimmedName) {
-      setError("Bot name is required.");
+      setError('Bot name is required.');
       return;
     }
-    if (!apiKey.trim() && selectedType !== "custom") {
-      setError("API key is required.");
+    if (!apiKey.trim() && selectedType !== 'custom') {
+      setError('API key is required.');
       return;
     }
-    if (selectedType === "custom" && !endpointUrl.trim()) {
-      setError("Endpoint URL is required.");
+    if (selectedType === 'custom' && !endpointUrl.trim()) {
+      setError('Endpoint URL is required.');
       return;
     }
 
@@ -179,7 +179,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
     try {
       configJson = buildConfigJson();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid config");
+      setError(err instanceof Error ? err.message : 'Invalid config');
       return;
     }
 
@@ -192,7 +192,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
           config_json: configJson,
           prompt_for_sources: promptForSources,
         });
-        setSuccess("Bot config updated.");
+        setSuccess('Bot config updated.');
       } else {
         await createBotConfig(projectId, {
           name: trimmedName,
@@ -200,13 +200,13 @@ export default function BotConnectorConfig({ projectId }: Props) {
           config_json: configJson,
           prompt_for_sources: promptForSources,
         });
-        setSuccess("Bot config saved.");
+        setSuccess('Bot config saved.');
       }
       resetForm();
       await load();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -216,12 +216,12 @@ export default function BotConnectorConfig({ projectId }: Props) {
     if (!editingId) return;
     try {
       await deleteBotConfig(projectId, editingId);
-      setSuccess("Bot config removed.");
+      setSuccess('Bot config removed.');
       resetForm();
       await load();
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
+      setError(err instanceof Error ? err.message : 'Failed to delete');
     }
   }
 
@@ -231,8 +231,19 @@ export default function BotConnectorConfig({ projectId }: Props) {
         <h3 className="mb-3 text-sm font-semibold text-text-primary">Bot Connector</h3>
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
           Loading...
         </div>
@@ -240,7 +251,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
     );
   }
 
-  const isLLMType = ["openai", "claude", "deepseek", "gemini"].includes(selectedType);
+  const isLLMType = ['openai', 'claude', 'deepseek', 'gemini'].includes(selectedType);
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
@@ -250,19 +261,19 @@ export default function BotConnectorConfig({ projectId }: Props) {
       </p>
 
       {/* Existing configs (exclude CSV uploads — shown in Uploaded CSVs panel) */}
-      {configs.filter((c) => c.connector_type !== "csv").length > 0 && (
+      {configs.filter((c) => c.connector_type !== 'csv').length > 0 && (
         <div className="mb-4 space-y-2">
           <label className="block text-xs font-medium text-text-secondary">Saved Configs</label>
           {configs
-            .filter((c) => c.connector_type !== "csv")
+            .filter((c) => c.connector_type !== 'csv')
             .map((cfg) => (
               <button
                 key={cfg.id}
                 onClick={() => populateFormFromConfig(cfg)}
                 className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
                   editingId === cfg.id
-                    ? "border-accent bg-accent/10 text-accent"
-                    : "border-border bg-surface text-text-primary hover:border-border-focus"
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-border bg-surface text-text-primary hover:border-border-focus'
                 }`}
               >
                 <div>
@@ -271,16 +282,23 @@ export default function BotConnectorConfig({ projectId }: Props) {
                     {cfg.connector_type}
                   </span>
                 </div>
-                <svg className="h-3.5 w-3.5 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                <svg
+                  className="h-3.5 w-3.5 text-text-muted"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"
+                  />
                 </svg>
               </button>
             ))}
           {editingId && (
-            <button
-              onClick={resetForm}
-              className="text-xs text-accent hover:underline"
-            >
+            <button onClick={resetForm} className="text-xs text-accent hover:underline">
               + New config
             </button>
           )}
@@ -296,8 +314,8 @@ export default function BotConnectorConfig({ projectId }: Props) {
               key={opt.value}
               className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 transition-colors ${
                 selectedType === opt.value
-                  ? "border-accent bg-accent/8"
-                  : "border-border bg-surface hover:border-border-focus"
+                  ? 'border-accent bg-accent/8'
+                  : 'border-border bg-surface hover:border-border-focus'
               }`}
             >
               <input
@@ -333,7 +351,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
         </div>
 
         {/* API Key — all except custom */}
-        {selectedType !== "custom" && (
+        {selectedType !== 'custom' && (
           <div>
             <label className="mb-1 block text-xs font-medium text-text-secondary">
               API Key <span className="text-score-low">*</span>
@@ -342,14 +360,14 @@ export default function BotConnectorConfig({ projectId }: Props) {
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder={selectedType === "glean" ? "Glean API token" : "sk-..."}
+              placeholder={selectedType === 'glean' ? 'Glean API token' : 'sk-...'}
               className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
             />
           </div>
         )}
 
         {/* Glean-specific: base URL + agent ID */}
-        {selectedType === "glean" && (
+        {selectedType === 'glean' && (
           <>
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
@@ -375,7 +393,8 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
               <p className="mt-1 text-xs text-text-muted">
-                Specify a Glean Assistant/Agent ID to route questions to a specific agent instead of the default bot.
+                Specify a Glean Assistant/Agent ID to route questions to a specific agent instead of
+                the default bot.
               </p>
             </div>
           </>
@@ -392,7 +411,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 type="text"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder={defaultModels[selectedType] ?? ""}
+                placeholder={defaultModels[selectedType] ?? ''}
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
             </div>
@@ -412,7 +431,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
         )}
 
         {/* Custom connector fields */}
-        {selectedType === "custom" && (
+        {selectedType === 'custom' && (
           <>
             {/* Collapsible guide */}
             <div className="rounded-lg border border-border bg-surface">
@@ -422,16 +441,22 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-accent hover:text-accent/80"
               >
                 <span>How to configure a custom API connector</span>
-                <svg className={`h-3.5 w-3.5 transition-transform ${showCustomGuide ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg
+                  className={`h-3.5 w-3.5 transition-transform ${showCustomGuide ? 'rotate-180' : ''}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
               {showCustomGuide && (
                 <div className="border-t border-border px-3 pb-3 pt-2 text-xs text-text-secondary space-y-3">
                   <p>
-                    Point this connector at any HTTP chatbot endpoint. The evaluator sends your question
-                    and uses <strong>JSONPath</strong> expressions to extract the answer and optional citations
-                    from the response.
+                    Point this connector at any HTTP chatbot endpoint. The evaluator sends your
+                    question and uses <strong>JSONPath</strong> expressions to extract the answer
+                    and optional citations from the response.
                   </p>
                   <div>
                     <p className="font-medium text-text-primary mb-1">Example API response:</p>
@@ -447,7 +472,9 @@ export default function BotConnectorConfig({ projectId }: Props) {
 }`}</pre>
                   </div>
                   <div>
-                    <p className="font-medium text-text-primary mb-1">JSONPath mappings for the example above:</p>
+                    <p className="font-medium text-text-primary mb-1">
+                      JSONPath mappings for the example above:
+                    </p>
                     <table className="w-full text-[11px]">
                       <tbody>
                         <tr className="border-b border-border/50">
@@ -456,9 +483,13 @@ export default function BotConnectorConfig({ projectId }: Props) {
                           <td className="py-1 pl-2 text-text-muted">Extracts the answer text</td>
                         </tr>
                         <tr>
-                          <td className="py-1 pr-2 font-medium text-text-primary">Citations path</td>
+                          <td className="py-1 pr-2 font-medium text-text-primary">
+                            Citations path
+                          </td>
                           <td className="py-1 font-mono text-accent">$.sources</td>
-                          <td className="py-1 pl-2 text-text-muted">Array of objects with title, url, snippet</td>
+                          <td className="py-1 pl-2 text-text-muted">
+                            Array of objects with title, url, snippet
+                          </td>
                         </tr>
                       </tbody>
                     </table>
@@ -467,14 +498,27 @@ export default function BotConnectorConfig({ projectId }: Props) {
                     <p className="font-medium text-accent">Why citations matter</p>
                     <p className="mt-0.5">
                       If your API returns source citations, configure the citations path to enable
-                      context-dependent metrics (faithfulness, context precision, context recall, etc.).
-                      Without it, these metrics will be disabled during experiments.
+                      context-dependent metrics (faithfulness, context precision, context recall,
+                      etc.). Without it, these metrics will be disabled during experiments.
                     </p>
                   </div>
                   <div>
                     <p className="font-medium text-text-primary mb-1">Citation object fields:</p>
-                    <p>Each citation object should have at least a <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">snippet</code> field
-                    (the retrieved text). Optional: <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">title</code> and <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">url</code> for source verification.</p>
+                    <p>
+                      Each citation object should have at least a{' '}
+                      <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">
+                        snippet
+                      </code>{' '}
+                      field (the retrieved text). Optional:{' '}
+                      <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">
+                        title
+                      </code>{' '}
+                      and{' '}
+                      <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">
+                        url
+                      </code>{' '}
+                      for source verification.
+                    </p>
                   </div>
                 </div>
               )}
@@ -491,7 +535,9 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 placeholder="https://api.example.com/chat"
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
-              <p className="mt-1 text-xs text-text-muted">The full URL your chatbot listens on. Receives a POST request by default.</p>
+              <p className="mt-1 text-xs text-text-muted">
+                The full URL your chatbot listens on. Receives a POST request by default.
+              </p>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
@@ -504,7 +550,9 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 rows={2}
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
-              <p className="mt-1 text-xs text-text-muted">JSON object of HTTP headers sent with every request (e.g. auth tokens).</p>
+              <p className="mt-1 text-xs text-text-muted">
+                JSON object of HTTP headers sent with every request (e.g. auth tokens).
+              </p>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
@@ -518,7 +566,11 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm font-mono text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
               <p className="mt-1 text-xs text-text-muted">
-                JSON template with <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">{"{{question}}"}</code> as the placeholder for the test question.
+                JSON template with{' '}
+                <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono text-accent">
+                  {'{{question}}'}
+                </code>{' '}
+                as the placeholder for the test question.
               </p>
             </div>
             <div>
@@ -532,7 +584,9 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 placeholder="$.answer"
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm font-mono text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
-              <p className="mt-1 text-xs text-text-muted">JSONPath expression to extract the bot's answer text from the response.</p>
+              <p className="mt-1 text-xs text-text-muted">
+                JSONPath expression to extract the bot's answer text from the response.
+              </p>
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
@@ -546,7 +600,10 @@ export default function BotConnectorConfig({ projectId }: Props) {
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm font-mono text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
               />
               <p className="mt-1 text-xs text-text-muted">
-                JSONPath to an array of citation objects (with <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono">snippet</code>, <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono">title</code>, <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono">url</code>).
+                JSONPath to an array of citation objects (with{' '}
+                <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono">snippet</code>,{' '}
+                <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono">title</code>,{' '}
+                <code className="rounded bg-surface-elevated px-1 py-0.5 font-mono">url</code>).
                 Enables context-dependent metrics like faithfulness and context precision.
               </p>
             </div>
@@ -573,7 +630,7 @@ export default function BotConnectorConfig({ projectId }: Props) {
             disabled={saving}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
           >
-            {saving ? "Saving..." : editingId ? "Update" : "Save"}
+            {saving ? 'Saving...' : editingId ? 'Update' : 'Save'}
           </button>
 
           {editingId && !confirmDelete && (

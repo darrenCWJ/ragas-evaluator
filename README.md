@@ -1,13 +1,13 @@
 | [README](README.md) | [Features Guide](docs/FEATURES.md) |
 |---|---|
 
-# RAG Evaluator
+# Tribunal — RAG Evaluator
 
 ## Problem Statement
 
 As AI chatbots become increasingly accessible, more individuals and teams are building conversational bots for customer support, internal knowledge bases, education, and other domains. However, a critical gap remains: **how do you know if your bot is actually giving accurate, grounded answers?**
 
-Most RAG (Retrieval-Augmented Generation) systems are deployed with minimal evaluation. Builders rely on manual spot-checking or anecdotal feedback, leaving systemic issues — hallucinations, poor retrieval, irrelevant responses — undetected until users complain.
+Most RAG (Retrieval-Augmented Generation) systems are deployed with minimal evaluation. Builders rely on manual spot-checking or anecdotal feedback, leaving systemic issues â€” hallucinations, poor retrieval, irrelevant responses â€” undetected until users complain.
 
 This project addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
 
@@ -21,7 +21,7 @@ Rather than treating evaluation as a one-off check, Tribunal enables an **iterat
 2. **Generate** synthetic test questions from your documents using auto-generated or custom personas
 3. **Run experiments** that evaluate every question against 20+ metrics
 4. **Analyze results** with an AI-powered suggestion engine that pinpoints weak spots
-5. **Apply suggestions** to create a new configuration and re-run — comparing before and after
+5. **Apply suggestions** to create a new configuration and re-run â€” comparing before and after
 
 ### Architecture
 
@@ -116,21 +116,21 @@ Each suggestion maps to a specific config field and can be applied directly from
 
 ## Key Features
 
-- **Persona-based test generation** — auto-generate diverse personas (fast: direct LLM call; full: KG-based) with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
-- **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
-- **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously with chain-of-thought reasoning and claim-level annotations. Computes a reliability score based on inter-judge agreement; flags results where judges disagree.
-- **Reranker support** — optional cross-encoder reranker applied after retrieval with configurable top-k cutoff.
-- **Source verification** — automatically check bot-cited URLs for reachability and content alignment. Statuses: `verified`, `hallucinated`, `inaccessible`, `unverifiable`.
-- **Human annotation** — deterministic 20% sample of experiment results for human review; computes evaluator accuracy against ground truth.
-- **Custom metrics** — define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics, criteria judge, reference judge) without code changes. Includes LLM-powered description refinement.
-- **Experiment comparison & reporting** — per-metric deltas, experiment lineage tracking, time-series trends, project-level reports by bot type, CSV/JSON export.
-- **KG visualization** — stream knowledge graph nodes and edges via SSE; inspect the graph structure built for test generation.
-- **2-step chunking pipeline** — chain two chunking strategies sequentially (e.g., markdown split then recursive) with post-chunk quality filters.
-- **Contextual prefix embedding** — prepend document-level context labels to chunk text before embedding for improved multi-corpus retrieval.
+- **Persona-based test generation** â€” auto-generate diverse personas (fast: direct LLM call; full: KG-based) with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
+- **Bot connectors** â€” test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
+- **Multi-LLM judge** â€” run evaluation metrics across multiple LLM judges simultaneously with chain-of-thought reasoning and claim-level annotations. Computes a reliability score based on inter-judge agreement; flags results where judges disagree.
+- **Reranker support** â€” optional cross-encoder reranker applied after retrieval with configurable top-k cutoff.
+- **Source verification** â€” automatically check bot-cited URLs for reachability and content alignment. Statuses: `verified`, `hallucinated`, `inaccessible`, `unverifiable`.
+- **Human annotation** â€” deterministic 20% sample of experiment results for human review; computes evaluator accuracy against ground truth.
+- **Custom metrics** â€” define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics, criteria judge, reference judge) without code changes. Includes LLM-powered description refinement.
+- **Experiment comparison & reporting** â€” per-metric deltas, experiment lineage tracking, time-series trends, project-level reports by bot type, CSV/JSON export.
+- **KG visualization** â€” stream knowledge graph nodes and edges via SSE; inspect the graph structure built for test generation.
+- **2-step chunking pipeline** â€” chain two chunking strategies sequentially (e.g., markdown split then recursive) with post-chunk quality filters.
+- **Contextual prefix embedding** â€” prepend document-level context labels to chunk text before embedding for improved multi-corpus retrieval.
 
 ## Deployment
 
-### Option A — Self-hosting (Docker, recommended)
+### Option A â€” Self-hosting (Docker, recommended)
 
 ```bash
 cp .env.example .env
@@ -147,21 +147,21 @@ The docker-compose stack includes the **KG Worker** service. To run without it, 
 docker compose up --build --no-deps app
 ```
 
-### Option B — Server deployment (Northflank + Neon)
+### Option B â€” Server deployment (Northflank + Neon)
 
 Set these environment variables on your platform:
 
 | Variable | Description |
 |---|---|
-| `OPENAI_API_KEY` | Required — OpenAI API access |
+| `OPENAI_API_KEY` | Required â€” OpenAI API access |
 | `DATABASE_URL` | PostgreSQL connection string (e.g. Neon) |
 | `RAGAS_API_KEY` | Strong secret to protect all API endpoints |
 | `PORT` | Set automatically by Northflank |
-| `KG_WORKER_URLS` | Optional — comma-separated worker URLs (e.g. `http://kg-worker-1:3000,http://kg-worker-2:3000`) |
+| `KG_WORKER_URLS` | Optional â€” comma-separated worker URLs (e.g. `http://kg-worker-1:3000,http://kg-worker-2:3000`) |
 
 The Dockerfile builds the frontend and starts the app on `$PORT` (defaults to `3000`). Deploy the worker separately using `worker/Dockerfile` and point `KG_WORKER_URLS` at it.
 
-### Option C — Local development (no Docker)
+### Option C â€” Local development (no Docker)
 
 ```bash
 pip install -r requirements.txt
@@ -176,7 +176,7 @@ cd frontend && npm install && npm run dev  # dev server on :5173
 
 ### Authentication
 
-Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
+Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all requests. Without it, all endpoints are publicly accessible â€” only skip this on trusted private networks.
 
 ```bash
 # Generate a strong secret
@@ -199,13 +199,13 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | **Required.** OpenAI API key |
-| `ANTHROPIC_API_KEY` | — | Optional. Enables Claude models as judges |
-| `GOOGLE_API_KEY` | — | Optional. Enables Gemini models as judges |
-| `RAGAS_API_KEY` | — | Bearer token auth; without it all endpoints are public |
-| `DATABASE_URL` | — | PostgreSQL connection string; omit for SQLite |
-| `KG_WORKER_URLS` | — | Comma-separated worker URLs for load-balanced KG builds |
-| `KG_WORKER_URL` | — | Legacy single-worker URL (backward compat) |
+| `OPENAI_API_KEY` | â€” | **Required.** OpenAI API key |
+| `ANTHROPIC_API_KEY` | â€” | Optional. Enables Claude models as judges |
+| `GOOGLE_API_KEY` | â€” | Optional. Enables Gemini models as judges |
+| `RAGAS_API_KEY` | â€” | Bearer token auth; without it all endpoints are public |
+| `DATABASE_URL` | â€” | PostgreSQL connection string; omit for SQLite |
+| `KG_WORKER_URLS` | â€” | Comma-separated worker URLs for load-balanced KG builds |
+| `KG_WORKER_URL` | â€” | Legacy single-worker URL (backward compat) |
 | `KG_THREAD_MODE` | `false` | Run KG builds in a thread instead of subprocess |
 | `ALLOW_PRIVATE_ENDPOINTS` | `false` | Allow requests to private IPs (disable SSRF protection) |
 | `PORT` | `8000` | Server port |
@@ -223,57 +223,57 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 ## Project Structure
 
 ```
-├── app/                     # FastAPI application
-│   ├── __init__.py          # App factory, middleware, lifespan
-│   ├── models.py            # Pydantic request/response models
-│   └── routes/              # Route modules (16 modules)
-│       ├── projects.py      # Project CRUD, baselines, API config
-│       ├── documents.py     # Document upload (PDF/TXT/DOCX)
-│       ├── chunks.py        # Chunking configuration and preview
-│       ├── embeddings.py    # Embedding configuration
-│       ├── rag.py           # RAG config and single-query testing
-│       ├── testsets.py      # Test set generation, KG endpoints, upload
-│       ├── personas.py      # Persona CRUD and auto-generation
-│       ├── experiments.py   # Experiment runner (SSE streaming)
-│       ├── analyze.py       # Suggestions and config changes
-│       ├── bot_configs.py   # External bot connector configs
-│       ├── annotations.py   # Human annotation and evaluator accuracy
-│       ├── reports.py       # Project-level reporting and trends
-│       ├── custom_metrics.py # User-defined evaluation metrics
-│       ├── multi_llm_judge.py # Multi-judge evaluation
-│       └── health.py        # Health check endpoint
-├── pipeline/                # RAG engine
-│   ├── chunking.py          # 6 chunking strategies + 2-step pipeline
-│   ├── embedding.py         # OpenAI + SentenceTransformers + contextual prefix
-│   ├── vectorstore.py       # ChromaDB integration
-│   ├── bm25.py              # BM25 sparse search
-│   ├── rag.py               # Retrieval + generation (dense/sparse/hybrid/reranker)
-│   └── llm.py               # Multi-provider LLM routing (OpenAI, Anthropic, Google)
-├── evaluation/              # Metrics and analysis
-│   ├── metrics/             # 23 metric modules
-│   ├── scoring.py           # Metric orchestration
-│   ├── suggestions.py       # Rule-based suggestion engine
-│   └── testgen.py           # Synthetic test generation (persona-based)
-├── worker/                  # KG Worker service (separate FastAPI app)
-│   ├── main.py              # Worker app entrypoint
-│   ├── routes.py            # 5 endpoints: /build-kg, /progress, /kg, /clear-build, /health
-│   ├── config.py            # Worker config (concurrency, timeouts, paths)
-│   ├── db/init.py           # Worker DB layer (KG tables, progress tracking)
-│   ├── evaluation/metrics/testgen.py  # KG build functions
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── .env.example
-├── db/                      # Main app database layer
-│   └── init.py              # Schema, migrations, queries
-├── frontend/                # React + TypeScript + Tailwind SPA
-│   └── src/
-│       ├── pages/           # Setup, Build, Test, Experiment, Analyze
-│       └── components/      # UI components per feature
-├── tests/                   # pytest test suite
-├── main.py                  # Uvicorn entrypoint
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
+â”œâ”€â”€ app/                     # FastAPI application
+â”‚   â”œâ”€â”€ __init__.py          # App factory, middleware, lifespan
+â”‚   â”œâ”€â”€ models.py            # Pydantic request/response models
+â”‚   â””â”€â”€ routes/              # Route modules (16 modules)
+â”‚       â”œâ”€â”€ projects.py      # Project CRUD, baselines, API config
+â”‚       â”œâ”€â”€ documents.py     # Document upload (PDF/TXT/DOCX)
+â”‚       â”œâ”€â”€ chunks.py        # Chunking configuration and preview
+â”‚       â”œâ”€â”€ embeddings.py    # Embedding configuration
+â”‚       â”œâ”€â”€ rag.py           # RAG config and single-query testing
+â”‚       â”œâ”€â”€ testsets.py      # Test set generation, KG endpoints, upload
+â”‚       â”œâ”€â”€ personas.py      # Persona CRUD and auto-generation
+â”‚       â”œâ”€â”€ experiments.py   # Experiment runner (SSE streaming)
+â”‚       â”œâ”€â”€ analyze.py       # Suggestions and config changes
+â”‚       â”œâ”€â”€ bot_configs.py   # External bot connector configs
+â”‚       â”œâ”€â”€ annotations.py   # Human annotation and evaluator accuracy
+â”‚       â”œâ”€â”€ reports.py       # Project-level reporting and trends
+â”‚       â”œâ”€â”€ custom_metrics.py # User-defined evaluation metrics
+â”‚       â”œâ”€â”€ multi_llm_judge.py # Multi-judge evaluation
+â”‚       â””â”€â”€ health.py        # Health check endpoint
+â”œâ”€â”€ pipeline/                # RAG engine
+â”‚   â”œâ”€â”€ chunking.py          # 6 chunking strategies + 2-step pipeline
+â”‚   â”œâ”€â”€ embedding.py         # OpenAI + SentenceTransformers + contextual prefix
+â”‚   â”œâ”€â”€ vectorstore.py       # ChromaDB integration
+â”‚   â”œâ”€â”€ bm25.py              # BM25 sparse search
+â”‚   â”œâ”€â”€ rag.py               # Retrieval + generation (dense/sparse/hybrid/reranker)
+â”‚   â””â”€â”€ llm.py               # Multi-provider LLM routing (OpenAI, Anthropic, Google)
+â”œâ”€â”€ evaluation/              # Metrics and analysis
+â”‚   â”œâ”€â”€ metrics/             # 23 metric modules
+â”‚   â”œâ”€â”€ scoring.py           # Metric orchestration
+â”‚   â”œâ”€â”€ suggestions.py       # Rule-based suggestion engine
+â”‚   â””â”€â”€ testgen.py           # Synthetic test generation (persona-based)
+â”œâ”€â”€ worker/                  # KG Worker service (separate FastAPI app)
+â”‚   â”œâ”€â”€ main.py              # Worker app entrypoint
+â”‚   â”œâ”€â”€ routes.py            # 5 endpoints: /build-kg, /progress, /kg, /clear-build, /health
+â”‚   â”œâ”€â”€ config.py            # Worker config (concurrency, timeouts, paths)
+â”‚   â”œâ”€â”€ db/init.py           # Worker DB layer (KG tables, progress tracking)
+â”‚   â”œâ”€â”€ evaluation/metrics/testgen.py  # KG build functions
+â”‚   â”œâ”€â”€ requirements.txt
+â”‚   â”œâ”€â”€ Dockerfile
+â”‚   â””â”€â”€ .env.example
+â”œâ”€â”€ db/                      # Main app database layer
+â”‚   â””â”€â”€ init.py              # Schema, migrations, queries
+â”œâ”€â”€ frontend/                # React + TypeScript + Tailwind SPA
+â”‚   â””â”€â”€ src/
+â”‚       â”œâ”€â”€ pages/           # Setup, Build, Test, Experiment, Analyze
+â”‚       â””â”€â”€ components/      # UI components per feature
+â”œâ”€â”€ tests/                   # pytest test suite
+â”œâ”€â”€ main.py                  # Uvicorn entrypoint
+â”œâ”€â”€ Dockerfile
+â”œâ”€â”€ docker-compose.yml
+â””â”€â”€ requirements.txt
 ```
 
 ## Tech Stack

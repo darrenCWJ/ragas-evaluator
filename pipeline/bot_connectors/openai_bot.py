@@ -12,7 +12,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from config import CONNECTOR_DEFAULT_MODELS, BOT_QUERY_TIMEOUT
+from config import BOT_QUERY_TIMEOUT, CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,

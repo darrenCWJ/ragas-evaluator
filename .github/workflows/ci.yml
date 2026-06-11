@@ -7,6 +7,23 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check .
+
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
@@ -16,7 +33,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
@@ -28,7 +45,7 @@ jobs:
           OPENAI_API_KEY: sk-dummy-key-for-ci
 
   frontend:
-    name: Frontend Build
+    name: Frontend Lint + Build
     runs-on: ubuntu-latest
 
     steps:
@@ -42,6 +59,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Format check
+        run: npm run format:check
         working-directory: frontend
 
       - name: Build

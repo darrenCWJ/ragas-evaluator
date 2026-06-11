@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
-import { useProject } from "../contexts/ProjectContext";
-import { fetchExperiments } from "../lib/api";
-import type { Experiment } from "../lib/api";
-import ExperimentCreate from "../components/experiment/ExperimentCreate";
-import ExperimentList from "../components/experiment/ExperimentList";
-import ExperimentCompare from "../components/experiment/ExperimentCompare";
-import ExperimentHistory from "../components/experiment/ExperimentHistory";
-import Card from "../components/ui/Card";
+import { useState, useEffect, useCallback } from 'react';
+import { useProject } from '../contexts/ProjectContext';
+import { fetchExperiments } from '../lib/api';
+import type { Experiment } from '../lib/api';
+import ExperimentCreate from '../components/experiment/ExperimentCreate';
+import ExperimentList from '../components/experiment/ExperimentList';
+import ExperimentCompare from '../components/experiment/ExperimentCompare';
+import ExperimentHistory from '../components/experiment/ExperimentHistory';
+import Card from '../components/ui/Card';
 
 const MIN_COMPARE = 2;
 const MAX_COMPARE = 5;
@@ -33,7 +33,7 @@ export default function ExperimentPage() {
         return exps.find((e) => e.id === prev.id) ?? null;
       });
     } catch (err) {
-      setError((err as Error).message || "Failed to load experiments");
+      setError((err as Error).message || 'Failed to load experiments');
     }
   }, [project]);
 
@@ -94,12 +94,8 @@ export default function ExperimentPage() {
           </svg>
         </div>
         <div>
-          <h1 className="text-2xl font-semibold text-text-primary">
-            Experiment
-          </h1>
-          <p className="text-sm text-text-secondary">
-            Configure experiments and run evaluations.
-          </p>
+          <h1 className="text-2xl font-semibold text-text-primary">Experiment</h1>
+          <p className="text-sm text-text-secondary">Configure experiments and run evaluations.</p>
         </div>
       </div>
 
@@ -112,26 +108,21 @@ export default function ExperimentPage() {
 
       {/* Loading */}
       {loading ? (
-        <div className="py-12 text-center text-sm text-text-muted">
-          Loading...
-        </div>
+        <div className="py-12 text-center text-sm text-text-muted">Loading...</div>
       ) : (
         <div className="space-y-8">
           {/* Create form */}
           <Card padding="lg" className="p-5">
-            <ExperimentCreate
-              projectId={project.id}
-              onCreated={loadExperiments}
-            />
+            <ExperimentCreate projectId={project.id} onCreated={loadExperiments} />
           </Card>
 
           {/* Compare bar — shown when any completed experiments exist */}
-          {experiments.some((e) => e.status === "completed") && comparingIds.length === 0 && (
+          {experiments.some((e) => e.status === 'completed') && comparingIds.length === 0 && (
             <div className="flex items-center justify-between rounded-lg border border-border/60 bg-elevated/50 px-4 py-2.5">
               <span className="text-xs text-text-secondary">
                 {compareCount > 0
-                  ? `${compareCount} experiment${compareCount !== 1 ? "s" : ""} selected`
-                  : "Select experiments to compare"}
+                  ? `${compareCount} experiment${compareCount !== 1 ? 's' : ''} selected`
+                  : 'Select experiments to compare'}
               </span>
               <button
                 onClick={handleStartCompare}
@@ -161,7 +152,7 @@ export default function ExperimentPage() {
           {comparingIds.length > 0 && (
             <Card padding="lg" className="border-accent/20 p-5">
               <ExperimentCompare
-                key={comparingIds.join(",")}
+                key={comparingIds.join(',')}
                 projectId={project.id}
                 experimentIds={comparingIds}
                 onClose={handleCloseCompare}

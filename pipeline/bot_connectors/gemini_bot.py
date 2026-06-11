@@ -10,11 +10,11 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from config import CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
-from config import CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 

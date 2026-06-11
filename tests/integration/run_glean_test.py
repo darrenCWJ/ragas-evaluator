@@ -12,7 +12,7 @@ import sys
 import tempfile
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 # Ensure project root is on sys.path
@@ -20,9 +20,9 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import requests
+import requests  # noqa: E402 — must import after sys.path is set above
 
-from evaluation.scoring import ALL_METRICS
+from evaluation.scoring import ALL_METRICS  # noqa: E402
 
 # ── Fake Glean server ────────────────────────────────────────────────
 
@@ -279,7 +279,7 @@ def _run_test(base, db_path, glean_port):
 
     # Summary
     print(f"\n{'='*60}")
-    print(f"SUMMARY")
+    print("SUMMARY")
     print(f"{'='*60}")
     print(f"Requested: {len(all_metrics)} metrics")
     print(f"Scored (union across questions): {len(all_scored)} metrics")

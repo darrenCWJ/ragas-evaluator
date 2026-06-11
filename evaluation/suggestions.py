@@ -175,10 +175,10 @@ def apply_config_change(
             raise ValueError("max_steps requires a value")
         try:
             new_value = int(value_to_use)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             raise ValueError(
                 f"Invalid max_steps value: '{value_to_use}'. Must be integer 1-10."
-            )
+            ) from e
         if new_value < 1 or new_value > 10:
             raise ValueError("max_steps must be between 1 and 10")
 
@@ -187,10 +187,10 @@ def apply_config_change(
             raise ValueError("alpha requires a value")
         try:
             new_value = float(value_to_use)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             raise ValueError(
                 f"Invalid alpha value: '{value_to_use}'. Must be float 0.0-1.0."
-            )
+            ) from e
         if new_value < 0.0 or new_value > 1.0:
             raise ValueError("alpha must be between 0.0 and 1.0")
 
@@ -226,10 +226,10 @@ def apply_config_change(
             raise ValueError(f"Please select a {label} from the dropdown")
         try:
             new_value = int(value_to_use)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             raise ValueError(
                 f"Invalid {config_field} value: '{value_to_use}'. Must be an integer ID."
-            )
+            ) from e
 
     else:
         if value_to_use is not None:

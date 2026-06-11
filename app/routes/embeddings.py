@@ -5,17 +5,21 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+import db.init
 from app.models import (
     EmbeddingConfigCreate,
     EmbedRequest,
     HybridSearchRequest,
     SearchRequest,
 )
-import db.init
 from pipeline.embedding import embed_query_dispatch, embed_texts_dispatch
 from pipeline.vectorstore import (
     delete_collection as delete_vector_collection,
+)
+from pipeline.vectorstore import (
     search as vector_search,
+)
+from pipeline.vectorstore import (
     upsert_embeddings,
 )
 
@@ -180,14 +184,14 @@ async def embed_chunks(project_id: int, config_id: int, req: EmbedRequest):
         try:
             build_and_save_index(texts, metadatas, index_path)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"BM25 index build failed: {e}")
+            raise HTTPException(status_code=502, detail=f"BM25 index build failed: {e}") from e
         return {"total_embedded": len(chunks), "index": index_path}
     else:
         # Dense embedding: compute-then-swap into ChromaDB
         try:
             embeddings = await embed_texts_dispatch(texts, embedding_type, model_name, params)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}")
+            raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}") from e
 
         collection_name = f"project_{project_id}_embed_{config_id}"
         delete_vector_collection(collection_name)
@@ -223,7 +227,7 @@ async def search_embeddings(project_id: int, config_id: int, req: SearchRequest)
 
     if embedding_type == "bm25_sparse":
         # BM25: load index and search
-        from pipeline.bm25 import load_index, search_bm25, get_index_path
+        from pipeline.bm25 import get_index_path, load_index, search_bm25
         index_path = get_index_path(project_id, config_id)
         try:
             index, texts, metadatas = load_index(index_path)
@@ -236,7 +240,7 @@ async def search_embeddings(project_id: int, config_id: int, req: SearchRequest)
         try:
             query_embedding = await embed_query_dispatch(req.query, embedding_type, model_name, params)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}")
+            raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}") from e
 
         collection_name = f"project_{project_id}_embed_{config_id}"
         results = vector_search(collection_name, query_embedding, req.top_k)
@@ -301,7 +305,7 @@ async def hybrid_search(project_id: int, req: HybridSearchRequest):
 
     # --- Sparse (BM25) search ---
     sparse_results = []
-    from pipeline.bm25 import load_index, search_bm25, get_index_path
+    from pipeline.bm25 import get_index_path, load_index, search_bm25
     index_path = get_index_path(project_id, req.sparse_config_id)
     try:
         index, texts, metadatas = load_index(index_path)

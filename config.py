@@ -11,10 +11,21 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Storage paths
 # ---------------------------------------------------------------------------
+# Relative storage paths resolve against the repo root (this file's directory),
+# not the process CWD — running pytest or uvicorn from a subdirectory must not
+# silently create a second data/ tree.
+_REPO_ROOT = Path(__file__).resolve().parent
+
+
+def _resolve_path(env_var: str, default: str) -> Path:
+    raw = Path(os.environ.get(env_var, default))
+    return raw if raw.is_absolute() else _REPO_ROOT / raw
+
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "")  # Neon/PostgreSQL connection string; empty = SQLite
-DATABASE_PATH = Path(os.environ.get("DATABASE_PATH", "data/ragas.db"))
-CHROMADB_PATH = os.environ.get("CHROMADB_PATH", "data/chromadb")
-BM25_PATH = os.environ.get("BM25_PATH", "data/bm25")
+DATABASE_PATH = _resolve_path("DATABASE_PATH", "data/ragas.db")
+CHROMADB_PATH = str(_resolve_path("CHROMADB_PATH", "data/chromadb"))
+BM25_PATH = str(_resolve_path("BM25_PATH", "data/bm25"))
 
 # ---------------------------------------------------------------------------
 # Default LLM models (used by evaluation, test generation, source verification)

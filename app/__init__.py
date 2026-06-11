@@ -13,21 +13,21 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.routes import (
-    health,
-    projects,
-    documents,
-    chunks,
-    embeddings,
-    rag,
-    testsets,
-    experiments,
     analyze,
-    bot_configs,
     annotations,
-    reports,
+    bot_configs,
+    chunks,
     custom_metrics,
-    personas,
+    documents,
+    embeddings,
+    experiments,
+    health,
     multi_llm_judge,
+    personas,
+    projects,
+    rag,
+    reports,
+    testsets,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    from db.init import init_db
-
     import asyncio
+
+    from db.init import init_db
 
     try:
         init_db()
@@ -50,7 +50,9 @@ async def lifespan(application: FastAPI):
     # Background task: monitor worker-delegated experiments for liveness
     async def _monitor_worker_experiments():
         from app.routes.experiments import (
-            _experiment_worker, _experiment_worker_lock, _experiment_progress,
+            _experiment_progress,
+            _experiment_worker,
+            _experiment_worker_lock,
         )
         consecutive_failures: dict[int, int] = {}
         while True:
@@ -106,8 +108,8 @@ async def lifespan(application: FastAPI):
         pass
     # Cleanup: close shared HTTP clients to avoid "Event loop is closed" warnings
     from evaluation.metrics.testgen import close_openai_clients
-    from pipeline.llm import close_openai_client, close_anthropic_client, close_gemini_client
     from pipeline.embedding import close_openai_embed_client
+    from pipeline.llm import close_anthropic_client, close_gemini_client, close_openai_client
     await close_openai_clients()
     await close_openai_client()
     await close_anthropic_client()
@@ -140,7 +142,7 @@ class _ApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Ragas Evaluator", version="0.4.1-alpha", lifespan=lifespan)
+    application = FastAPI(title="Tribunal — RAG Evaluator", version="0.4.1-alpha", lifespan=lifespan)
 
     application.add_middleware(_ApiKeyMiddleware)
     application.add_middleware(

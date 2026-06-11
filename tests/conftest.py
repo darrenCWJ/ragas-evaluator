@@ -1,9 +1,9 @@
 """Shared fixtures for all tests."""
 
-import os
 import sys
 import types
 from unittest.mock import patch
+
 
 # ragas imports ChatVertexAI from langchain_community.chat_models.vertexai at module
 # level, but this sub-module was removed in langchain-community 0.3+. Provide a stub
@@ -24,11 +24,11 @@ def _ensure_vertexai_stub() -> None:
         sys.modules[stub_key] = stub
         parent = sys.modules.get("langchain_community.chat_models")
         if parent is not None:
-            setattr(parent, "vertexai", stub)
+            parent.vertexai = stub
 
 _ensure_vertexai_stub()
 
-import pytest
+import pytest  # noqa: E402 — must import after vertexai stub is installed
 
 
 @pytest.fixture
@@ -37,8 +37,8 @@ def tmp_db(tmp_path):
     db_path = tmp_path / "test.db"
     # Patch DATABASE_PATH so init_db writes to our temp location
     with patch("db.init.DATABASE_PATH", db_path):
-        from db.init import init_db, _connection
         import db.init as db_module
+        from db.init import init_db
 
         # Reset global connection
         db_module._connection = None

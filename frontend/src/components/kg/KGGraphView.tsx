@@ -1,17 +1,17 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import Graph from "graphology";
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import Graph from 'graphology';
 import {
   SigmaContainer,
   useLoadGraph,
   useRegisterEvents,
   useSigma,
   useSetSettings,
-} from "@react-sigma/core";
-import "@react-sigma/core/lib/style.css";
-import louvain from "graphology-communities-louvain";
-import FA2Layout from "graphology-layout-forceatlas2/worker";
-import type { KGGraphData, KGGraphNode } from "../../lib/api";
-import KGNodeDetail from "./KGNodeDetail";
+} from '@react-sigma/core';
+import '@react-sigma/core/lib/style.css';
+import louvain from 'graphology-communities-louvain';
+import FA2Layout from 'graphology-layout-forceatlas2/worker';
+import type { KGGraphData, KGGraphNode } from '../../lib/api';
+import KGNodeDetail from './KGNodeDetail';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -33,23 +33,36 @@ interface Filters {
 // ── Color palette for communities ──────────────────────────────────────────
 
 const COMMUNITY_COLORS = [
-  "#818cf8", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#a855f7",
-  "#ec4899", "#14b8a6", "#f97316", "#8b5cf6", "#10b981", "#3b82f6",
-  "#e11d48", "#84cc16", "#6366f1", "#d946ef",
+  '#818cf8',
+  '#22c55e',
+  '#f59e0b',
+  '#ef4444',
+  '#06b6d4',
+  '#a855f7',
+  '#ec4899',
+  '#14b8a6',
+  '#f97316',
+  '#8b5cf6',
+  '#10b981',
+  '#3b82f6',
+  '#e11d48',
+  '#84cc16',
+  '#6366f1',
+  '#d946ef',
 ];
 
 function communityColor(community: number): string {
-  return COMMUNITY_COLORS[community % COMMUNITY_COLORS.length] ?? "#5a6a84";
+  return COMMUNITY_COLORS[community % COMMUNITY_COLORS.length] ?? '#5a6a84';
 }
 
 // Semantic zoom thresholds
 const CLUSTER_ZOOM_OUT_RATIO = 1.5; // zoom out past this → cluster view
-const CLUSTER_ZOOM_IN_RATIO = 0.8;  // zoom in past this → detail view
+const CLUSTER_ZOOM_IN_RATIO = 0.8; // zoom in past this → detail view
 
 // ── Build graph structure only (no Louvain, no layout) ─────────────────────
 
 function buildGraphStructure(data: KGGraphData): Graph {
-  const graph = new Graph({ multi: false, type: "undirected" });
+  const graph = new Graph({ multi: false, type: 'undirected' });
 
   const n = data.nodes.length;
   for (let i = 0; i < n; i++) {
@@ -61,10 +74,11 @@ function buildGraphStructure(data: KGGraphData): Graph {
       label: node.label,
       nodeType: node.type,
       keyphrases: node.keyphrases,
-      size: node.type === "document"
-        ? Math.max(6, Math.min(16, (node.keyphrases.length || 1) * 2.5))
-        : Math.max(3, Math.min(8, (node.keyphrases.length || 1) * 1.5)),
-      color: node.type === "document" ? "#22c55e" : "#818cf8",
+      size:
+        node.type === 'document'
+          ? Math.max(6, Math.min(16, (node.keyphrases.length || 1) * 2.5))
+          : Math.max(3, Math.min(8, (node.keyphrases.length || 1) * 1.5)),
+      color: node.type === 'document' ? '#22c55e' : '#818cf8',
       x: Math.cos(angle) * r,
       y: Math.sin(angle) * r,
     });
@@ -72,14 +86,14 @@ function buildGraphStructure(data: KGGraphData): Graph {
 
   for (const edge of data.edges) {
     if (graph.hasNode(edge.source) && graph.hasNode(edge.target)) {
-      const edgeKey = [edge.source, edge.target].sort().join("--");
+      const edgeKey = [edge.source, edge.target].sort().join('--');
       if (!graph.hasEdge(edgeKey)) {
         graph.addEdgeWithKey(edgeKey, edge.source, edge.target, {
           weight: edge.score,
           score: edge.score,
           edgeType: edge.type,
           size: Math.max(0.3, edge.score * 1.5),
-          color: "#283348",
+          color: '#283348',
         });
       }
     }
@@ -98,7 +112,7 @@ function applyCommunities(graph: Graph): {
   const communitiesMap = new Map<number, string[]>();
 
   if (graph.order > 0 && graph.size > 0) {
-    louvain.assign(graph, { nodeCommunityAttribute: "community" });
+    louvain.assign(graph, { nodeCommunityAttribute: 'community' });
 
     graph.forEachNode((nodeId, attrs) => {
       const c = attrs.community as number;
@@ -106,7 +120,7 @@ function applyCommunities(graph: Graph): {
       const list = communitiesMap.get(c) || [];
       list.push(nodeId);
       communitiesMap.set(c, list);
-      graph.setNodeAttribute(nodeId, "color", communityColor(c));
+      graph.setNodeAttribute(nodeId, 'color', communityColor(c));
     });
   }
 
@@ -115,11 +129,8 @@ function applyCommunities(graph: Graph): {
 
 // ── Build a cluster-view graph (super-nodes) ───────────────────────────────
 
-function buildClusterGraph(
-  sourceGraph: Graph,
-  communities: Map<number, string[]>,
-): Graph {
-  const clusterGraph = new Graph({ multi: false, type: "undirected" });
+function buildClusterGraph(sourceGraph: Graph, communities: Map<number, string[]>): Graph {
+  const clusterGraph = new Graph({ multi: false, type: 'undirected' });
 
   for (const [communityId, memberIds] of communities.entries()) {
     const allKeyphrases: Record<string, number> = {};
@@ -139,15 +150,14 @@ function buildClusterGraph(
       }
     }
 
-    const topEntry = Object.entries(allKeyphrases)
-      .sort((a, b) => b[1] - a[1])[0];
+    const topEntry = Object.entries(allKeyphrases).sort((a, b) => b[1] - a[1])[0];
     const label = topEntry
       ? `${topEntry[0]} (${memberIds.length})`
       : `Cluster ${communityId} (${memberIds.length})`;
 
     clusterGraph.addNode(String(communityId), {
       label,
-      nodeType: "cluster",
+      nodeType: 'cluster',
       size: Math.max(8, Math.min(30, Math.sqrt(memberIds.length) * 5)),
       color: communityColor(communityId),
       x: cx / memberIds.length,
@@ -159,10 +169,10 @@ function buildClusterGraph(
 
   const interEdges = new Map<string, { weight: number; count: number }>();
   sourceGraph.forEachEdge((_edgeKey, edgeAttrs, source, target) => {
-    const sc = sourceGraph.getNodeAttribute(source, "community") as number;
-    const tc = sourceGraph.getNodeAttribute(target, "community") as number;
+    const sc = sourceGraph.getNodeAttribute(source, 'community') as number;
+    const tc = sourceGraph.getNodeAttribute(target, 'community') as number;
     if (sc === tc) return;
-    const key = [Math.min(sc, tc), Math.max(sc, tc)].join("--");
+    const key = [Math.min(sc, tc), Math.max(sc, tc)].join('--');
     const existing = interEdges.get(key);
     const w = (edgeAttrs.score as number) || 0.5;
     if (existing) {
@@ -174,14 +184,14 @@ function buildClusterGraph(
   });
 
   for (const [key, { weight, count }] of interEdges.entries()) {
-    const [src, tgt] = key.split("--");
+    const [src, tgt] = key.split('--');
     if (src && tgt && clusterGraph.hasNode(src) && clusterGraph.hasNode(tgt)) {
       clusterGraph.addEdgeWithKey(key, src, tgt, {
         weight: weight / count,
         score: weight / count,
         size: Math.max(1, Math.min(5, count * 0.5)),
-        color: "#3a4a66",
-        edgeType: "cluster",
+        color: '#3a4a66',
+        edgeType: 'cluster',
       });
     }
   }
@@ -211,7 +221,7 @@ function buildGraphLookups(graph: Graph): GraphLookups {
   graph.forEachNode((nodeId, attrs) => {
     adjacency.set(nodeId, new Set());
     nodeEdges.set(nodeId, new Set());
-    if ((attrs.nodeType as string) === "chunk") {
+    if ((attrs.nodeType as string) === 'chunk') {
       chunkNodes.add(nodeId);
     }
   });
@@ -328,7 +338,7 @@ function GraphInner({
           // Start FA2 layout in Web Worker — zero main-thread jank
           startFA2(graph);
         } catch (err) {
-          console.warn("KG layout/clustering error:", err);
+          console.warn('KG layout/clustering error:', err);
         }
       }, 50);
 
@@ -377,15 +387,15 @@ function GraphInner({
       const ratio = camera.ratio;
 
       if (!filters.clusterView && ratio > CLUSTER_ZOOM_OUT_RATIO) {
-        onFilterChange("clusterView", true);
+        onFilterChange('clusterView', true);
       } else if (filters.clusterView && ratio < CLUSTER_ZOOM_IN_RATIO) {
-        onFilterChange("clusterView", false);
+        onFilterChange('clusterView', false);
       }
     };
 
-    camera.on("updated", handleCameraUpdate);
+    camera.on('updated', handleCameraUpdate);
     return () => {
-      camera.off("updated", handleCameraUpdate);
+      camera.off('updated', handleCameraUpdate);
     };
   }, [sigma, filters.clusterView, onFilterChange]);
 
@@ -400,27 +410,28 @@ function GraphInner({
           if (members && members.length > 0 && graphRef.current) {
             // Switch to detail view
             lastManualToggleRef.current = Date.now();
-            onFilterChange("clusterView", false);
+            onFilterChange('clusterView', false);
 
             // Animate camera to the community centroid after switching
             setTimeout(() => {
               const graph = graphRef.current;
               if (!graph) return;
-              let cx = 0, cy = 0, count = 0;
+              let cx = 0,
+                cy = 0,
+                count = 0;
               for (const nid of members) {
                 if (graph.hasNode(nid)) {
-                  cx += graph.getNodeAttribute(nid, "x") as number;
-                  cy += graph.getNodeAttribute(nid, "y") as number;
+                  cx += graph.getNodeAttribute(nid, 'x') as number;
+                  cy += graph.getNodeAttribute(nid, 'y') as number;
                   count++;
                 }
               }
               if (count > 0) {
                 const pos = sigma.graphToViewport({ x: cx / count, y: cy / count });
                 const viewPos = sigma.viewportToFramedGraph(pos);
-                sigma.getCamera().animate(
-                  { x: viewPos.x, y: viewPos.y, ratio: 0.4 },
-                  { duration: 400 },
-                );
+                sigma
+                  .getCamera()
+                  .animate({ x: viewPos.x, y: viewPos.y, ratio: 0.4 }, { duration: 400 });
               }
             }, 200);
           }
@@ -436,11 +447,13 @@ function GraphInner({
         const neighbors = lookupsRef.current.adjacency.get(event.node);
         const nodeIds = [event.node, ...(neighbors ? Array.from(neighbors) : [])];
 
-        let cx = 0, cy = 0, count = 0;
+        let cx = 0,
+          cy = 0,
+          count = 0;
         for (const nid of nodeIds) {
           if (graph.hasNode(nid)) {
-            cx += graph.getNodeAttribute(nid, "x") as number;
-            cy += graph.getNodeAttribute(nid, "y") as number;
+            cx += graph.getNodeAttribute(nid, 'x') as number;
+            cy += graph.getNodeAttribute(nid, 'y') as number;
             count++;
           }
         }
@@ -448,10 +461,9 @@ function GraphInner({
           const pos = sigma.graphToViewport({ x: cx / count, y: cy / count });
           const viewPos = sigma.viewportToFramedGraph(pos);
           const zoomRatio = count <= 5 ? 0.2 : count <= 15 ? 0.35 : 0.5;
-          sigma.getCamera().animate(
-            { x: viewPos.x, y: viewPos.y, ratio: zoomRatio },
-            { duration: 400 },
-          );
+          sigma
+            .getCamera()
+            .animate({ x: viewPos.x, y: viewPos.y, ratio: zoomRatio }, { duration: 400 });
         }
       },
       doubleClickNode: (event) => {
@@ -459,19 +471,16 @@ function GraphInner({
         // Double-click a document node → expand/reveal its chunk neighbors
         const graph = graphRef.current;
         if (!graph || !graph.hasNode(event.node)) return;
-        const nodeType = graph.getNodeAttribute(event.node, "nodeType");
-        if (nodeType === "document") {
+        const nodeType = graph.getNodeAttribute(event.node, 'nodeType');
+        if (nodeType === 'document') {
           onExpandNode(event.node);
 
           // Animate camera to this node
-          const x = graph.getNodeAttribute(event.node, "x") as number;
-          const y = graph.getNodeAttribute(event.node, "y") as number;
+          const x = graph.getNodeAttribute(event.node, 'x') as number;
+          const y = graph.getNodeAttribute(event.node, 'y') as number;
           const pos = sigma.graphToViewport({ x, y });
           const viewPos = sigma.viewportToFramedGraph(pos);
-          sigma.getCamera().animate(
-            { x: viewPos.x, y: viewPos.y, ratio: 0.3 },
-            { duration: 400 },
-          );
+          sigma.getCamera().animate({ x: viewPos.x, y: viewPos.y, ratio: 0.3 }, { duration: 400 });
         }
       },
       doubleClickStage: () => {
@@ -510,11 +519,13 @@ function GraphInner({
     const graph = graphRef.current;
     if (!graph) return;
 
-    let cx = 0, cy = 0, count = 0;
+    let cx = 0,
+      cy = 0,
+      count = 0;
     for (const nodeId of searchMatchSet) {
       if (graph.hasNode(nodeId)) {
-        cx += graph.getNodeAttribute(nodeId, "x") as number;
-        cy += graph.getNodeAttribute(nodeId, "y") as number;
+        cx += graph.getNodeAttribute(nodeId, 'x') as number;
+        cy += graph.getNodeAttribute(nodeId, 'y') as number;
         count++;
       }
     }
@@ -523,10 +534,7 @@ function GraphInner({
     const pos = sigma.graphToViewport({ x: cx / count, y: cy / count });
     const viewPos = sigma.viewportToFramedGraph(pos);
     const zoomRatio = count <= 3 ? 0.3 : count <= 10 ? 0.5 : 0.7;
-    sigma.getCamera().animate(
-      { x: viewPos.x, y: viewPos.y, ratio: zoomRatio },
-      { duration: 400 },
-    );
+    sigma.getCamera().animate({ x: viewPos.x, y: viewPos.y, ratio: zoomRatio }, { duration: 400 });
   }, [searchMatchSet, sigma]);
 
   // Neighbor set for hover — O(1) adjacency lookup instead of O(E) scan
@@ -576,9 +584,9 @@ function GraphInner({
 
   // Reusable dimmed/hidden/highlighted attr objects to avoid GC pressure
   // We create these once per settings update, not per node/edge
-  const DIMMED = useMemo(() => ({ color: "#1a2236", label: "" }), []);
+  const DIMMED = useMemo(() => ({ color: '#1a2236', label: '' }), []);
   const HIDDEN = useMemo(() => ({ hidden: true as const }), []);
-  const HIGHLIGHT_EDGE = useMemo(() => ({ color: "#818cf8", size: 1.5 }), []);
+  const HIGHLIGHT_EDGE = useMemo(() => ({ color: '#818cf8', size: 1.5 }), []);
 
   // Apply filters via nodeReducer / edgeReducer
   useEffect(() => {
@@ -591,44 +599,35 @@ function GraphInner({
       nodeReducer: (node, attrs) => {
         if (filters.clusterView) {
           if (!neighborSet) return attrs;
-          if (!neighborSet.has(node))
-            return { ...attrs, ...DIMMED };
+          if (!neighborSet.has(node)) return { ...attrs, ...DIMMED };
           return { ...attrs, highlighted: true };
         }
 
         const nodeType = attrs.nodeType as string;
 
         // Document visibility
-        if (nodeType === "document" && !filters.showDocuments)
-          return { ...attrs, ...HIDDEN };
+        if (nodeType === 'document' && !filters.showDocuments) return { ...attrs, ...HIDDEN };
 
         // Chunk visibility: hidden unless expanded or hovered neighbor
-        if (nodeType === "chunk" && chunksHidden) {
-          if (expandedChunkNodes?.has(node))
-            return { ...attrs, highlighted: true };
-          if (neighborSet?.has(node))
-            return { ...attrs, highlighted: true };
+        if (nodeType === 'chunk' && chunksHidden) {
+          if (expandedChunkNodes?.has(node)) return { ...attrs, highlighted: true };
+          if (neighborSet?.has(node)) return { ...attrs, highlighted: true };
           return { ...attrs, ...HIDDEN };
         }
 
         // Community filter
-        if (
-          hasCommunityFilter &&
-          !filters.selectedCommunities.has(attrs.community as number)
-        )
+        if (hasCommunityFilter && !filters.selectedCommunities.has(attrs.community as number))
           return { ...attrs, ...HIDDEN };
 
         // Search highlighting
         if (searchMatchSet) {
-          if (!searchMatchSet.has(node))
-            return { ...attrs, ...DIMMED };
+          if (!searchMatchSet.has(node)) return { ...attrs, ...DIMMED };
           return { ...attrs, highlighted: true };
         }
 
         // Hover dimming
         if (neighborSet) {
-          if (!neighborSet.has(node))
-            return { ...attrs, ...DIMMED };
+          if (!neighborSet.has(node)) return { ...attrs, ...DIMMED };
           return { ...attrs, highlighted: true };
         }
 
@@ -649,8 +648,7 @@ function GraphInner({
 
           if (srcIsChunk || tgtIsChunk) {
             // Show if edge is in the expanded neighborhood
-            if (expandedEdges?.has(edge))
-              return { ...attrs, ...HIGHLIGHT_EDGE };
+            if (expandedEdges?.has(edge)) return { ...attrs, ...HIGHLIGHT_EDGE };
             if (neighborSet && neighborSet.has(src) && neighborSet.has(tgt))
               return { ...attrs, ...HIGHLIGHT_EDGE };
             return { ...attrs, ...HIDDEN };
@@ -660,38 +658,44 @@ function GraphInner({
         // Normal hover behavior
         if (neighborSet && endpoints) {
           const [src, tgt] = endpoints;
-          if (!neighborSet.has(src) && !neighborSet.has(tgt))
-            return { ...attrs, ...HIDDEN };
+          if (!neighborSet.has(src) && !neighborSet.has(tgt)) return { ...attrs, ...HIDDEN };
           return { ...attrs, ...HIGHLIGHT_EDGE };
         }
 
         return attrs;
       },
       labelRenderedSizeThreshold: 12,
-      labelColor: { color: "#8896b0" },
+      labelColor: { color: '#8896b0' },
       labelFont: '"DM Sans", sans-serif',
       labelSize: 12,
       labelDensity: 0.5,
     });
-  }, [filters, searchMatchSet, neighborSet, expandedChunkNodes, expandedEdges, expandedNodes, setSettings, DIMMED, HIDDEN, HIGHLIGHT_EDGE]);
+  }, [
+    filters,
+    searchMatchSet,
+    neighborSet,
+    expandedChunkNodes,
+    expandedEdges,
+    expandedNodes,
+    setSettings,
+    DIMMED,
+    HIDDEN,
+    HIGHLIGHT_EDGE,
+  ]);
 
   return null;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export default function KGGraphView({
-  data,
-  projectName,
-  onBack,
-}: KGGraphViewProps) {
+export default function KGGraphView({ data, projectName, onBack }: KGGraphViewProps) {
   const [selectedNode, setSelectedNode] = useState<KGGraphNode | null>(null);
   const [filters, setFilters] = useState<Filters>({
     showDocuments: true,
     showChunks: false,
     edgeScoreMin: 0.3,
     selectedCommunities: new Set(),
-    search: "",
+    search: '',
     clusterView: false,
   });
   const [showFilters, setShowFilters] = useState(false);
@@ -715,12 +719,9 @@ export default function KGGraphView({
     setGraphError(msg);
   }, []);
 
-  const updateFilter = useCallback(
-    <K extends keyof Filters>(key: K, value: Filters[K]) => {
-      setFilters((prev) => ({ ...prev, [key]: value }));
-    },
-    [],
-  );
+  const updateFilter = useCallback(<K extends keyof Filters>(key: K, value: Filters[K]) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  }, []);
 
   const handleExpandNode = useCallback((nodeId: string) => {
     setExpandedNodes((prev) => {
@@ -752,18 +753,16 @@ export default function KGGraphView({
 
   const visibleStats = useMemo(() => {
     if (filters.clusterView) {
-      return { nodes: communityCountRef.current, edges: "~" as const };
+      return { nodes: communityCountRef.current, edges: '~' as const };
     }
     let nodeCount = data.nodes.length;
     if (!filters.showDocuments) {
-      nodeCount -= data.nodes.filter((n) => n.type === "document").length;
+      nodeCount -= data.nodes.filter((n) => n.type === 'document').length;
     }
     if (!filters.showChunks) {
-      nodeCount -= data.nodes.filter((n) => n.type === "chunk").length;
+      nodeCount -= data.nodes.filter((n) => n.type === 'chunk').length;
     }
-    const edgeCount = data.edges.filter(
-      (e) => e.score >= filters.edgeScoreMin,
-    ).length;
+    const edgeCount = data.edges.filter((e) => e.score >= filters.edgeScoreMin).length;
     return { nodes: nodeCount, edges: edgeCount };
   }, [data, filters]);
 
@@ -772,10 +771,7 @@ export default function KGGraphView({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4">
         <span className="text-sm text-text-muted">No nodes in this knowledge graph.</span>
-        <button
-          onClick={onBack}
-          className="text-sm text-accent hover:text-accent/80 transition"
-        >
+        <button onClick={onBack} className="text-sm text-accent hover:text-accent/80 transition">
           Go back
         </button>
       </div>
@@ -790,29 +786,37 @@ export default function KGGraphView({
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-text-secondary transition hover:bg-elevated hover:text-text-primary"
         >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
+            />
           </svg>
           Back
         </button>
 
         <div className="h-5 w-px bg-border" />
 
-        <h2 className="text-sm font-semibold text-text-primary truncate">
-          {projectName}
-        </h2>
+        <h2 className="text-sm font-semibold text-text-primary truncate">{projectName}</h2>
 
         <div className="ml-auto flex items-center gap-3">
           {/* Cluster view toggle */}
           <button
-            onClick={() => updateFilter("clusterView", !filters.clusterView)}
+            onClick={() => updateFilter('clusterView', !filters.clusterView)}
             className={`rounded-lg border px-3 py-1.5 text-micro font-medium transition ${
               filters.clusterView
-                ? "border-accent/40 bg-accent/15 text-accent"
-                : "border-border text-text-muted hover:bg-elevated hover:text-text-secondary"
+                ? 'border-accent/40 bg-accent/15 text-accent'
+                : 'border-border text-text-muted hover:bg-elevated hover:text-text-secondary'
             }`}
           >
-            {filters.clusterView ? "Cluster view" : "Full view"}
+            {filters.clusterView ? 'Cluster view' : 'Full view'}
           </button>
 
           {/* Expanded nodes indicator */}
@@ -822,7 +826,13 @@ export default function KGGraphView({
               className="flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-micro font-medium text-accent transition hover:bg-accent/20"
             >
               {expandedNodes.size} expanded
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -830,13 +840,23 @@ export default function KGGraphView({
 
           {/* Search */}
           <div className="relative">
-            <svg className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            <svg
+              className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+              />
             </svg>
             <input
               type="text"
               value={filters.search}
-              onChange={(e) => updateFilter("search", e.target.value)}
+              onChange={(e) => updateFilter('search', e.target.value)}
               placeholder="Search nodes..."
               className="w-48 rounded-lg border border-border bg-input pl-8 pr-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
             />
@@ -847,12 +867,22 @@ export default function KGGraphView({
             onClick={() => setShowFilters((v) => !v)}
             className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-micro font-medium transition ${
               showFilters
-                ? "border-accent/40 bg-accent/15 text-accent"
-                : "border-border text-text-muted hover:bg-elevated hover:text-text-secondary"
+                ? 'border-accent/40 bg-accent/15 text-accent'
+                : 'border-border text-text-muted hover:bg-elevated hover:text-text-secondary'
             }`}
           >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" />
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"
+              />
             </svg>
             Filters
           </button>
@@ -860,16 +890,16 @@ export default function KGGraphView({
           {/* Stats */}
           <div className="flex items-center gap-3 text-micro text-text-muted font-mono">
             <span>
-              {typeof visibleStats.nodes === "number"
+              {typeof visibleStats.nodes === 'number'
                 ? visibleStats.nodes.toLocaleString()
-                : visibleStats.nodes}{" "}
+                : visibleStats.nodes}{' '}
               nodes
             </span>
             <span className="text-border">|</span>
             <span>
-              {typeof visibleStats.edges === "number"
+              {typeof visibleStats.edges === 'number'
                 ? visibleStats.edges.toLocaleString()
-                : visibleStats.edges}{" "}
+                : visibleStats.edges}{' '}
               edges
             </span>
           </div>
@@ -887,7 +917,7 @@ export default function KGGraphView({
                 <input
                   type="checkbox"
                   checked={filters.showDocuments}
-                  onChange={(e) => updateFilter("showDocuments", e.target.checked)}
+                  onChange={(e) => updateFilter('showDocuments', e.target.checked)}
                   className="rounded border-border bg-input text-emerald-500 focus:ring-0 focus:ring-offset-0 h-3.5 w-3.5"
                 />
                 <span className="flex items-center gap-1 text-micro text-text-secondary">
@@ -899,7 +929,7 @@ export default function KGGraphView({
                 <input
                   type="checkbox"
                   checked={filters.showChunks}
-                  onChange={(e) => updateFilter("showChunks", e.target.checked)}
+                  onChange={(e) => updateFilter('showChunks', e.target.checked)}
                   className="rounded border-border bg-input text-accent focus:ring-0 focus:ring-offset-0 h-3.5 w-3.5"
                 />
                 <span className="flex items-center gap-1 text-micro text-text-secondary">
@@ -920,7 +950,7 @@ export default function KGGraphView({
                 max={1}
                 step={0.05}
                 value={filters.edgeScoreMin}
-                onChange={(e) => updateFilter("edgeScoreMin", parseFloat(e.target.value))}
+                onChange={(e) => updateFilter('edgeScoreMin', parseFloat(e.target.value))}
                 className="w-24 accent-accent h-1"
               />
               <span className="text-micro text-text-secondary font-mono w-8">
@@ -942,31 +972,29 @@ export default function KGGraphView({
                 </button>
               )}
               <div className="flex items-center gap-1 flex-wrap">
-                {Array.from(
-                  { length: Math.min(communityCountRef.current, 16) },
-                  (_, i) => i,
-                ).map((c) => {
-                  const active =
-                    filters.selectedCommunities.size === 0 ||
-                    filters.selectedCommunities.has(c);
-                  const members = communitiesRef.current.get(c)?.length || 0;
-                  return (
-                    <button
-                      key={c}
-                      onClick={() => toggleCommunity(c)}
-                      className={`rounded-md px-2 py-0.5 text-2xs font-mono transition border ${
-                        active ? "border-transparent" : "border-border opacity-30"
-                      }`}
-                      style={{
-                        backgroundColor: active ? communityColor(c) + "26" : "#1a2236",
-                        color: communityColor(c),
-                      }}
-                      title={`Community ${c}: ${members} nodes`}
-                    >
-                      {members}
-                    </button>
-                  );
-                })}
+                {Array.from({ length: Math.min(communityCountRef.current, 16) }, (_, i) => i).map(
+                  (c) => {
+                    const active =
+                      filters.selectedCommunities.size === 0 || filters.selectedCommunities.has(c);
+                    const members = communitiesRef.current.get(c)?.length || 0;
+                    return (
+                      <button
+                        key={c}
+                        onClick={() => toggleCommunity(c)}
+                        className={`rounded-md px-2 py-0.5 text-2xs font-mono transition border ${
+                          active ? 'border-transparent' : 'border-border opacity-30'
+                        }`}
+                        style={{
+                          backgroundColor: active ? communityColor(c) + '26' : '#1a2236',
+                          color: communityColor(c),
+                        }}
+                        title={`Community ${c}: ${members} nodes`}
+                      >
+                        {members}
+                      </button>
+                    );
+                  },
+                )}
               </div>
             </div>
           </div>
@@ -1001,28 +1029,22 @@ export default function KGGraphView({
         {/* Interaction hints */}
         {ready && !graphError && (
           <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2 rounded-lg bg-card/80 backdrop-blur-sm border border-border px-3 py-2">
-            <span className="text-2xs text-text-muted">
-              Click node to zoom &amp; details
-            </span>
+            <span className="text-2xs text-text-muted">Click node to zoom &amp; details</span>
             <span className="text-border">|</span>
-            <span className="text-2xs text-text-muted">
-              Double-click document to expand chunks
-            </span>
+            <span className="text-2xs text-text-muted">Double-click document to expand chunks</span>
             <span className="text-border">|</span>
-            <span className="text-2xs text-text-muted">
-              Zoom out for cluster view
-            </span>
+            <span className="text-2xs text-text-muted">Zoom out for cluster view</span>
           </div>
         )}
 
         <SigmaContainer
-          style={{ width: "100%", height: "100%", background: "#080c14" }}
+          style={{ width: '100%', height: '100%', background: '#080c14' }}
           settings={{
-            defaultNodeColor: "#5a6a84",
-            defaultEdgeColor: "#283348",
+            defaultNodeColor: '#5a6a84',
+            defaultEdgeColor: '#283348',
             renderEdgeLabels: false,
             labelRenderedSizeThreshold: 12,
-            labelColor: { color: "#8896b0" },
+            labelColor: { color: '#8896b0' },
             labelFont: '"DM Sans", sans-serif',
             labelSize: 12,
             labelDensity: 0.5,
@@ -1051,12 +1073,7 @@ export default function KGGraphView({
       </div>
 
       {/* Detail panel */}
-      {selectedNode && (
-        <KGNodeDetail
-          node={selectedNode}
-          onClose={() => setSelectedNode(null)}
-        />
-      )}
+      {selectedNode && <KGNodeDetail node={selectedNode} onClose={() => setSelectedNode(null)} />}
     </div>
   );
 }

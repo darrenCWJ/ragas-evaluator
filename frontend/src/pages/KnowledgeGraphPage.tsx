@@ -1,12 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import {
-  fetchAllKnowledgeGraphs,
-  streamKnowledgeGraphData,
-} from "../lib/api";
-import type { KGListItem, KGGraphData, KGGraphNode, KGGraphEdge } from "../lib/api";
-import KGCard from "../components/kg/KGCard";
-import KGGraphView from "../components/kg/KGGraphView";
-import Card from "../components/ui/Card";
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchAllKnowledgeGraphs, streamKnowledgeGraphData } from '../lib/api';
+import type { KGListItem, KGGraphData, KGGraphNode, KGGraphEdge } from '../lib/api';
+import KGCard from '../components/kg/KGCard';
+import KGGraphView from '../components/kg/KGGraphView';
+import Card from '../components/ui/Card';
 
 export default function KnowledgeGraphPage() {
   const [kgs, setKgs] = useState<KGListItem[]>([]);
@@ -32,7 +29,7 @@ export default function KnowledgeGraphPage() {
       const list = await fetchAllKnowledgeGraphs();
       setKgs(list);
     } catch (err) {
-      setError((err as Error).message || "Failed to load knowledge graphs");
+      setError((err as Error).message || 'Failed to load knowledge graphs');
     } finally {
       setLoading(false);
     }
@@ -72,15 +69,11 @@ export default function KnowledgeGraphPage() {
       },
       onNodes: (batch) => {
         nodesAcc.push(...batch);
-        setStreamProgress((prev) =>
-          prev ? { ...prev, loadedNodes: nodesAcc.length } : prev,
-        );
+        setStreamProgress((prev) => (prev ? { ...prev, loadedNodes: nodesAcc.length } : prev));
       },
       onEdges: (batch) => {
         edgesAcc.push(...batch);
-        setStreamProgress((prev) =>
-          prev ? { ...prev, loadedEdges: edgesAcc.length } : prev,
-        );
+        setStreamProgress((prev) => (prev ? { ...prev, loadedEdges: edgesAcc.length } : prev));
       },
       onDone: () => {
         setGraphData({
@@ -115,11 +108,7 @@ export default function KnowledgeGraphPage() {
   if (selectedKg && graphData) {
     return (
       <div className="fixed inset-0 z-30 flex flex-col bg-deep">
-        <KGGraphView
-          data={graphData}
-          projectName={selectedKg.project_name}
-          onBack={handleBack}
-        />
+        <KGGraphView data={graphData} projectName={selectedKg.project_name} onBack={handleBack} />
       </div>
     );
   }
@@ -131,16 +120,19 @@ export default function KnowledgeGraphPage() {
         <div className="flex flex-col items-center gap-4">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
           <p className="text-sm text-text-secondary">
-            Loading graph for <span className="text-text-primary font-medium">{selectedKg.project_name}</span>
+            Loading graph for{' '}
+            <span className="text-text-primary font-medium">{selectedKg.project_name}</span>
           </p>
           {streamProgress && (
             <div className="flex items-center gap-4 text-micro text-text-muted font-mono">
               <span>
-                {streamProgress.loadedNodes.toLocaleString()}/{streamProgress.totalNodes.toLocaleString()} nodes
+                {streamProgress.loadedNodes.toLocaleString()}/
+                {streamProgress.totalNodes.toLocaleString()} nodes
               </span>
               <span className="text-border">|</span>
               <span>
-                {streamProgress.loadedEdges.toLocaleString()}/{streamProgress.totalEdges.toLocaleString()} edges
+                {streamProgress.loadedEdges.toLocaleString()}/
+                {streamProgress.totalEdges.toLocaleString()} edges
               </span>
             </div>
           )}
@@ -190,9 +182,7 @@ export default function KnowledgeGraphPage() {
           </svg>
         </div>
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">
-            Knowledge Graphs
-          </h1>
+          <h1 className="text-xl font-semibold text-text-primary">Knowledge Graphs</h1>
           <p className="text-sm text-text-secondary">
             Browse and explore saved knowledge graphs across projects.
           </p>
@@ -230,9 +220,7 @@ export default function KnowledgeGraphPage() {
               />
             </svg>
           </div>
-          <h3 className="text-sm font-medium text-text-primary mb-1">
-            No knowledge graphs yet
-          </h3>
+          <h3 className="text-sm font-medium text-text-primary mb-1">No knowledge graphs yet</h3>
           <p className="text-micro text-text-muted max-w-xs mx-auto">
             Build a knowledge graph from the Test page to see it here.
           </p>
@@ -241,7 +229,12 @@ export default function KnowledgeGraphPage() {
         /* KG grid */
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {kgs.map((kg) => (
-            <KGCard key={kg.id ?? `building-${kg.project_id}-${kg.kg_source}`} kg={kg} onSelect={handleSelect} onRefresh={loadKgs} />
+            <KGCard
+              key={kg.id ?? `building-${kg.project_id}-${kg.kg_source}`}
+              kg={kg}
+              onSelect={handleSelect}
+              onRefresh={loadKgs}
+            />
           ))}
         </div>
       )}

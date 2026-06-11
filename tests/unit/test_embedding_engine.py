@@ -1,12 +1,13 @@
 """Unit tests for embedding/engine.py."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
 
 from pipeline.embedding import (
-    embed_texts_dispatch,
-    embed_query_dispatch,
     _DISPATCH,
+    embed_query_dispatch,
+    embed_texts_dispatch,
 )
 
 
@@ -105,6 +106,7 @@ class TestEmbedOpenai:
 class TestEmbedSentenceTransformers:
     async def test_calls_model_encode(self):
         import numpy as np
+
         from pipeline.embedding import _embed_sentence_transformers
 
         mock_model = MagicMock()

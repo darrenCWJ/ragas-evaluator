@@ -40,7 +40,7 @@ def _run_kg_in_thread(
     asyncio.set_event_loop(loop)
     try:
         logger.info("KG build starting: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import set_progress, clear_progress
+        from evaluation.metrics.testgen import clear_progress, set_progress
 
         set_progress(project_id, {"stage": "building_knowledge_graph", "kg_building": True}, kg_source=kg_source)
 
@@ -103,7 +103,8 @@ async def build_kg(req: BuildKGRequest):
 
 @router.get("/progress/{project_id}")
 async def get_progress(project_id: int, kg_source: str = "chunks"):
-    from evaluation.metrics.testgen import get_progress as _get_progress, get_kg_info
+    from evaluation.metrics.testgen import get_kg_info
+    from evaluation.metrics.testgen import get_progress as _get_progress
 
     key = (project_id, kg_source)
     with _kg_lock:
@@ -158,10 +159,10 @@ def _run_personas_in_thread(
     try:
         logger.info("Persona generation starting: project=%d num=%d", project_id, num_personas)
         from evaluation.metrics.testgen import (
-            set_progress,
+            _enrich_with_question_styles,
             clear_progress,
             generate_personas,
-            _enrich_with_question_styles,
+            set_progress,
         )
 
         set_progress(project_id, {"stage": "generating_personas", "persona_generating": True}, kg_source="personas")

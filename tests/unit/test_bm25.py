@@ -6,14 +6,14 @@ import os
 import pytest
 
 from pipeline.bm25 import (
-    get_index_path,
-    build_bm25_index,
-    save_index,
-    load_index,
-    search_bm25,
-    build_and_save_index,
-    delete_index,
     _tokenize,
+    build_and_save_index,
+    build_bm25_index,
+    delete_index,
+    get_index_path,
+    load_index,
+    save_index,
+    search_bm25,
 )
 
 
@@ -31,8 +31,10 @@ class TestTokenize:
 
 class TestGetIndexPath:
     def test_format(self):
+        # BM25_PATH is anchored to the repo root (not CWD), so assert the
+        # stable suffix rather than a relative literal.
         path = get_index_path(1, 2)
-        assert path == "data/bm25/project_1_embed_2.json"
+        assert path.replace("\\", "/").endswith("bm25/project_1_embed_2.json")
 
     def test_different_ids(self):
         assert get_index_path(10, 20) != get_index_path(10, 21)

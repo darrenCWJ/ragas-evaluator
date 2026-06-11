@@ -6,8 +6,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from app.models import BotConfigCreate, BotConfigUpdate
 import db.init
+from app.models import BotConfigCreate, BotConfigUpdate
 
 logger = logging.getLogger(__name__)
 

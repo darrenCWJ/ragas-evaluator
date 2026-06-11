@@ -7,10 +7,9 @@ Supports OpenAI, Anthropic (Claude), and Google Gemini.
 import logging
 import os
 
+import openai
 from fastapi import HTTPException
 from openai import AsyncOpenAI
-
-import openai
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +57,9 @@ async def close_openai_client() -> None:
 def _get_anthropic_client():
     global _anthropic_client
     if _anthropic_client is None:
-        from config import ANTHROPIC_API_KEY
         import anthropic as _anthropic
+
+        from config import ANTHROPIC_API_KEY
         _anthropic_client = _anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
             max_retries=1,
@@ -79,8 +79,9 @@ async def close_anthropic_client() -> None:
 def _get_gemini_client():
     global _gemini_client
     if _gemini_client is None:
-        from config import GOOGLE_API_KEY
         from google import genai
+
+        from config import GOOGLE_API_KEY
         _gemini_client = genai.Client(api_key=GOOGLE_API_KEY)
     return _gemini_client
 
@@ -158,14 +159,14 @@ async def _openai_completion(
             messages=messages,
             **extra,
         )
-    except openai.RateLimitError:
-        raise HTTPException(status_code=429, detail="OpenAI rate limit exceeded")
-    except openai.AuthenticationError:
-        raise HTTPException(status_code=502, detail="OpenAI authentication failed")
-    except openai.APITimeoutError:
-        raise HTTPException(status_code=504, detail="OpenAI request timed out")
+    except openai.RateLimitError as exc:
+        raise HTTPException(status_code=429, detail="OpenAI rate limit exceeded") from exc
+    except openai.AuthenticationError as exc:
+        raise HTTPException(status_code=502, detail="OpenAI authentication failed") from exc
+    except openai.APITimeoutError as exc:
+        raise HTTPException(status_code=504, detail="OpenAI request timed out") from exc
     except openai.APIError as e:
-        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e.message}")
+        raise HTTPException(status_code=502, detail=f"OpenAI API error: {e.message}") from e
 
     content = response.choices[0].message.content or ""
     usage = {
@@ -191,8 +192,8 @@ async def _anthropic_completion(
 
     try:
         import anthropic as _anthropic
-    except ImportError:
-        raise HTTPException(status_code=502, detail="anthropic package not installed")
+    except ImportError as exc:
+        raise HTTPException(status_code=502, detail="anthropic package not installed") from exc
 
     extra = params or {}
     temperature = extra.get("temperature", 0.5)
@@ -212,14 +213,14 @@ async def _anthropic_completion(
             system=system_text,
             messages=conversation,
         )
-    except _anthropic.RateLimitError:
-        raise HTTPException(status_code=429, detail="Anthropic rate limit exceeded")
-    except _anthropic.AuthenticationError:
-        raise HTTPException(status_code=502, detail="Anthropic authentication failed — check ANTHROPIC_API_KEY")
-    except _anthropic.APITimeoutError:
-        raise HTTPException(status_code=504, detail="Anthropic request timed out")
+    except _anthropic.RateLimitError as exc:
+        raise HTTPException(status_code=429, detail="Anthropic rate limit exceeded") from exc
+    except _anthropic.AuthenticationError as exc:
+        raise HTTPException(status_code=502, detail="Anthropic authentication failed — check ANTHROPIC_API_KEY") from exc
+    except _anthropic.APITimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Anthropic request timed out") from exc
     except _anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}")
+        raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}") from e
 
     content = response.content[0].text if response.content else ""
     usage = {
@@ -244,10 +245,10 @@ async def _gemini_completion(
         raise HTTPException(status_code=502, detail="GOOGLE_API_KEY is not configured")
 
     try:
-        from google import genai
+        from google import genai  # noqa: F401 — availability probe; used via genai_types below
         from google.genai import types as genai_types
-    except ImportError:
-        raise HTTPException(status_code=502, detail="google-genai package not installed")
+    except ImportError as exc:
+        raise HTTPException(status_code=502, detail="google-genai package not installed") from exc
 
     extra = params or {}
     temperature = extra.get("temperature", 0.5)
@@ -287,10 +288,10 @@ async def _gemini_completion(
     except Exception as e:
         err_str = str(e).lower()
         if "quota" in err_str or "rate" in err_str:
-            raise HTTPException(status_code=429, detail="Google Gemini rate limit exceeded")
+            raise HTTPException(status_code=429, detail="Google Gemini rate limit exceeded") from e
         if "api key" in err_str or "permission" in err_str or "auth" in err_str:
-            raise HTTPException(status_code=502, detail="Google Gemini authentication failed — check GOOGLE_API_KEY")
-        raise HTTPException(status_code=502, detail=f"Gemini API error: {e}")
+            raise HTTPException(status_code=502, detail="Google Gemini authentication failed — check GOOGLE_API_KEY") from e
+        raise HTTPException(status_code=502, detail=f"Gemini API error: {e}") from e
 
     content = response.text or ""
     # Gemini usage metadata

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { saveApiConfig, fetchApiConfig, deleteApiConfig, type ApiConfig } from "../../lib/api";
+import { useState, useEffect, useCallback } from 'react';
+import { saveApiConfig, fetchApiConfig, deleteApiConfig, type ApiConfig } from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -13,9 +13,9 @@ export default function ApiEndpointConfig({ projectId }: Props) {
   const [success, setSuccess] = useState<string | null>(null);
 
   // Form state
-  const [url, setUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [headersJson, setHeadersJson] = useState("");
+  const [url, setUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [headersJson, setHeadersJson] = useState('');
 
   // Delete confirmation
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -26,8 +26,8 @@ export default function ApiEndpointConfig({ projectId }: Props) {
       const cfg = await fetchApiConfig(projectId);
       setConfig(cfg);
       setUrl(cfg.endpoint_url);
-      setApiKey(cfg.api_key ?? "");
-      setHeadersJson(cfg.headers_json ?? "");
+      setApiKey(cfg.api_key ?? '');
+      setHeadersJson(cfg.headers_json ?? '');
     } catch {
       // 404 = no config yet, that's fine
       setConfig(null);
@@ -46,7 +46,7 @@ export default function ApiEndpointConfig({ projectId }: Props) {
 
     const trimmed = url.trim();
     if (!trimmed) {
-      setError("Endpoint URL is required.");
+      setError('Endpoint URL is required.');
       return;
     }
 
@@ -58,10 +58,10 @@ export default function ApiEndpointConfig({ projectId }: Props) {
         headers_json: headersJson.trim() || null,
       });
       setConfig(cfg);
-      setSuccess("API endpoint saved.");
+      setSuccess('API endpoint saved.');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -71,14 +71,14 @@ export default function ApiEndpointConfig({ projectId }: Props) {
     try {
       await deleteApiConfig(projectId);
       setConfig(null);
-      setUrl("");
-      setApiKey("");
-      setHeadersJson("");
+      setUrl('');
+      setApiKey('');
+      setHeadersJson('');
       setConfirmDelete(false);
-      setSuccess("API config removed.");
+      setSuccess('API config removed.');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
+      setError(err instanceof Error ? err.message : 'Failed to delete');
     }
   }
 
@@ -88,8 +88,19 @@ export default function ApiEndpointConfig({ projectId }: Props) {
         <h3 className="mb-3 text-sm font-semibold text-text-primary">API Endpoint</h3>
         <div className="flex items-center gap-2 text-sm text-text-muted">
           <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
           Loading...
         </div>
@@ -99,9 +110,7 @@ export default function ApiEndpointConfig({ projectId }: Props) {
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
-      <h3 className="mb-1 text-sm font-semibold text-text-primary">
-        API Endpoint
-      </h3>
+      <h3 className="mb-1 text-sm font-semibold text-text-primary">API Endpoint</h3>
       <p className="mb-4 text-xs text-text-secondary">
         Connect to an external API to fetch baseline Q&A data for evaluation.
       </p>
@@ -152,7 +161,7 @@ export default function ApiEndpointConfig({ projectId }: Props) {
             disabled={saving}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
           >
-            {saving ? "Saving..." : config ? "Update" : "Save"}
+            {saving ? 'Saving...' : config ? 'Update' : 'Save'}
           </button>
 
           {config && !confirmDelete && (

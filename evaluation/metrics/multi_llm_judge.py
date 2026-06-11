@@ -20,8 +20,8 @@ from dataclasses import dataclass
 
 from config import (
     MULTI_LLM_JUDGE_DEFAULT_EVALUATORS,
-    MULTI_LLM_JUDGE_TEMP_MIN,
     MULTI_LLM_JUDGE_TEMP_MAX,
+    MULTI_LLM_JUDGE_TEMP_MIN,
 )
 
 logger = logging.getLogger(__name__)

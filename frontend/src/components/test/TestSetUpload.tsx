@@ -1,10 +1,6 @@
-import { useState, useRef } from "react";
-import {
-  previewTestSetUpload,
-  confirmTestSetUpload,
-  ApiError,
-} from "../../lib/api";
-import type { UploadPreviewResult } from "../../lib/api";
+import { useState, useRef } from 'react';
+import { previewTestSetUpload, confirmTestSetUpload, ApiError } from '../../lib/api';
+import type { UploadPreviewResult } from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -15,13 +11,13 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<UploadPreviewResult | null>(null);
-  const [questionCol, setQuestionCol] = useState("");
-  const [answerCol, setAnswerCol] = useState("");
-  const [contextsCol, setContextsCol] = useState("");
-  const [refSqlCol, setRefSqlCol] = useState("");
-  const [schemaCtxCol, setSchemaCtxCol] = useState("");
-  const [refDataCol, setRefDataCol] = useState("");
-  const [name, setName] = useState("");
+  const [questionCol, setQuestionCol] = useState('');
+  const [answerCol, setAnswerCol] = useState('');
+  const [contextsCol, setContextsCol] = useState('');
+  const [refSqlCol, setRefSqlCol] = useState('');
+  const [schemaCtxCol, setSchemaCtxCol] = useState('');
+  const [refDataCol, setRefDataCol] = useState('');
+  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,12 +26,12 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
   const handleFileSelect = async (f: File) => {
     setFile(f);
     setPreview(null);
-    setQuestionCol("");
-    setAnswerCol("");
-    setContextsCol("");
-    setRefSqlCol("");
-    setSchemaCtxCol("");
-    setRefDataCol("");
+    setQuestionCol('');
+    setAnswerCol('');
+    setContextsCol('');
+    setRefSqlCol('');
+    setSchemaCtxCol('');
+    setRefDataCol('');
     setError(null);
     setSuccess(null);
     setLoading(true);
@@ -44,12 +40,19 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
       const result = await previewTestSetUpload(projectId, f);
       setPreview(result);
       // Auto-select columns if obvious names exist
-      const qNames = new Set(["question", "query", "user_input", "input"]);
-      const aNames = new Set(["reference_answer", "answer", "expected_answer", "reference", "ground_truth", "output"]);
-      const cNames = new Set(["reference_contexts", "contexts", "context", "sources"]);
-      const sqlNames = new Set(["reference_sql", "ref_sql", "expected_sql", "sql"]);
-      const schemaNames = new Set(["schema_contexts", "schema", "ddl"]);
-      const dataNames = new Set(["reference_data", "ref_data", "expected_data"]);
+      const qNames = new Set(['question', 'query', 'user_input', 'input']);
+      const aNames = new Set([
+        'reference_answer',
+        'answer',
+        'expected_answer',
+        'reference',
+        'ground_truth',
+        'output',
+      ]);
+      const cNames = new Set(['reference_contexts', 'contexts', 'context', 'sources']);
+      const sqlNames = new Set(['reference_sql', 'ref_sql', 'expected_sql', 'sql']);
+      const schemaNames = new Set(['schema_contexts', 'schema', 'ddl']);
+      const dataNames = new Set(['reference_data', 'ref_data', 'expected_data']);
       for (const col of result.columns) {
         const lower = col.toLowerCase();
         if (qNames.has(lower)) setQuestionCol(col);
@@ -63,7 +66,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
       if (err instanceof ApiError) {
         setError(err.message);
       } else {
-        setError((err as Error).message || "Failed to preview file");
+        setError((err as Error).message || 'Failed to preview file');
       }
     } finally {
       setLoading(false);
@@ -77,39 +80,31 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
     setUploading(true);
 
     try {
-      const result = await confirmTestSetUpload(
-        projectId,
-        file,
-        questionCol,
-        answerCol,
-        {
-          contextsColumn: contextsCol || undefined,
-          name: name.trim() || undefined,
-          referenceSqlColumn: refSqlCol || undefined,
-          schemaContextsColumn: schemaCtxCol || undefined,
-          referenceDataColumn: refDataCol || undefined,
-        },
-      );
-      setSuccess(
-        `Created test set "${result.name}" with ${result.question_count} questions.`,
-      );
+      const result = await confirmTestSetUpload(projectId, file, questionCol, answerCol, {
+        contextsColumn: contextsCol || undefined,
+        name: name.trim() || undefined,
+        referenceSqlColumn: refSqlCol || undefined,
+        schemaContextsColumn: schemaCtxCol || undefined,
+        referenceDataColumn: refDataCol || undefined,
+      });
+      setSuccess(`Created test set "${result.name}" with ${result.question_count} questions.`);
       // Reset
       setFile(null);
       setPreview(null);
-      setQuestionCol("");
-      setAnswerCol("");
-      setContextsCol("");
-      setRefSqlCol("");
-      setSchemaCtxCol("");
-      setRefDataCol("");
-      setName("");
-      if (fileRef.current) fileRef.current.value = "";
+      setQuestionCol('');
+      setAnswerCol('');
+      setContextsCol('');
+      setRefSqlCol('');
+      setSchemaCtxCol('');
+      setRefDataCol('');
+      setName('');
+      if (fileRef.current) fileRef.current.value = '';
       onTestSetCreated();
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
       } else {
-        setError((err as Error).message || "Upload failed");
+        setError((err as Error).message || 'Upload failed');
       }
     } finally {
       setUploading(false);
@@ -119,16 +114,16 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
   const handleReset = () => {
     setFile(null);
     setPreview(null);
-    setQuestionCol("");
-    setAnswerCol("");
-    setContextsCol("");
-    setRefSqlCol("");
-    setSchemaCtxCol("");
-    setRefDataCol("");
-    setName("");
+    setQuestionCol('');
+    setAnswerCol('');
+    setContextsCol('');
+    setRefSqlCol('');
+    setSchemaCtxCol('');
+    setRefDataCol('');
+    setName('');
     setError(null);
     setSuccess(null);
-    if (fileRef.current) fileRef.current.value = "";
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   return (
@@ -165,37 +160,41 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
         </summary>
         <div className="mt-3 space-y-3 text-xs text-text-secondary">
           <div>
-            <p className="font-semibold text-text-primary">
-              Required columns
-            </p>
+            <p className="font-semibold text-text-primary">Required columns</p>
             <dl className="mt-1.5 space-y-1">
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-medium text-text-primary">question</dt>
                 <dd className="text-text-muted">
                   — The test question or user query.
-                  <span className="ml-1 italic">Auto-detected names: question, query, user_input, input</span>
+                  <span className="ml-1 italic">
+                    Auto-detected names: question, query, user_input, input
+                  </span>
                 </dd>
               </div>
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-medium text-text-primary">reference_answer</dt>
                 <dd className="text-text-muted">
                   — The expected/ground-truth answer.
-                  <span className="ml-1 italic">Auto-detected: reference_answer, answer, expected_answer, reference, ground_truth, output</span>
+                  <span className="ml-1 italic">
+                    Auto-detected: reference_answer, answer, expected_answer, reference,
+                    ground_truth, output
+                  </span>
                 </dd>
               </div>
             </dl>
           </div>
 
           <div>
-            <p className="font-semibold text-text-primary">
-              Optional columns
-            </p>
+            <p className="font-semibold text-text-primary">Optional columns</p>
             <dl className="mt-1.5 space-y-1">
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-medium text-text-primary">reference_contexts</dt>
                 <dd className="text-text-muted">
-                  — Retrieved context passages used to generate the answer. Can be a JSON array of strings or a single text value.
-                  <span className="ml-1 italic">Auto-detected: reference_contexts, contexts, context, sources</span>
+                  — Retrieved context passages used to generate the answer. Can be a JSON array of
+                  strings or a single text value.
+                  <span className="ml-1 italic">
+                    Auto-detected: reference_contexts, contexts, context, sources
+                  </span>
                 </dd>
               </div>
             </dl>
@@ -210,22 +209,31 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-medium text-teal-300">Reference SQL</dt>
                 <dd className="text-text-muted">
-                  — The ground-truth SQL query, used by the <span className="font-medium text-text-secondary">sql_semantic_equivalence</span> metric to compare against the generated SQL.
-                  <span className="ml-1 italic">Auto-detected: reference_sql, ref_sql, expected_sql, sql</span>
+                  — The ground-truth SQL query, used by the{' '}
+                  <span className="font-medium text-text-secondary">sql_semantic_equivalence</span>{' '}
+                  metric to compare against the generated SQL.
+                  <span className="ml-1 italic">
+                    Auto-detected: reference_sql, ref_sql, expected_sql, sql
+                  </span>
                 </dd>
               </div>
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-medium text-teal-300">Schema Contexts</dt>
                 <dd className="text-text-muted">
-                  — Database schema definitions (CREATE TABLE statements) that provide context for SQL comparison. JSON array of strings or a single DDL string.
+                  — Database schema definitions (CREATE TABLE statements) that provide context for
+                  SQL comparison. JSON array of strings or a single DDL string.
                   <span className="ml-1 italic">Auto-detected: schema_contexts, schema, ddl</span>
                 </dd>
               </div>
               <div className="flex gap-1.5">
                 <dt className="shrink-0 font-medium text-teal-300">Reference Data</dt>
                 <dd className="text-text-muted">
-                  — Expected tabular/structured output (CSV format), used by the <span className="font-medium text-text-secondary">datacompy_score</span> metric to compare against the generated data.
-                  <span className="ml-1 italic">Auto-detected: reference_data, ref_data, expected_data</span>
+                  — Expected tabular/structured output (CSV format), used by the{' '}
+                  <span className="font-medium text-text-secondary">datacompy_score</span> metric to
+                  compare against the generated data.
+                  <span className="ml-1 italic">
+                    Auto-detected: reference_data, ref_data, expected_data
+                  </span>
                 </dd>
               </div>
             </dl>
@@ -236,11 +244,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
       {/* Loading */}
       {loading && (
         <div className="flex items-center gap-2 text-sm text-text-muted">
-          <svg
-            className="h-4 w-4 animate-spin"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
+          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
             <circle
               className="opacity-25"
               cx="12"
@@ -264,10 +268,8 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-text-secondary">
-              <span className="font-medium text-text-primary">
-                {preview.filename}
-              </span>{" "}
-              — {preview.total_rows} rows, {preview.columns.length} columns
+              <span className="font-medium text-text-primary">{preview.filename}</span> —{' '}
+              {preview.total_rows} rows, {preview.columns.length} columns
             </p>
             <button
               onClick={handleReset}
@@ -294,17 +296,14 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
               </thead>
               <tbody>
                 {preview.preview.map((row, i) => (
-                  <tr
-                    key={i}
-                    className="border-b border-border/50 last:border-0"
-                  >
+                  <tr key={i} className="border-b border-border/50 last:border-0">
                     {preview.columns.map((col) => (
                       <td
                         key={col}
                         className="max-w-[250px] truncate whitespace-nowrap px-3 py-2 text-text-primary"
-                        title={row[col] ?? ""}
+                        title={row[col] ?? ''}
                       >
-                        {row[col] ?? ""}
+                        {row[col] ?? ''}
                       </td>
                     ))}
                   </tr>
@@ -320,8 +319,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
-                Question Column{" "}
-                <span className="text-red-400">*</span>
+                Question Column <span className="text-red-400">*</span>
               </label>
               <select
                 value={questionCol}
@@ -339,8 +337,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
 
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
-                Reference Answer Column{" "}
-                <span className="text-red-400">*</span>
+                Reference Answer Column <span className="text-red-400">*</span>
               </label>
               <select
                 value={answerCol}
@@ -358,7 +355,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
 
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
-                Reference Contexts Column{" "}
+                Reference Contexts Column{' '}
                 <span className="font-normal text-text-muted">(optional)</span>
               </label>
               <select
@@ -377,8 +374,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
 
             <div>
               <label className="mb-1 block text-xs font-medium text-text-secondary">
-                Test Set Name{" "}
-                <span className="font-normal text-text-muted">(optional)</span>
+                Test Set Name <span className="font-normal text-text-muted">(optional)</span>
               </label>
               <input
                 type="text"
@@ -394,7 +390,9 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
           <details className="group rounded-lg border border-teal-500/20 px-4 py-3">
             <summary className="cursor-pointer text-xs font-medium text-teal-400 hover:text-teal-300 transition select-none">
               Domain-specific columns
-              <span className="ml-1 font-normal text-text-muted">(optional — for SQL / tabular metrics)</span>
+              <span className="ml-1 font-normal text-text-muted">
+                (optional — for SQL / tabular metrics)
+              </span>
             </summary>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div>
@@ -408,7 +406,9 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
                 >
                   <option value="">None</option>
                   {preview.columns.map((col) => (
-                    <option key={col} value={col}>{col}</option>
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
                   ))}
                 </select>
                 <p className="mt-0.5 text-xs text-text-muted">
@@ -427,7 +427,9 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
                 >
                   <option value="">None</option>
                   {preview.columns.map((col) => (
-                    <option key={col} value={col}>{col}</option>
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
                   ))}
                 </select>
                 <p className="mt-0.5 text-xs text-text-muted">
@@ -446,7 +448,9 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
                 >
                   <option value="">None</option>
                   {preview.columns.map((col) => (
-                    <option key={col} value={col}>{col}</option>
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
                   ))}
                 </select>
                 <p className="mt-0.5 text-xs text-text-muted">
@@ -464,11 +468,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
           >
             {uploading ? (
               <span className="flex items-center gap-2">
-                <svg
-                  className="h-4 w-4 animate-spin"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
+                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                   <circle
                     className="opacity-25"
                     cx="12"

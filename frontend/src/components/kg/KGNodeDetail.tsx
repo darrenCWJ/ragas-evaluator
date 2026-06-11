@@ -1,4 +1,4 @@
-import type { KGGraphNode } from "../../lib/api";
+import type { KGGraphNode } from '../../lib/api';
 
 interface KGNodeDetailProps {
   node: KGGraphNode | null;
@@ -8,10 +8,16 @@ interface KGNodeDetailProps {
 export default function KGNodeDetail({ node, onClose }: KGNodeDetailProps) {
   if (!node) return null;
 
-  const typeLabel = node.type === "document" ? "Document" : node.type === "chunk" ? "Chunk" : node.type || "Unknown";
-  const typeColor = node.type === "document"
-    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-    : "bg-accent/15 text-accent border-accent/30";
+  const typeLabel =
+    node.type === 'document'
+      ? 'Document'
+      : node.type === 'chunk'
+        ? 'Chunk'
+        : node.type || 'Unknown';
+  const typeColor =
+    node.type === 'document'
+      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+      : 'bg-accent/15 text-accent border-accent/30';
 
   return (
     <div className="fixed inset-y-0 right-0 z-50 flex">
@@ -26,7 +32,9 @@ export default function KGNodeDetail({ node, onClose }: KGNodeDetailProps) {
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/90 backdrop-blur-md px-5 py-4">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className={`shrink-0 rounded-md border px-2 py-0.5 text-2xs font-medium ${typeColor}`}>
+            <span
+              className={`shrink-0 rounded-md border px-2 py-0.5 text-2xs font-medium ${typeColor}`}
+            >
               {typeLabel}
             </span>
             <span className="text-micro text-text-muted font-mono truncate">
@@ -55,7 +63,7 @@ export default function KGNodeDetail({ node, onClose }: KGNodeDetailProps) {
               Headline
             </h4>
             <p className="text-sm text-text-primary leading-relaxed">
-              {node.label || "No headline available"}
+              {node.label || 'No headline available'}
             </p>
           </section>
 
