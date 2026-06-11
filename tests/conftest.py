@@ -1,7 +1,24 @@
 """Shared fixtures for all tests."""
 
 import os
+import sys
+import types
 from unittest.mock import patch
+
+# ragas imports ChatVertexAI from langchain_community.chat_models.vertexai at module
+# level, but this sub-module was removed in langchain-community 0.3+. Provide a stub
+# so test collection succeeds without requiring the google-cloud-aiplatform stack.
+def _ensure_vertexai_stub() -> None:
+    if "langchain_community.chat_models.vertexai" not in sys.modules:
+        lc = sys.modules.setdefault("langchain_community", types.ModuleType("langchain_community"))
+        cm = sys.modules.setdefault("langchain_community.chat_models", types.ModuleType("langchain_community.chat_models"))
+        setattr(lc, "chat_models", cm)
+        stub = types.ModuleType("langchain_community.chat_models.vertexai")
+        stub.ChatVertexAI = type("ChatVertexAI", (), {})  # type: ignore[attr-defined]
+        sys.modules["langchain_community.chat_models.vertexai"] = stub
+        setattr(cm, "vertexai", stub)
+
+_ensure_vertexai_stub()
 
 import pytest
 
