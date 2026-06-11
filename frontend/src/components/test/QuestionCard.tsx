@@ -256,7 +256,7 @@ export default function QuestionCard({
           )}
 
           {/* Graph path (bridge / comparative / community questions) */}
-          {!editing && q.metadata?.graph_path && Array.isArray(q.metadata.graph_path) && (q.metadata.graph_path as string[]).length > 0 && (
+          {!editing && !!q.metadata?.graph_path && Array.isArray(q.metadata.graph_path) && (q.metadata.graph_path as string[]).length > 0 && (
             <details className="mt-2 group">
               <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary transition select-none">
                 <span className="ml-0.5">Graph path</span>
