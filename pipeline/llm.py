@@ -11,6 +11,8 @@ import openai
 from fastapi import HTTPException
 from openai import AsyncOpenAI
 
+from pipeline.retry import with_backoff
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -40,7 +42,7 @@ def _get_openai_client() -> AsyncOpenAI:
     global _openai_client
     if _openai_client is None:
         _openai_client = AsyncOpenAI(
-            max_retries=1,   # 1 retry max — prevent endless loops during gateway outages
+            max_retries=3,   # SDK backoff honors Retry-After; transient 429s must not null results
             timeout=60.0,    # 60s hard timeout per request
         )
     return _openai_client
@@ -62,7 +64,7 @@ def _get_anthropic_client():
         from config import ANTHROPIC_API_KEY
         _anthropic_client = _anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
-            max_retries=1,
+            max_retries=3,
             timeout=60.0,
         )
     return _anthropic_client
@@ -277,13 +279,17 @@ async def _gemini_completion(
 
     client = _get_gemini_client()
     try:
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=contents,
-            config=genai_types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
+        # google-genai has no built-in retry — wrap with backoff ourselves.
+        response = await with_backoff(
+            lambda: client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
             ),
+            label=f"gemini:{model}",
         )
     except Exception as e:
         err_str = str(e).lower()

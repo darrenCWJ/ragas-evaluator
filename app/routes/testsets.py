@@ -723,7 +723,8 @@ async def cancel_test_set_generation(project_id: int, test_set_id: int):
                     if resp.status_code == 200:
                         worker_accepted = True
                         break
-                except Exception:
+                except Exception as exc:
+                    logger.warning("cancel-testgen: worker %s unreachable: %s", worker_url, exc)
                     continue
 
     # If no worker accepted the cancel and no local thread running,
@@ -861,7 +862,8 @@ async def generation_progress(project_id: int):
                             data = resp.json()
                             if data.get("active"):
                                 return {"active": True, **data}
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("testgen-progress: worker %s unreachable: %s", worker_url, exc)
                         continue
 
     # Check DB for completed/failed/cancelled status when no in-memory progress
@@ -1556,8 +1558,11 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                     raise HTTPException(status_code=409, detail="KG build already in progress on a worker")
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "KG build guard: worker %s unreachable, releasing stale delegation: %s",
+                known_url, exc,
+            )
         _project_worker.pop(key, None)
 
     # Offload to worker service(s) if configured
@@ -1577,7 +1582,8 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                         raise HTTPException(status_code=409, detail="KG build already in progress on a worker")
                 except HTTPException:
                     raise
-                except Exception:
+                except Exception as exc:
+                    logger.debug("KG pre-check: worker %s unreachable: %s", worker_url, exc)
                     continue
 
         payload = {
@@ -1689,10 +1695,11 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
                             data = resp.json()
                             if data.get("active") or data.get("status"):
                                 return data
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("KG progress: worker %s unreachable: %s", worker_url, exc)
                         continue
         except Exception:
-            pass  # fall through to local DB check on all workers unreachable
+            logger.warning("KG progress: all workers unreachable, falling back to local DB", exc_info=True)
 
     # Check if a build thread is actively running
     with _kg_lock:
@@ -2059,9 +2066,10 @@ async def list_all_knowledge_graphs():
                                     "build_progress": progress_info,
                                 })
                                 existing_keys.add(key)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("KG list: worker %s unreachable: %s", worker_url, exc)
                         continue
         except Exception:
-            pass
+            logger.warning("KG list: worker enumeration failed", exc_info=True)
 
     return result

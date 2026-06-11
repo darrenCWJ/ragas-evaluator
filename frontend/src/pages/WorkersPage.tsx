@@ -114,8 +114,8 @@ export default function WorkersPage() {
         await clearWorkerBuildTask(task.project_id, task.kg_source);
       }
       await poll();
-    } catch {
-      // Next poll will reflect the state
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear worker task');
     } finally {
       setClearing(null);
     }

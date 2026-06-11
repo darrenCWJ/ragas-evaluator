@@ -4,6 +4,7 @@ Retrieves contexts from the vector store based on the RAG config's search type,
 builds a prompt, calls the LLM, and returns the answer with retrieved contexts.
 """
 
+import asyncio
 import json
 import logging
 
@@ -65,7 +66,10 @@ async def _retrieve_dense(query: str, config_row, conn) -> list[dict]:
     query_embedding = await embed_query_dispatch(query, embedding_type, model_name, params)
     project_id = config_row["project_id"]
     collection_name = f"project_{project_id}_embed_{config_row['embedding_config_id']}"
-    raw_results = vector_search(collection_name, query_embedding, config_row["top_k"])
+    # ChromaDB queries are synchronous — keep them off the event loop.
+    raw_results = await asyncio.to_thread(
+        vector_search, collection_name, query_embedding, config_row["top_k"]
+    )
 
     return [
         {
@@ -110,7 +114,9 @@ async def _retrieve_hybrid(query: str, config_row, conn) -> list[dict]:
         try:
             query_embedding = await embed_query_dispatch(query, embedding_type, model_name, params)
             collection_name = f"project_{project_id}_embed_{config_row['embedding_config_id']}"
-            raw_dense = vector_search(collection_name, query_embedding, top_k)
+            raw_dense = await asyncio.to_thread(
+                vector_search, collection_name, query_embedding, top_k
+            )
             for r in raw_dense:
                 dense_results.append({
                     "content": r["content"],

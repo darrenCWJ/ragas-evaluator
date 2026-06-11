@@ -43,7 +43,9 @@ async def rerank(
     if not contexts:
         return []
 
-    model = _get_cross_encoder(model_name)
+    # First call downloads/loads the cross-encoder (seconds of blocking I/O) —
+    # keep it off the event loop along with predict().
+    model = await asyncio.to_thread(_get_cross_encoder, model_name)
     pairs = [(query, ctx["content"]) for ctx in contexts]
 
     loop = asyncio.get_running_loop()

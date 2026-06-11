@@ -6,7 +6,7 @@ import io
 import json
 import logging
 import math
-import threading
+import time
 from dataclasses import asdict
 from datetime import datetime
 
@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.routes.bot_configs import bot_config_returns_contexts
 from app.routes.projects import _sanitize_csv_value
+from app.services.progress import experiment_runs
 from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL, DEFAULT_EXPERIMENT_METRICS
 from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
 from evaluation.metrics.custom_metric import CustomMetricConfig
@@ -32,17 +33,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["experiments"])
 
-# Track cancellation signals per experiment id
-_cancel_events: dict[int, asyncio.Event] = {}
-
-# Track progress for running experiments so SSE observers can reconnect
-_experiment_progress: dict[int, dict] = {}
-# Track background tasks so we know which experiments are truly alive
-_background_tasks: dict[int, asyncio.Task] = {}
-
-# Track experiments delegated to workers: experiment_id -> worker_url
-_experiment_worker: dict[int, str] = {}
-_experiment_worker_lock = threading.Lock()
+# SSE streaming guards
+_STREAM_STALL_SECONDS = 30 * 60
+_SSE_HEARTBEAT_SECONDS = 15
 
 
 def _reap_stale_experiments(conn) -> int:
@@ -53,6 +46,7 @@ def _reap_stale_experiments(conn) -> int:
     restarted, connection dropped, etc.).  No time limit is applied because
     experiments with many questions can legitimately run for hours.
     """
+    experiment_runs.evict_stale()
     rows = conn.execute(
         "SELECT id FROM experiments WHERE status = 'running'"
     ).fetchall()
@@ -60,10 +54,9 @@ def _reap_stale_experiments(conn) -> int:
     now = datetime.now()
     for row in rows:
         eid = row["id"]
-        if eid not in _cancel_events and eid not in _background_tasks:
-            with _experiment_worker_lock:
-                if eid in _experiment_worker:
-                    continue  # delegated to a worker — don't reap
+        if not experiment_runs.is_alive(eid):
+            if experiment_runs.get_worker(eid):
+                continue  # delegated to a worker — don't reap
             conn.execute(
                 "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
                 (now.isoformat(), eid),
@@ -383,7 +376,11 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
 
 
 @router.get("/projects/{project_id}/experiments")
-async def list_experiments(project_id: int):
+async def list_experiments(
+    project_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
     conn = db.init.get_db()
 
     # Auto-detect and clean up stale "running" experiments
@@ -396,8 +393,8 @@ async def list_experiments(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     rows = conn.execute(
-        "SELECT * FROM experiments WHERE project_id = ? ORDER BY created_at DESC",
-        (project_id,),
+        "SELECT * FROM experiments WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (project_id, limit, offset),
     ).fetchall()
 
     if not rows:
@@ -557,19 +554,21 @@ async def compare_experiments(
 
         experiments_meta.append(exp)
 
-    # Fetch all results for all experiments
+    # Fetch all results for all experiments (bounded — the guard below
+    # rejects anything that hits the cap instead of loading it all)
     all_results = conn.execute(
         f"""SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer,
                    tq.question_type, tq.persona
             FROM experiment_results er
             JOIN test_questions tq ON er.test_question_id = tq.id
             WHERE er.experiment_id IN ({placeholders})
-            ORDER BY tq.id""",
+            ORDER BY tq.id
+            LIMIT 2501""",
         tuple(experiment_ids),
     ).fetchall()
 
     # Guard: payload size limit
-    if len(all_results) > 2500:
+    if len(all_results) >= 2501:
         raise HTTPException(
             status_code=413,
             detail="Too many results for comparison. Reduce experiment count or use experiments with smaller test sets.",
@@ -881,8 +880,7 @@ async def run_experiment(
                 try:
                     resp = await client.post(f"{worker_url}/run-experiment", json=payload)
                     if resp.status_code == 202:
-                        with _experiment_worker_lock:
-                            _experiment_worker[experiment_id] = worker_url
+                        experiment_runs.set_worker(experiment_id, worker_url)
                         logger.info("Experiment %d delegated to worker: %s", experiment_id, worker_url)
                         delegated = True
                         break
@@ -894,11 +892,11 @@ async def run_experiment(
                     logger.warning("Worker %s unreachable for experiment: %s", worker_url, e)
 
         if delegated:
-            _experiment_progress[experiment_id] = {
+            experiment_runs.set_progress(experiment_id, {
                 "phase": "starting", "current": 0, "total": 0,
                 "question": "", "error": None, "result_count": 0,
                 "delegated_to_worker": True,
-            }
+            })
             return {
                 "experiment_id": experiment_id,
                 "status": "started",
@@ -909,12 +907,12 @@ async def run_experiment(
 
     # --- Launch local background task ---
     cancel_event = asyncio.Event()
-    _cancel_events[experiment_id] = cancel_event
-    _experiment_progress[experiment_id] = {
+    experiment_runs.set_cancel_event(experiment_id, cancel_event)
+    experiment_runs.set_progress(experiment_id, {
         "phase": "starting", "current": 0, "total": 0,
         "question": "", "error": None, "result_count": 0,
         "completed_items": [], "in_flight": [], "scoring_metrics": [],
-    }
+    })
 
     async def _run_background():
         run_conn = db.init.get_thread_db()
@@ -929,14 +927,14 @@ async def run_experiment(
             ).fetchall()
 
             total = len(questions)
-            _experiment_progress[experiment_id] = {
+            experiment_runs.set_progress(experiment_id, {
                 "phase": "setup", "current": 0, "total": total,
                 "question": "", "error": None, "result_count": 0,
                 "completed_items": [],
                 "in_flight": [],
                 "in_flight_details": {},
                 "setup_step": "Loading metric scorers...",
-            }
+            })
 
             # Yield control so the SSE stream can send the setup phase
             await asyncio.sleep(0)
@@ -1069,13 +1067,13 @@ async def run_experiment(
             logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
 
             # Transition from setup → running
-            _experiment_progress[experiment_id] = {
+            experiment_runs.set_progress(experiment_id, {
                 "phase": "running", "current": 0, "total": total,
                 "question": "", "error": None, "result_count": 0,
                 "completed_items": [],
                 "in_flight": [],
                 "in_flight_details": {},
-            }
+            })
 
             # Determine execution mode: external bot or internal RAG
             use_bot = experiment["bot_config_id"] is not None
@@ -1090,10 +1088,10 @@ async def run_experiment(
                     (experiment["bot_config_id"],),
                 ).fetchone()
                 if bot_cfg is None:
-                    _experiment_progress[experiment_id] = {
+                    experiment_runs.set_progress(experiment_id, {
                         "phase": "error", "current": 0, "total": total,
                         "question": "", "error": "Bot config not found", "result_count": 0,
-                    }
+                    })
                     return
                 is_csv = bot_cfg["connector_type"] == "csv"
                 if is_csv:
@@ -1131,10 +1129,10 @@ async def run_experiment(
                         return  # skip if cancelled
 
                     # Track in-flight question with detail
-                    prog = _experiment_progress.get(experiment_id)
-                    if prog is not None:
+                    all_metric_names = list(scorers.keys()) + list((custom_scorers or {}).keys())
+
+                    def _track_in_flight(prog: dict) -> None:
                         prog["in_flight"] = [*prog["in_flight"], question_text[:120]]
-                        all_metric_names = list(scorers.keys()) + list((custom_scorers or {}).keys())
                         prog["in_flight_details"][qid] = {
                             "question": question_text[:200],
                             "phase": "scoring" if is_csv else "querying",
@@ -1142,6 +1140,8 @@ async def run_experiment(
                             "metrics_active": [],
                             "metrics_pending": all_metric_names[:],
                         }
+
+                    experiment_runs.mutate_progress(experiment_id, _track_in_flight)
 
                     try:
                         if is_csv:
@@ -1216,9 +1216,11 @@ async def run_experiment(
                             context_strings = [c["content"] for c in full_context_dicts]
 
                         # Update phase to scoring
-                        prog = _experiment_progress.get(experiment_id)
-                        if prog is not None and qid in prog["in_flight_details"]:
-                            prog["in_flight_details"][qid]["phase"] = "scoring"
+                        def _mark_scoring(prog: dict) -> None:
+                            if qid in prog["in_flight_details"]:
+                                prog["in_flight_details"][qid]["phase"] = "scoring"
+
+                        experiment_runs.mutate_progress(experiment_id, _mark_scoring)
 
                         ref_answer = (
                             q_row["user_edited_answer"]
@@ -1228,8 +1230,7 @@ async def run_experiment(
                         q_metadata = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else None
 
                         def _on_metric_start(metric_name):
-                            prog = _experiment_progress.get(experiment_id)
-                            if prog is not None:
+                            def _apply(prog: dict) -> None:
                                 active = set(prog.get("scoring_metrics", []))
                                 active.add(metric_name)
                                 prog["scoring_metrics"] = sorted(active)
@@ -1241,9 +1242,10 @@ async def run_experiment(
                                     if metric_name not in detail["metrics_active"]:
                                         detail["metrics_active"] = [*detail["metrics_active"], metric_name]
 
+                            experiment_runs.mutate_progress(experiment_id, _apply)
+
                         def _on_metric_done(metric_name):
-                            prog = _experiment_progress.get(experiment_id)
-                            if prog is not None:
+                            def _apply(prog: dict) -> None:
                                 active = set(prog.get("scoring_metrics", []))
                                 active.discard(metric_name)
                                 prog["scoring_metrics"] = sorted(active)
@@ -1253,6 +1255,8 @@ async def run_experiment(
                                     detail["metrics_active"] = [m for m in detail["metrics_active"] if m != metric_name]
                                     if metric_name not in detail["metrics_done"]:
                                         detail["metrics_done"] = [*detail["metrics_done"], metric_name]
+
+                            experiment_runs.mutate_progress(experiment_id, _apply)
 
                         metrics_result = await evaluate_experiment_row(
                             scorers,
@@ -1451,37 +1455,46 @@ async def run_experiment(
                 run_conn.commit()
                 completed_count += 1
 
-                # Update shared progress state (preserve accumulated lists)
-                prog = _experiment_progress.get(experiment_id, {})
-                completed_items = prog.get("completed_items", [])
-                in_flight = prog.get("in_flight", [])
+                # Update shared progress state (preserve accumulated lists).
+                # Loop variables are bound as defaults so the closure captures
+                # this iteration's values (B023).
+                def _apply_result_progress(
+                    prog: dict,
+                    *,
+                    question_text=question_text,
+                    result=result,
+                    qid=qid,
+                    finished=finished,
+                    completed_count=completed_count,
+                ) -> None:
+                    # Add to completed log (keep last 50 to bound memory)
+                    completed_items = [*prog.get("completed_items", [])[-49:], {
+                        "question": question_text[:200],
+                        "response": (result["generated_answer"] or "")[:300] if result["generated_answer"] else None,
+                        "error": result["error"],
+                        "metrics": result["metrics_result"] if result["error"] is None else {},
+                    }]
 
-                # Add to completed log (keep last 50 to bound memory)
-                completed_items = [*completed_items[-49:], {
-                    "question": question_text[:200],
-                    "response": (result["generated_answer"] or "")[:300] if result["generated_answer"] else None,
-                    "error": result["error"],
-                    "metrics": result["metrics_result"] if result["error"] is None else {},
-                }]
+                    # Remove from in-flight
+                    q_short = question_text[:120]
+                    in_flight = [q for q in prog.get("in_flight", []) if q != q_short]
 
-                # Remove from in-flight
-                q_short = question_text[:120]
-                in_flight = [q for q in in_flight if q != q_short]
+                    # Remove from in_flight_details
+                    in_flight_details = dict(prog.get("in_flight_details", {}))
+                    in_flight_details.pop(qid, None)
 
-                # Remove from in_flight_details
-                in_flight_details = dict(prog.get("in_flight_details", {}))
-                in_flight_details.pop(qid, None)
+                    prog.update({
+                        "phase": "running", "current": finished, "total": total,
+                        "question": question_text[:100],
+                        "error": result["error"],
+                        "result_count": completed_count,
+                        "completed_items": completed_items,
+                        "in_flight": in_flight,
+                        "in_flight_details": in_flight_details,
+                        "scoring_metrics": prog.get("scoring_metrics", []),
+                    })
 
-                _experiment_progress[experiment_id] = {
-                    "phase": "running", "current": finished, "total": total,
-                    "question": question_text[:100],
-                    "error": result["error"],
-                    "result_count": completed_count,
-                    "completed_items": completed_items,
-                    "in_flight": in_flight,
-                    "in_flight_details": in_flight_details,
-                    "scoring_metrics": prog.get("scoring_metrics", []),
-                }
+                experiment_runs.mutate_progress(experiment_id, _apply_result_progress)
 
             # Cancel pending tasks immediately if we broke out early
             if cancel_event.is_set():
@@ -1496,10 +1509,10 @@ async def run_experiment(
                     (datetime.now().isoformat(), experiment_id),
                 )
                 run_conn.commit()
-                _experiment_progress[experiment_id] = {
+                experiment_runs.set_progress(experiment_id, {
                     "phase": "cancelled", "current": finished, "total": total,
                     "question": "", "error": None, "result_count": completed_count,
-                }
+                })
             else:
                 # All questions processed -- mark completed
                 run_conn.execute(
@@ -1507,22 +1520,22 @@ async def run_experiment(
                     (datetime.now().isoformat(), experiment_id),
                 )
                 run_conn.commit()
-                _experiment_progress[experiment_id] = {
+                experiment_runs.set_progress(experiment_id, {
                     "phase": "completed", "current": finished, "total": total,
                     "question": "", "error": None, "result_count": completed_count,
-                }
+                })
 
         except Exception as e:
             import traceback
             logger.error("Experiment %d fatal error: %s\n%s", experiment_id, e, traceback.format_exc())
-            _experiment_progress[experiment_id] = {
+            experiment_runs.set_progress(experiment_id, {
                 "phase": "error", "current": 0, "total": 0,
                 "question": "", "error": str(e), "result_count": 0,
-            }
+            })
 
         finally:
-            _cancel_events.pop(experiment_id, None)
-            _background_tasks.pop(experiment_id, None)
+            experiment_runs.pop_cancel_event(experiment_id)
+            experiment_runs.pop_task(experiment_id)
             # Cancel any in-flight question tasks to avoid zombie coroutines
             for t in tasks:
                 if not t.done():
@@ -1551,7 +1564,7 @@ async def run_experiment(
                 run_conn.close()
 
     task = asyncio.create_task(_run_background())
-    _background_tasks[experiment_id] = task
+    experiment_runs.set_task(experiment_id, task)
 
     # Return JSON immediately — the frontend should use GET /progress to observe
     return {
@@ -1572,8 +1585,7 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
     the SSE stream sends its first event, avoiding the 'Initializing...' flicker.
     """
     # Check if delegated to a worker
-    with _experiment_worker_lock:
-        worker_url = _experiment_worker.get(experiment_id)
+    worker_url = experiment_runs.get_worker(experiment_id)
     if worker_url:
         import httpx
         try:
@@ -1593,9 +1605,12 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
                         "result_count": data.get("result_count", 0),
                     }
         except Exception:
-            pass
+            logger.warning(
+                "Experiment %d: worker %s progress-snapshot fetch failed, falling back to local state",
+                experiment_id, worker_url, exc_info=True,
+            )
 
-    progress = _experiment_progress.get(experiment_id)
+    progress = experiment_runs.snapshot_progress(experiment_id)
     if progress is None:
         raise HTTPException(status_code=404, detail="No active progress for this experiment")
     return {
@@ -1622,10 +1637,9 @@ async def experiment_progress(project_id: int, experiment_id: int):
     reconnect later without affecting the background task.
     """
     # Check if delegated to a worker
-    with _experiment_worker_lock:
-        worker_url = _experiment_worker.get(experiment_id)
+    worker_url = experiment_runs.get_worker(experiment_id)
 
-    progress = _experiment_progress.get(experiment_id)
+    progress = experiment_runs.snapshot_progress(experiment_id)
     if progress is None and worker_url is None:
         conn = db.init.get_db()
         exp = conn.execute(
@@ -1651,121 +1665,167 @@ async def experiment_progress(project_id: int, experiment_id: int):
     async def _observe():
         prev_items_sent = 0
         sent_started = False
+        last_change = time.monotonic()
+        last_seen: tuple | None = None
+        last_beat = time.monotonic()
 
-        # If delegated to a worker, proxy progress via HTTP polling
-        if worker_url:
-            import httpx
-            async with httpx.AsyncClient(timeout=10) as client:
-                while True:
-                    try:
-                        resp = await client.get(f"{worker_url}/experiment-progress/{experiment_id}")
-                        if resp.status_code != 200:
-                            yield f"event: error\ndata: {json.dumps({'message': 'Worker unreachable'})}\n\n"
+        try:
+            # If delegated to a worker, proxy progress via HTTP polling
+            if worker_url:
+                import httpx
+                async with httpx.AsyncClient(timeout=10) as client:
+                    while True:
+                        # Heartbeat so proxies don't kill an idle connection
+                        if time.monotonic() - last_beat >= _SSE_HEARTBEAT_SECONDS:
+                            yield ": keepalive\n\n"
+                            last_beat = time.monotonic()
+
+                        try:
+                            resp = await client.get(f"{worker_url}/experiment-progress/{experiment_id}")
+                            if resp.status_code != 200:
+                                yield f"event: error\ndata: {json.dumps({'message': 'Worker unreachable'})}\n\n"
+                                break
+                            prog = resp.json()
+                        except Exception:
+                            logger.warning(
+                                "Experiment %d: lost connection to worker %s while streaming progress",
+                                experiment_id, worker_url, exc_info=True,
+                            )
+                            yield f"event: error\ndata: {json.dumps({'message': 'Worker connection lost'})}\n\n"
                             break
-                        prog = resp.json()
-                    except Exception:
-                        yield f"event: error\ndata: {json.dumps({'message': 'Worker connection lost'})}\n\n"
-                        break
 
-                    phase = prog.get("phase", "starting")
+                        phase = prog.get("phase", "starting")
 
-                    if phase == "starting":
+                        # Stall guard: no phase/current change for too long
+                        seen = (phase, prog.get("current"))
+                        if seen != last_seen:
+                            last_seen = seen
+                            last_change = time.monotonic()
+                        elif time.monotonic() - last_change > _STREAM_STALL_SECONDS:
+                            logger.warning(
+                                "Experiment %d: worker progress stream stalled for %d seconds — closing",
+                                experiment_id, _STREAM_STALL_SECONDS,
+                            )
+                            yield f"data: {json.dumps({'phase': 'error', 'error': 'no progress for 30 minutes — stream closed, reconnect to resume', 'recoverable': True})}\n\n"
+                            break
+
+                        if phase == "starting":
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        if phase == "setup":
+                            if not sent_started and prog.get("total", 0) > 0:
+                                sent_started = True
+                                yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+                            yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog.get('total', 0), 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        if phase == "running":
+                            if not sent_started and prog.get("total", 0) > 0:
+                                sent_started = True
+                                yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+
+                            completed_items = prog.get("completed_items", [])
+                            new_items = completed_items[prev_items_sent:]
+                            prev_items_sent = len(completed_items)
+                            details_list = list(prog.get("in_flight_details", {}).values())
+
+                            yield f"event: progress\ndata: {json.dumps({'current': prog.get('current', 0), 'total': prog.get('total', 0), 'question': prog.get('question', ''), 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        if phase == "completed":
+                            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
+                            break
+
+                        if phase == "cancelled":
+                            yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog.get('result_count', 0)})}\n\n"
+                            break
+
+                        if phase == "error":
+                            yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
+                            break
+
+                        if not prog.get("active", True):
+                            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
+                            break
+
                         await asyncio.sleep(0.5)
-                        continue
 
-                    if phase == "setup":
-                        if not sent_started and prog.get("total", 0) > 0:
-                            sent_started = True
-                            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
-                        yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog.get('total', 0), 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
-                        await asyncio.sleep(0.5)
-                        continue
+                experiment_runs.release(experiment_id)
+                return
 
-                    if phase == "running":
-                        if not sent_started and prog.get("total", 0) > 0:
-                            sent_started = True
-                            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+            # Local experiment progress observation
+            while True:
+                # Heartbeat so proxies don't kill an idle connection
+                if time.monotonic() - last_beat >= _SSE_HEARTBEAT_SECONDS:
+                    yield ": keepalive\n\n"
+                    last_beat = time.monotonic()
 
-                        completed_items = prog.get("completed_items", [])
-                        new_items = completed_items[prev_items_sent:]
-                        prev_items_sent = len(completed_items)
-                        details_list = list(prog.get("in_flight_details", {}).values())
+                prog = experiment_runs.snapshot_progress(experiment_id)
+                if prog is None:
+                    break
 
-                        yield f"event: progress\ndata: {json.dumps({'current': prog.get('current', 0), 'total': prog.get('total', 0), 'question': prog.get('question', ''), 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
-                        await asyncio.sleep(0.5)
-                        continue
+                phase = prog["phase"]
 
-                    if phase == "completed":
-                        yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
-                        break
+                # Stall guard: no phase/current change for too long
+                seen = (phase, prog.get("current"))
+                if seen != last_seen:
+                    last_seen = seen
+                    last_change = time.monotonic()
+                elif time.monotonic() - last_change > _STREAM_STALL_SECONDS:
+                    logger.warning(
+                        "Experiment %d: progress stream stalled for %d seconds — closing",
+                        experiment_id, _STREAM_STALL_SECONDS,
+                    )
+                    yield f"data: {json.dumps({'phase': 'error', 'error': 'no progress for 30 minutes — stream closed, reconnect to resume', 'recoverable': True})}\n\n"
+                    break
 
-                    if phase == "cancelled":
-                        yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog.get('result_count', 0)})}\n\n"
-                        break
-
-                    if phase == "error":
-                        yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
-                        break
-
-                    if not prog.get("active", True):
-                        yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
-                        break
-
+                if phase == "starting":
                     await asyncio.sleep(0.5)
+                    continue
 
-            with _experiment_worker_lock:
-                _experiment_worker.pop(experiment_id, None)
-            _experiment_progress.pop(experiment_id, None)
-            return
+                if phase == "setup":
+                    if not sent_started and prog["total"] > 0:
+                        sent_started = True
+                        yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+                    yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog['total'], 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
+                    await asyncio.sleep(0.5)
+                    continue
 
-        # Local experiment progress observation
-        while True:
-            prog = _experiment_progress.get(experiment_id)
-            if prog is None:
-                break
+                if phase == "running":
+                    if not sent_started and prog["total"] > 0:
+                        sent_started = True
+                        yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
 
-            phase = prog["phase"]
+                    completed_items = prog.get("completed_items", [])
+                    new_items = completed_items[prev_items_sent:]
+                    prev_items_sent = len(completed_items)
 
-            if phase == "starting":
+                    details_list = list(prog.get("in_flight_details", {}).values())
+
+                    yield f"event: progress\ndata: {json.dumps({'current': prog['current'], 'total': prog['total'], 'question': prog['question'], 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if phase == "completed":
+                    yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog['result_count']})}\n\n"
+                    break
+
+                if phase == "cancelled":
+                    yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog['result_count']})}\n\n"
+                    break
+
+                if phase == "error":
+                    yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
+                    break
+
                 await asyncio.sleep(0.5)
-                continue
 
-            if phase == "setup":
-                if not sent_started and prog["total"] > 0:
-                    sent_started = True
-                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
-                yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog['total'], 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "running":
-                if not sent_started and prog["total"] > 0:
-                    sent_started = True
-                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
-
-                completed_items = prog.get("completed_items", [])
-                new_items = completed_items[prev_items_sent:]
-                prev_items_sent = len(completed_items)
-
-                details_list = list(prog.get("in_flight_details", {}).values())
-
-                yield f"event: progress\ndata: {json.dumps({'current': prog['current'], 'total': prog['total'], 'question': prog['question'], 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "completed":
-                yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog['result_count']})}\n\n"
-                break
-
-            if phase == "cancelled":
-                yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog['result_count']})}\n\n"
-                break
-
-            if phase == "error":
-                yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
-                break
-
-            await asyncio.sleep(0.5)
+        except Exception as exc:
+            logger.exception("Experiment %d: progress stream failed", experiment_id)
+            yield f"data: {json.dumps({'phase': 'error', 'error': 'stream failure: ' + str(exc), 'recoverable': True})}\n\n"
 
     return StreamingResponse(_observe(), media_type="text/event-stream")
 
@@ -1840,8 +1900,7 @@ async def cancel_experiment(project_id: int, experiment_id: int):
         raise HTTPException(status_code=409, detail="Experiment is not running")
 
     # Check if delegated to a worker
-    with _experiment_worker_lock:
-        worker_url = _experiment_worker.get(experiment_id)
+    worker_url = experiment_runs.get_worker(experiment_id)
     if worker_url:
         import httpx
         try:
@@ -1850,18 +1909,19 @@ async def cancel_experiment(project_id: int, experiment_id: int):
                 if resp.status_code == 200:
                     return {"status": "cancelling", "experiment_id": experiment_id}
         except Exception:
-            pass
+            logger.warning(
+                "Experiment %d: cancel request to worker %s failed — marking failed locally",
+                experiment_id, worker_url, exc_info=True,
+            )
         conn.execute(
             "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
             (datetime.now().isoformat(), experiment_id),
         )
         conn.commit()
-        with _experiment_worker_lock:
-            _experiment_worker.pop(experiment_id, None)
-        _experiment_progress.pop(experiment_id, None)
+        experiment_runs.release(experiment_id)
         return {"status": "cancelled", "experiment_id": experiment_id}
 
-    event = _cancel_events.get(experiment_id)
+    event = experiment_runs.get_cancel_event(experiment_id)
     if event:
         event.set()
     else:

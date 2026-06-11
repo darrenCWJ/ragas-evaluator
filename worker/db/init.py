@@ -63,8 +63,8 @@ class _PgConnection:
         self._conn = pg_conn
 
     def execute(self, sql: str, params: tuple = ()) -> _PgCursor:
-        # Replace SQLite ? placeholders with psycopg2 %s
-        pg_sql = sql.replace("?", "%s")
+        # Escape literal % (e.g. LIKE '%foo%') before introducing %s placeholders
+        pg_sql = sql.replace("%", "%%").replace("?", "%s")
 
         # Append RETURNING id to INSERTs so lastrowid works
         stripped = pg_sql.strip().upper()
@@ -490,6 +490,22 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN custom_metric_name TEXT")
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN judge_model_assignments_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN few_shot_examples_json TEXT")
+
+    # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
+    # — kept in sync with db/init.py; without this the worker creates duplicate
+    # KG rows per source on PostgreSQL.
+    if _USE_PG:
+        try:
+            conn.execute(
+                "ALTER TABLE knowledge_graphs DROP CONSTRAINT IF EXISTS knowledge_graphs_project_id_chunks_hash_key"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_kg_project_source ON knowledge_graphs (project_id, kg_source)"
+            )
+            conn.commit()
+        except Exception:
+            conn.commit()
 
     # Backfill NULL chunk_config_id on knowledge_graphs (SQLite only — PG starts fresh)
     if not _USE_PG:

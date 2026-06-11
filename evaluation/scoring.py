@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from functools import partial
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, OpenAI
@@ -42,6 +43,7 @@ from evaluation.metrics import (
     summarization_score,
 )
 from evaluation.metrics.custom_metric import CustomMetricConfig
+from pipeline.retry import with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -240,46 +242,56 @@ async def _score_builtin(
             logger.info("Metric %s skipped: no retrieved contexts available", name)
             return name, None
         mod = _METRIC_MODULES[name]
+        # Build a coroutine *factory* (not the coroutine itself) so a failed
+        # attempt can be retried — transient rate limits must not null out
+        # a metric score mid-experiment.
         if name in _SCORE_SIGNATURES["q_a_ctx"]:
-            coro = mod.score(scorer, question, generated_answer, contexts)
+            factory = partial(mod.score, scorer, question, generated_answer, contexts)
         elif name in _SCORE_SIGNATURES["q_a"]:
-            coro = mod.score(scorer, question, generated_answer)
+            factory = partial(mod.score, scorer, question, generated_answer)
         elif name in _SCORE_SIGNATURES["a_ctx"]:
-            coro = mod.score(scorer, generated_answer, contexts)
+            factory = partial(mod.score, scorer, generated_answer, contexts)
         elif name in _SCORE_SIGNATURES["ref_ctx"]:
-            coro = mod.score(scorer, reference_answer, contexts)
+            factory = partial(mod.score, scorer, reference_answer, contexts)
         elif name in _SCORE_SIGNATURES["q_a_ref_ctx"]:
-            coro = mod.score(
-                scorer, question, generated_answer, reference_answer, contexts
+            factory = partial(
+                mod.score, scorer, question, generated_answer, reference_answer, contexts
             )
         elif name in _SCORE_SIGNATURES["a_ref"]:
-            coro = mod.score(scorer, generated_answer, reference_answer)
+            factory = partial(mod.score, scorer, generated_answer, reference_answer)
         elif name in _SCORE_SIGNATURES["q_a_ref"]:
-            coro = mod.score(
-                scorer, question, generated_answer, reference_answer
+            factory = partial(
+                mod.score, scorer, question, generated_answer, reference_answer
             )
         elif name in _SCORE_SIGNATURES["q_ctx"]:
-            coro = mod.score(scorer, question, contexts)
+            factory = partial(mod.score, scorer, question, contexts)
         elif name in _SCORE_SIGNATURES["q_a_rubrics_ctx"]:
-            coro = mod.score(scorer, question, generated_answer, rubrics=rubrics, contexts=contexts)
+            factory = partial(mod.score, scorer, question, generated_answer, rubrics=rubrics, contexts=contexts)
         elif name in _SCORE_SIGNATURES["metadata_sql"]:
             meta = metadata or {}
             ref_sql = meta.get("reference_sql", reference_answer)
             schema_ctx = meta.get("schema_contexts")
-            coro = mod.score(scorer, generated_answer, ref_sql, schema_ctx)
+            factory = partial(mod.score, scorer, generated_answer, ref_sql, schema_ctx)
         elif name in _SCORE_SIGNATURES["metadata_data"]:
             meta = metadata or {}
             ref_data = meta.get("reference_data", reference_answer)
-            coro = mod.score(scorer, generated_answer, ref_data)
+            factory = partial(mod.score, scorer, generated_answer, ref_data)
         else:
-            coro = None
+            factory = None
 
-        if coro is not None:
+        if factory is not None:
             from config import METRIC_SCORING_TIMEOUT
             # Yield to the event loop so SSE progress and health checks
             # remain responsive while metrics are being scored.
             await asyncio.sleep(0)
-            val = await asyncio.wait_for(coro, timeout=METRIC_SCORING_TIMEOUT)
+
+            async def _attempt():
+                return await asyncio.wait_for(factory(), timeout=METRIC_SCORING_TIMEOUT)
+
+            # One retry on transient failures (rate limit, timeout, upstream 5xx).
+            val = await with_backoff(
+                _attempt, attempts=2, base_delay=5.0, label=f"metric:{name}"
+            )
         else:
             val = None
         if on_done:

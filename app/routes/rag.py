@@ -2,7 +2,7 @@
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 import db.init
 from app.models import RagConfigCreate, RagConfigUpdate, RagQueryRequest
@@ -49,7 +49,11 @@ def _expand_rag_config(rag_row, conn) -> dict:
 
 
 @router.get("/projects/{project_id}/rag-configs")
-async def list_rag_configs(project_id: int):
+async def list_rag_configs(
+    project_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
     conn = db.init.get_db()
 
     project = conn.execute(
@@ -59,8 +63,8 @@ async def list_rag_configs(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     rows = conn.execute(
-        "SELECT * FROM rag_configs WHERE project_id = ? ORDER BY created_at DESC",
-        (project_id,),
+        "SELECT * FROM rag_configs WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (project_id, limit, offset),
     ).fetchall()
     return [_parse_rag_config_row(r) for r in rows]
 

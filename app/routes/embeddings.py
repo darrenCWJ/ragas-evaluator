@@ -1,9 +1,10 @@
 """Embedding config CRUD, embed chunks, search, and hybrid search routes."""
 
+import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 import db.init
 from app.models import (
@@ -52,13 +53,20 @@ async def create_embedding_config(project_id: int, req: EmbeddingConfigCreate):
 
 
 @router.get("/projects/{project_id}/embedding-configs")
-async def list_embedding_configs(project_id: int):
+async def list_embedding_configs(
+    project_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
     conn = db.init.get_db()
 
     project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    rows = conn.execute("SELECT * FROM embedding_configs WHERE project_id = ?", (project_id,)).fetchall()
+    rows = conn.execute(
+        "SELECT * FROM embedding_configs WHERE project_id = ? LIMIT ? OFFSET ?",
+        (project_id, limit, offset),
+    ).fetchall()
     return [_parse_embedding_config_row(r) for r in rows]
 
 
@@ -243,7 +251,7 @@ async def search_embeddings(project_id: int, config_id: int, req: SearchRequest)
             raise HTTPException(status_code=502, detail=f"Embedding API failed: {e}") from e
 
         collection_name = f"project_{project_id}_embed_{config_id}"
-        results = vector_search(collection_name, query_embedding, req.top_k)
+        results = await asyncio.to_thread(vector_search, collection_name, query_embedding, req.top_k)
 
         output = []
         for r in results:
@@ -292,7 +300,7 @@ async def hybrid_search(project_id: int, req: HybridSearchRequest):
     try:
         query_embedding = await embed_query_dispatch(req.query, dense_type, dense_model, dense_params)
         collection_name = f"project_{project_id}_embed_{req.dense_config_id}"
-        raw_dense = vector_search(collection_name, query_embedding, req.top_k)
+        raw_dense = await asyncio.to_thread(vector_search, collection_name, query_embedding, req.top_k)
         for r in raw_dense:
             dense_results.append({
                 "content": r["content"],

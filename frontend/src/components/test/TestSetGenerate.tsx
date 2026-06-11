@@ -291,11 +291,13 @@ export default function TestSetGenerate({ projectId, chunkConfigs, onTestSetCrea
   useEffect(() => {
     if (!kgBuilding) return;
     let cancelled = false;
+    let consecutiveFailures = 0;
     const poll = async () => {
       while (!cancelled) {
         try {
           const p = await fetchKGBuildProgress(projectId);
           if (cancelled) break;
+          consecutiveFailures = 0;
           setKgProgress(p);
           if (!p.active) {
             setKgBuilding(false);
@@ -304,7 +306,18 @@ export default function TestSetGenerate({ projectId, chunkConfigs, onTestSetCrea
             break;
           }
         } catch {
-          // ignore
+          // Tolerate transient blips, but surface persistent failure instead
+          // of spinning forever against a dead server.
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 5) {
+            if (!cancelled) {
+              setError(
+                'Lost connection while checking KG build progress. The build may still be running — refresh to reconnect.',
+              );
+              setKgBuilding(false);
+            }
+            break;
+          }
         }
         await new Promise((r) => setTimeout(r, 3000));
       }
@@ -330,11 +343,13 @@ export default function TestSetGenerate({ projectId, chunkConfigs, onTestSetCrea
   useEffect(() => {
     if (!generating) return;
     let stopped = false;
+    let consecutiveFailures = 0;
     const poll = async () => {
       while (!stopped) {
         try {
           const p = await fetchGenerationProgress(projectId);
           if (stopped) break;
+          consecutiveFailures = 0;
           setProgress(p);
           // Sync activeTestSetId from progress if not already set
           if (p.test_set_id) setActiveTestSetId(p.test_set_id);
@@ -357,7 +372,19 @@ export default function TestSetGenerate({ projectId, chunkConfigs, onTestSetCrea
             break;
           }
         } catch {
-          // ignore polling errors
+          // Tolerate transient blips, but surface persistent failure instead
+          // of spinning forever against a dead server.
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 5) {
+            if (!stopped) {
+              setError(
+                'Lost connection while checking generation progress. Generation may still be running — refresh to reconnect.',
+              );
+              setGenerating(false);
+              setCancelling(false);
+            }
+            break;
+          }
         }
         await new Promise((r) => setTimeout(r, 2000));
       }
