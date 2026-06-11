@@ -10,12 +10,12 @@ Glean API key needed.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -24,8 +24,6 @@ import pytest
 import requests
 
 from evaluation.scoring import ALL_METRICS
-
-logger = logging.getLogger(__name__)
 
 MAX_WAIT = 600
 POLL_INTERVAL = 5
@@ -161,10 +159,10 @@ def _start_server(tmp_dir, port):
             if requests.get(f"{base_url}/api/health", timeout=2).ok:
                 return proc, db_path, base_url
         except requests.ConnectionError:
-            logger.debug("test cleanup error ignored", exc_info=True)
+            pass
         time.sleep(0.5)
     proc.kill()
-    raise AssertionError(f"Server on port {port} did not start within 30s")
+    pytest.fail(f"Server on port {port} did not start within 30s")
 
 
 def _stop_server(proc):
@@ -208,7 +206,7 @@ def _fire_and_poll(base_url, db_path, project_id, experiment_id, metrics,
                 if st == "failed":
                     pytest.fail("Experiment failed")
         except sqlite3.OperationalError:
-            logger.debug("test cleanup error ignored", exc_info=True)
+            pass
         time.sleep(POLL_INTERVAL)
 
     pytest.fail(f"Timeout after {MAX_WAIT}s. status={last_st}, results={last_cnt}")

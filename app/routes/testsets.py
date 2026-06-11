@@ -8,8 +8,6 @@ import logging
 import threading
 from datetime import datetime
 
-from typing import Literal
-
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -21,12 +19,12 @@ from app.models import (
     BulkAnnotation,
     VALID_QUESTION_STATUSES,
     BULK_ACTION_TO_STATUS,
+    MAX_CHUNKS_FOR_GENERATION,
+    MAX_UPLOAD_QA_ROWS,
 )
-from config import (
-    KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URLS, KG_THREAD_MODE,
-    MAX_CHUNKS_FOR_GENERATION, MAX_UPLOAD_QA_ROWS,
-)
-from db.init import get_db, get_thread_db, NOW_SQL, json_extract_sql
+from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URL, KG_WORKER_URLS, KG_THREAD_MODE
+import db.init
+from db.init import NOW_SQL, json_extract_sql
 
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
@@ -116,7 +114,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @router.post("/projects/{project_id}/test-sets", status_code=201)
 async def create_test_set(project_id: int, req: TestSetCreate):
-    conn = get_db()
+    conn = db.init.get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -313,7 +311,7 @@ def _run_generation(
     )
 
     cancel_flag = register_cancel_flag(project_id)
-    conn = get_thread_db()
+    conn = db.init.get_thread_db()
     saved_count = 0
 
     def _save_batch(batch: list[dict]) -> None:
@@ -340,9 +338,6 @@ def _run_generation(
         logger.info("Test set %d: saved batch of %d questions (total %d)", test_set_id, len(batch), saved_count)
 
     try:
-        # When using KG as source with no explicit sample, set node_sample_size
-        # to the total node count so the cached-KG path is always taken
-        # (avoids a hash-miss rebuild when chunk_sample_size=0).
         node_sample_size = req.chunk_sample_size
         if req.use_kg_as_source and node_sample_size == 0:
             node_sample_size = len(chunks)
@@ -435,7 +430,7 @@ async def preview_upload(project_id: int, file: UploadFile = File(...)):
     Returns the column names and first 5 rows so the user can pick
     which column is the question and which is the reference answer.
     """
-    conn = get_db()
+    conn = db.init.get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -499,7 +494,7 @@ async def upload_test_set(
       - contexts_column: (optional) column for reference contexts
       - name: (optional) test set name
     """
-    conn = get_db()
+    conn = db.init.get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -694,7 +689,7 @@ async def cancel_test_set_generation(project_id: int, test_set_id: int):
     """Cancel an in-progress test set generation."""
     from evaluation.metrics.testgen import cancel_generation
 
-    conn = get_db()
+    conn = db.init.get_db()
     row = conn.execute(
         "SELECT status FROM test_sets WHERE id = ? AND project_id = ?",
         (test_set_id, project_id),
@@ -707,14 +702,45 @@ async def cancel_test_set_generation(project_id: int, test_set_id: int):
             detail=f"Test set is not generating (current status: {row['status']})",
         )
 
+    # Try local cancel
     cancel_generation(project_id)
+
+    # Also try forwarding cancel to workers
+    worker_accepted = False
+    from config import KG_WORKER_URLS
+    if KG_WORKER_URLS:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            for worker_url in KG_WORKER_URLS:
+                try:
+                    resp = await client.post(f"{worker_url}/cancel-testgen/{project_id}")
+                    if resp.status_code == 200:
+                        worker_accepted = True
+                        break
+                except Exception:
+                    continue
+
+    # If no worker accepted the cancel and no local thread running,
+    # the generation is orphaned (worker crashed/restarted). Force-cancel.
+    with _gen_lock:
+        local_active = project_id in _active_generations
+    if not worker_accepted and not local_active:
+        with _gen_lock:
+            _active_generations.pop(project_id, None)
+        conn.execute(
+            "UPDATE test_sets SET status = 'cancelled', error_message = 'Cancelled (generation no longer active)' WHERE id = ? AND status = 'generating'",
+            (test_set_id,),
+        )
+        conn.commit()
+        return {"status": "cancelled", "test_set_id": test_set_id}
+
     return {"status": "cancelling", "test_set_id": test_set_id}
 
 
 @router.post("/projects/{project_id}/test-sets/{test_set_id}/resume")
 async def resume_test_set_generation(project_id: int, test_set_id: int):
     """Resume a failed test set generation. Keeps existing questions and generates the remainder."""
-    conn = get_db()
+    conn = db.init.get_db()
     row = conn.execute(
         "SELECT * FROM test_sets WHERE id = ? AND project_id = ?",
         (test_set_id, project_id),
@@ -814,6 +840,7 @@ async def generation_progress(project_id: int):
     progress = get_progress(project_id, kg_source="testset")
 
     # If no local progress, try workers
+    any_worker_reachable = False
     if progress is None:
         from config import KG_WORKER_URLS
         if KG_WORKER_URLS:
@@ -822,6 +849,7 @@ async def generation_progress(project_id: int):
                 for worker_url in KG_WORKER_URLS:
                     try:
                         resp = await client.get(f"{worker_url}/testgen-progress/{project_id}")
+                        any_worker_reachable = True
                         if resp.status_code == 200:
                             data = resp.json()
                             if data.get("active"):
@@ -832,7 +860,7 @@ async def generation_progress(project_id: int):
     # Check DB for completed/failed/cancelled status when no in-memory progress
     # (generation finished and cleared progress, or server restarted)
     if progress is None:
-        conn = get_db()
+        conn = db.init.get_db()
         row = conn.execute(
             "SELECT id, status, error_message FROM test_sets "
             "WHERE project_id = ? AND status IN ('generating', 'completed', 'failed', 'cancelled') "
@@ -842,21 +870,38 @@ async def generation_progress(project_id: int):
         if row is None:
             return {"active": False}
         if row["status"] == "generating":
-            # Generation thread may have died (e.g. server restart)
-            # Mark as failed if no active thread
+            # Generation thread may have died (e.g. server restart) or worker crashed.
+            # Mark as failed if no active local thread AND no worker is reachable.
             with _gen_lock:
-                if project_id not in _active_generations:
-                    conn.execute(
-                        "UPDATE test_sets SET status = 'failed', error_message = 'Generation interrupted (server restart)' WHERE id = ?",
-                        (row["id"],),
-                    )
-                    conn.commit()
-                    return {
-                        "active": False,
-                        "status": "failed",
-                        "test_set_id": row["id"],
-                        "error_message": "Generation interrupted (server restart)",
-                    }
+                locally_tracked = project_id in _active_generations
+            if not locally_tracked:
+                conn.execute(
+                    "UPDATE test_sets SET status = 'failed', error_message = 'Generation interrupted (server restart)' WHERE id = ?",
+                    (row["id"],),
+                )
+                conn.commit()
+                return {
+                    "active": False,
+                    "status": "failed",
+                    "test_set_id": row["id"],
+                    "error_message": "Generation interrupted (server restart)",
+                }
+            # _active_generations has this project, but that could be a stale
+            # delegation entry if workers are configured but all unreachable.
+            if KG_WORKER_URLS and not any_worker_reachable:
+                with _gen_lock:
+                    _active_generations.pop(project_id, None)
+                conn.execute(
+                    "UPDATE test_sets SET status = 'failed', error_message = 'Generation failed (worker crashed or unreachable)' WHERE id = ?",
+                    (row["id"],),
+                )
+                conn.commit()
+                return {
+                    "active": False,
+                    "status": "failed",
+                    "test_set_id": row["id"],
+                    "error_message": "Generation failed (worker crashed or unreachable)",
+                }
             return {"active": True, "status": "generating", "test_set_id": row["id"]}
         if row["status"] == "completed":
             return {"active": False, "status": "completed", "test_set_id": row["id"]}
@@ -876,7 +921,7 @@ async def generation_progress(project_id: int):
 
 @router.get("/projects/{project_id}/test-sets")
 async def list_test_sets(project_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -914,7 +959,7 @@ async def list_test_sets(project_id: int):
 async def list_test_questions(
     project_id: int, test_set_id: int, status: str | None = None
 ):
-    conn = get_db()
+    conn = db.init.get_db()
 
     # Validate status param
     if status is not None and status not in VALID_QUESTION_STATUSES:
@@ -946,7 +991,7 @@ async def list_test_questions(
     "/projects/{project_id}/test-sets/{test_set_id}", status_code=204
 )
 async def delete_test_set(project_id: int, test_set_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
 
     # Validate test set belongs to project
     ts = conn.execute(
@@ -984,7 +1029,7 @@ async def annotate_question(
     question_id: int,
     req: QuestionAnnotation,
 ):
-    conn = get_db()
+    conn = db.init.get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -1042,7 +1087,7 @@ async def annotate_question(
 async def bulk_annotate_questions(
     project_id: int, test_set_id: int, req: BulkAnnotation
 ):
-    conn = get_db()
+    conn = db.init.get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -1060,7 +1105,6 @@ async def bulk_annotate_questions(
         raise HTTPException(status_code=404, detail="Test set not found")
 
     target_status = BULK_ACTION_TO_STATUS[req.action]
-    updated_count = 0
 
     if req.action in ("approve", "reject"):
         # Require non-empty question_ids
@@ -1115,7 +1159,7 @@ async def bulk_annotate_questions(
 
 @router.get("/projects/{project_id}/test-sets/{test_set_id}/summary")
 async def test_set_summary(project_id: int, test_set_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
 
     # Validate project exists
     project = conn.execute(
@@ -1248,7 +1292,7 @@ async def get_knowledge_graph_info(project_id: int, kg_source: str = "chunks"):
     """
     from evaluation.metrics.testgen import get_kg_info, _chunks_hash
 
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1290,7 +1334,7 @@ async def delete_knowledge_graph(project_id: int, kg_source: str = "chunks"):
     """Delete the cached knowledge graph for a project."""
     from evaluation.metrics.testgen import delete_kg_from_db
 
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1336,6 +1380,8 @@ def _run_kg_in_thread(
     Unlike the subprocess approach, this reuses the already-imported ragas
     library so the container's memory is not doubled by a fresh Python process.
     """
+    import asyncio
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -1381,6 +1427,7 @@ def _run_kg_subprocess(
     forwarded to the parent process's in-memory progress store so the frontend
     polling endpoint can reflect real step-by-step status.
     """
+    import json
     import subprocess
     import sys
     from pathlib import Path
@@ -1457,10 +1504,10 @@ def _run_kg_subprocess(
 
 
 class BuildKGRequest(BaseModel):
-    chunk_config_id: int | None = None
-    overlap_max_nodes: int | None = 500
-    kg_source: Literal["chunks", "documents"] = "chunks"
-    fast_mode: bool = False
+    chunk_config_id: int | None = None  # required for chunks source, ignored for documents
+    overlap_max_nodes: int | None = 500  # cap for OverlapScoreBuilder sampling
+    kg_source: str = "chunks"           # "chunks" or "documents"
+    fast_mode: bool = False             # use combined single-call extractor (2 LLM rounds)
 
 
 def _make_doc_kg_script(overlap_max_nodes: int | None) -> str:
@@ -1489,11 +1536,44 @@ def _make_chunk_kg_script(chunk_config_id: int, overlap_max_nodes: int | None, f
 @router.post("/projects/{project_id}/build-knowledge-graph")
 async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
     """Start building a knowledge graph in the background."""
-    logger.info("KG generate clicked: project=%d fast=%d", int(project_id), int(req.fast_mode))
+    logger.info("KG generate clicked: project=%d source=%s fast=%s", project_id, req.kg_source, req.fast_mode)
+
+    # Guard: if already delegated to a worker, verify it's still active before rejecting
+    key = (project_id, req.kg_source)
+    if key in _project_worker:
+        import httpx
+        known_url = _project_worker[key]
+        try:
+            async with httpx.AsyncClient(timeout=5) as _check:
+                _resp = await _check.get(f"{known_url}/progress/{project_id}", params={"kg_source": req.kg_source})
+                if _resp.status_code == 200 and _resp.json().get("active"):
+                    raise HTTPException(status_code=409, detail="KG build already in progress on a worker")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        _project_worker.pop(key, None)
 
     # Offload to worker service(s) if configured
     if KG_WORKER_URLS:
+        # Pre-check: ask all workers if this build is already active before dispatching.
+        # Prevents duplicate dispatch after main app restart (when _project_worker is lost).
         import httpx
+        async with httpx.AsyncClient(timeout=5) as check_client:
+            for worker_url in KG_WORKER_URLS:
+                try:
+                    resp = await check_client.get(
+                        f"{worker_url}/progress/{project_id}",
+                        params={"kg_source": req.kg_source},
+                    )
+                    if resp.status_code == 200 and resp.json().get("active"):
+                        _project_worker[key] = worker_url
+                        raise HTTPException(status_code=409, detail="KG build already in progress on a worker")
+                except HTTPException:
+                    raise
+                except Exception:
+                    continue
+
         payload = {
             "project_id": project_id,
             "chunk_config_id": req.chunk_config_id,
@@ -1520,7 +1600,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                     logger.warning("Worker %s unreachable: %s", worker_url, e)
         raise HTTPException(status_code=503, detail="All KG workers busy or unreachable — try again shortly")
 
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1581,7 +1661,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 
 
 @router.get("/projects/{project_id}/knowledge-graph/progress")
-async def kg_build_progress(project_id: int, kg_source: Literal["chunks", "documents"] = "chunks"):
+async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
     """Poll knowledge graph build progress."""
     from evaluation.metrics.testgen import get_progress, get_kg_info
 
@@ -1592,11 +1672,11 @@ async def kg_build_progress(project_id: int, kg_source: Literal["chunks", "docum
         known = _project_worker.get(key)
         candidates = ([known] + [u for u in KG_WORKER_URLS if u != known]) if known else KG_WORKER_URLS
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=20) as client:
                 for worker_url in candidates:
                     try:
                         resp = await client.get(
-                            f"{worker_url}/progress/{int(project_id)}",
+                            f"{worker_url}/progress/{project_id}",
                             params={"kg_source": kg_source},
                         )
                         if resp.status_code == 200:
@@ -1664,7 +1744,7 @@ class RebuildLinksRequest(BaseModel):
 @router.post("/projects/{project_id}/knowledge-graph/rebuild-links")
 async def rebuild_kg_links_endpoint(project_id: int, req: RebuildLinksRequest):
     """Rebuild only the overlap/link step of a KG with new parameters."""
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1714,7 +1794,7 @@ async def update_knowledge_graph_endpoint(project_id: int, req: UpdateKGRequest)
     necessary changes (add new nodes, remove deleted nodes, rebuild links).
     Much faster than a full rebuild when only a few documents changed.
     """
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1779,7 +1859,7 @@ async def get_knowledge_graph_data(project_id: int):
     import tempfile
     from pathlib import Path as _Path
 
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1821,7 +1901,7 @@ async def stream_knowledge_graph_data(project_id: int):
     import tempfile
     from pathlib import Path as _Path
 
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -1891,7 +1971,7 @@ async def list_all_knowledge_graphs():
     """List all saved knowledge graphs across projects."""
     from evaluation.metrics.testgen import _chunks_hash
 
-    conn = get_db()
+    conn = db.init.get_db()
     rows = conn.execute(
         "SELECT kg.id, kg.project_id, p.name AS project_name, "
         "kg.num_nodes, kg.num_chunks, kg.is_complete, kg.chunks_hash, "

@@ -1,7 +1,7 @@
 | [README](../README.md) | [Features Guide](FEATURES.md) |
 |---|---|
 
-# Tribunal — Feature Guide
+# Feature Guide
 
 What each feature does and the idea behind it.
 
@@ -77,7 +77,7 @@ Search types: `dense`, `sparse`, `hybrid`.
 
 ## Test Set Generation
 
-**What it does:** Generate test questions from documents using LLM-based synthesis. Two generation paths:
+**What it does:** Generate test questions from documents using LLM-based synthesis. Supports multiple personas (different user types), custom personas, query distribution control, and adjustable size (1-400 questions). Questions go through an approval workflow: pending, approved, rejected, edited.
 
 - **Direct generation** (`fast_mode=true`) — produces questions immediately from chunks or documents without pre-building a knowledge graph. Fast, lower diversity.
 - **KG-based generation** (`fast_mode=false`) — first builds a knowledge graph (entity/relationship extraction) from chunks or raw documents, then generates questions grounded in the graph. Slower but higher diversity and factual coverage.

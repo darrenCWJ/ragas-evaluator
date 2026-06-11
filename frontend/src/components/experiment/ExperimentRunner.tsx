@@ -28,6 +28,15 @@ interface Props {
   onComplete: () => void;
 }
 
+const DEFAULT_METRICS = [
+  "faithfulness",
+  "answer_relevancy",
+  "context_precision",
+  "context_recall",
+  "factual_correctness",
+  "semantic_similarity",
+];
+
 const LLM_METRICS = [
   "faithfulness",
   "answer_relevancy",
@@ -250,6 +259,7 @@ export default function ExperimentRunner({
   const isCsvExperiment = connectorType === "csv";
   const [concurrency, setConcurrency] = useState(isCsvExperiment ? 10 : isBotExperiment ? 2 : 5);
   const [rubrics, setRubrics] = useState<Record<string, string>>({ ...DEFAULT_RUBRICS });
+  const [judgeEvaluators, setJudgeEvaluators] = useState(5);
 
   // Multi-model judge state — seed with fallback list so dropdowns are usable immediately
   const FALLBACK_MODELS: JudgeModel[] = [

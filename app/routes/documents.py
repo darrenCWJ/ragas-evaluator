@@ -5,16 +5,15 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 
-from app.models import DocumentContextUpdate
-from config import ALLOWED_FILE_TYPES, MAX_UPLOAD_SIZE
-from db.init import get_db
+from app.models import ALLOWED_FILE_TYPES, MAX_UPLOAD_SIZE, DocumentContextUpdate
+import db.init
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
 
 @router.post("/projects/{project_id}/documents", status_code=201)
 async def upload_project_document(project_id: int, file: UploadFile = File(...)):
-    conn = get_db()
+    conn = db.init.get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -69,7 +68,7 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
 
 @router.get("/projects/{project_id}/documents")
 async def list_project_documents(project_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
 
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
@@ -85,7 +84,7 @@ async def list_project_documents(project_id: int):
 
 @router.get("/projects/{project_id}/documents/{document_id}")
 async def get_project_document(project_id: int, document_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
 
     row = conn.execute(
         "SELECT id, project_id, filename, file_type, content, context_label, created_at FROM documents WHERE id = ? AND project_id = ?",
@@ -98,7 +97,7 @@ async def get_project_document(project_id: int, document_id: int):
 
 @router.patch("/projects/{project_id}/documents/{document_id}/context-label")
 async def update_document_context_label(project_id: int, document_id: int, req: DocumentContextUpdate):
-    conn = get_db()
+    conn = db.init.get_db()
     existing = conn.execute(
         "SELECT id FROM documents WHERE id = ? AND project_id = ?",
         (document_id, project_id),
@@ -115,7 +114,7 @@ async def update_document_context_label(project_id: int, document_id: int, req: 
 
 @router.delete("/projects/{project_id}/documents")
 async def delete_all_project_documents(project_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
     project = conn.execute(
         "SELECT id FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
@@ -128,7 +127,7 @@ async def delete_all_project_documents(project_id: int):
 
 @router.delete("/projects/{project_id}/documents/{document_id}")
 async def delete_project_document(project_id: int, document_id: int):
-    conn = get_db()
+    conn = db.init.get_db()
     existing = conn.execute(
         "SELECT id FROM documents WHERE id = ? AND project_id = ?",
         (document_id, project_id),

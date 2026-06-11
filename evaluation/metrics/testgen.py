@@ -59,6 +59,7 @@ from config import (
     TESTGEN_TOPIC_TEMPERATURE,
 )
 from db.init import get_db, NOW_SQL
+from evaluation.metrics.multi_llm_judge import _extract_json
 
 
 logger = logging.getLogger(__name__)
@@ -2630,6 +2631,8 @@ def _generate_project_testset_inner(
         cat_questions = _generate_category_questions_via_llm(effective_chunks, cat, cat_count)
         for q in cat_questions:
             q["category"] = cat
+        if on_batch and cat_questions:
+            on_batch(cat_questions)
         all_questions.extend(cat_questions)
         if project_id is not None:
             increment_questions(project_id, len(cat_questions))
@@ -2681,6 +2684,8 @@ def _generate_project_testset_inner(
             cat_questions = generator(kg_for_graph, cat_count, llm_client)
             for q in cat_questions:
                 q["category"] = cat
+            if on_batch and cat_questions:
+                on_batch(cat_questions)
             all_questions.extend(cat_questions)
             if project_id is not None:
                 increment_questions(project_id, len(cat_questions))
