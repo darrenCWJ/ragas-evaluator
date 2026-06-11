@@ -48,6 +48,13 @@ def _get_st_model(model_name: str):
     return _st_models[model_name]
 
 
+def release_models() -> int:
+    """Drop all cached sentence-transformers models. Returns the number released."""
+    count = len(_st_models)
+    _st_models.clear()
+    return count
+
+
 async def _embed_openai(texts: list[str], model_name: str, params: dict) -> list[list[float]]:
     """Embed texts using OpenAI API. Batches in groups of BATCH_SIZE."""
     if not texts:

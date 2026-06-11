@@ -22,6 +22,7 @@ from app.models import (
     TestSetCreate,
 )
 from config import (
+    KG_SUBPROCESS_MAX_RSS_MB,
     KG_SUBPROCESS_TIMEOUT,
     KG_THREAD_MODE,
     KG_WORKER_URLS,
@@ -1421,6 +1422,13 @@ def _run_kg_in_thread(
             _active_kg_builds.pop((project_id, kg_source), None)
 
 
+def _limit_subprocess_memory() -> None:
+    """Apply RLIMIT_AS to the KG subprocess (runs in the child after fork; Linux only)."""
+    import resource as _resource
+    limit = KG_SUBPROCESS_MAX_RSS_MB * 1024 * 1024
+    _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+
+
 def _run_kg_subprocess(
     project_id: int,
     script: str,
@@ -1437,6 +1445,7 @@ def _run_kg_subprocess(
     polling endpoint can reflect real step-by-step status.
     """
     import json
+    import os
     import subprocess
     import sys
     from pathlib import Path
@@ -1451,13 +1460,14 @@ def _run_kg_subprocess(
             "kg_building": True,
         }, kg_source=kg_source)
 
-        env = {**__import__("os").environ, "KG_PROGRESS_PIPE": "1"}
+        env = {**os.environ, "KG_PROGRESS_PIPE": "1"}
         proc = subprocess.Popen(
             [sys.executable, "-c", script, project_dir, *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            preexec_fn=_limit_subprocess_memory if (KG_SUBPROCESS_MAX_RSS_MB > 0 and os.name != "nt") else None,
         )
 
         # Kill the subprocess if it runs too long
@@ -1889,8 +1899,10 @@ async def get_knowledge_graph_data(project_id: int):
     # Parse KG JSON via Ragas loader
     from ragas.testset.graph import KnowledgeGraph
 
+    from evaluation.metrics.testgen import decode_kg_json
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        f.write(row["kg_json"])
+        f.write(decode_kg_json(row["kg_json"]))
         tmp_path = f.name
     try:
         kg = KnowledgeGraph.load(tmp_path)
@@ -1928,8 +1940,10 @@ async def stream_knowledge_graph_data(project_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="No knowledge graph found")
 
+    from evaluation.metrics.testgen import decode_kg_json
+
     is_complete = bool(row["is_complete"])
-    kg_json_text = row["kg_json"]
+    kg_json_text = decode_kg_json(row["kg_json"])
 
     async def _stream():
         from ragas.testset.graph import KnowledgeGraph

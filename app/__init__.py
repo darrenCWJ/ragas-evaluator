@@ -27,6 +27,7 @@ from app.routes import (
     projects,
     rag,
     reports,
+    system,
     testsets,
 )
 
@@ -49,16 +50,12 @@ async def lifespan(application: FastAPI):
 
     # Background task: monitor worker-delegated experiments for liveness
     async def _monitor_worker_experiments():
-        from app.routes.experiments import (
-            _experiment_progress,
-            _experiment_worker,
-            _experiment_worker_lock,
-        )
+        from app.services.progress import experiment_runs
+
         consecutive_failures: dict[int, int] = {}
         while True:
             await asyncio.sleep(30)
-            with _experiment_worker_lock:
-                entries = dict(_experiment_worker)
+            entries = experiment_runs.delegated()
             if not entries:
                 continue
             import httpx
@@ -70,9 +67,7 @@ async def lifespan(application: FastAPI):
                     if resp.status_code == 200:
                         data = resp.json()
                         if not data.get("active", True):
-                            with _experiment_worker_lock:
-                                _experiment_worker.pop(eid, None)
-                            _experiment_progress.pop(eid, None)
+                            experiment_runs.release(eid)
                 except Exception:
                     consecutive_failures[eid] = consecutive_failures.get(eid, 0) + 1
                     if consecutive_failures[eid] >= 3:
@@ -92,9 +87,7 @@ async def lifespan(application: FastAPI):
                                 conn.commit()
                         except Exception as _db_err:
                             logger.warning("Failed to mark experiment %d as failed: %s", eid, _db_err)
-                        with _experiment_worker_lock:
-                            _experiment_worker.pop(eid, None)
-                        _experiment_progress.pop(eid, None)
+                        experiment_runs.release(eid)
                         consecutive_failures.pop(eid, None)
 
     monitor_task = asyncio.create_task(_monitor_worker_experiments())
@@ -170,6 +163,7 @@ def create_app() -> FastAPI:
     application.include_router(custom_metrics.router)
     application.include_router(personas.router)
     application.include_router(multi_llm_judge.router)
+    application.include_router(system.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")

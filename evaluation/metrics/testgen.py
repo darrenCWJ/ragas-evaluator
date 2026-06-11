@@ -11,6 +11,7 @@ Supports:
 - Parallel batch generation for large test sets
 """
 
+import base64
 import gc
 import hashlib
 import json as _json
@@ -22,6 +23,7 @@ import signal
 import sys
 import tempfile
 import threading
+import zlib
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
@@ -204,6 +206,29 @@ def is_cancelled(project_id: int | None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# KG JSON compression — stored KG JSONs reach tens of MB per project, so they
+# are zlib-compressed (base64-wrapped) transparently at the DB boundary.
+# ---------------------------------------------------------------------------
+
+_KG_COMPRESS_PREFIX = "zlib64:"
+
+
+def _encode_kg_json(text: str) -> str:
+    """Compress KG JSON for storage (base64-wrapped zlib, ~5-10x smaller)."""
+    if os.environ.get("KG_COMPRESSION", "true").lower() in ("0", "false", "no"):
+        return text
+    compressed = base64.b64encode(zlib.compress(text.encode("utf-8"), level=6)).decode("ascii")
+    return _KG_COMPRESS_PREFIX + compressed
+
+
+def decode_kg_json(text: str | None) -> str | None:
+    """Decode stored KG JSON; passes legacy uncompressed rows through."""
+    if text is None or not text.startswith(_KG_COMPRESS_PREFIX):
+        return text
+    return zlib.decompress(base64.b64decode(text[len(_KG_COMPRESS_PREFIX):])).decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
 # KG helpers — load full KG without hash check, and sample nodes from JSON
 # ---------------------------------------------------------------------------
 
@@ -221,7 +246,7 @@ def load_full_kg_json(project_id: int, kg_source: str = "chunks") -> str | None:
         "ORDER BY created_at DESC LIMIT 1",
         (project_id, kg_source),
     ).fetchone()
-    return row["kg_json"] if row is not None else None
+    return decode_kg_json(row["kg_json"]) if row is not None else None
 
 
 def _load_kg_from_json_str(kg_json: str) -> KnowledgeGraph:
@@ -584,7 +609,7 @@ def load_cached_kg(
         project_id,
     )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
-        f.write(row["kg_json"])
+        f.write(decode_kg_json(row["kg_json"]))
         tmp_path = f.name
     try:
         kg = _load_kg_safe(tmp_path)
@@ -617,6 +642,8 @@ def save_kg_to_db(
         kg_json = Path(tmp_path).read_text(encoding="utf-8")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+    kg_json = _encode_kg_json(kg_json)
 
     import db.init as _db
     conn = _db.get_thread_db()
@@ -1229,7 +1256,7 @@ def rebuild_kg_links(
     try:
         # Load KG from DB
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(row["kg_json"])
+            f.write(decode_kg_json(row["kg_json"]))
             tmp_path = f.name
         try:
             kg = _load_kg_safe(tmp_path)
@@ -1398,7 +1425,7 @@ def incremental_update_kg(
     # Reconstruct old chunks from the stored hash by loading from the DB
     # We need the actual old chunks to diff. The KG stores chunk content in node properties.
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
-        f.write(row["kg_json"])
+        f.write(decode_kg_json(row["kg_json"]))
         tmp_path = f.name
     try:
         kg = _load_kg_safe(tmp_path)

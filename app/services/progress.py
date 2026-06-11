@@ -103,6 +103,11 @@ class ProgressStore:
         with self._lock:
             return self._workers.get(experiment_id)
 
+    def delegated(self) -> dict[int, str]:
+        """Snapshot of all worker-delegated experiments (id → worker URL)."""
+        with self._lock:
+            return dict(self._workers)
+
     def release(self, experiment_id: int) -> None:
         """Drop worker mapping and progress together (one lock acquisition)."""
         with self._lock:

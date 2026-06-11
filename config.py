@@ -66,6 +66,7 @@ PERSONA_SUBPROCESS_TIMEOUT = int(os.environ.get("PERSONA_SUBPROCESS_TIMEOUT", "3
 # Default 24 h. Set KG_SUBPROCESS_TIMEOUT=0 in .env to disable the timeout.
 _kg_timeout_raw = os.environ.get("KG_SUBPROCESS_TIMEOUT", "86400")
 KG_SUBPROCESS_TIMEOUT: "int | None" = None if _kg_timeout_raw == "0" else int(_kg_timeout_raw)
+KG_SUBPROCESS_MAX_RSS_MB = int(os.environ.get("KG_SUBPROCESS_MAX_RSS_MB", "0"))  # 0 = no limit; Linux only
 SOURCE_VERIFY_FETCH_TIMEOUT = int(os.environ.get("SOURCE_VERIFY_FETCH_TIMEOUT", "15"))
 
 # ---------------------------------------------------------------------------

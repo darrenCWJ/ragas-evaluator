@@ -23,6 +23,13 @@ def _get_cross_encoder(model_name: str):
     return _ce_models[model_name]
 
 
+def release_models() -> int:
+    """Drop all cached cross-encoder models. Returns the number released."""
+    count = len(_ce_models)
+    _ce_models.clear()
+    return count
+
+
 async def rerank(
     query: str,
     contexts: list[dict],
