@@ -138,7 +138,14 @@ async def chat_completion(
         return await _gemini_completion(model, messages, params)
 
     if model.startswith("glean"):
-        raise HTTPException(status_code=501, detail="Glean provider not yet implemented")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Glean is not a chat-completion provider and cannot be used as an "
+                "evaluation/judge model. Configure Glean as a bot connector instead "
+                "(Setup → Bot Connectors → Glean) to evaluate its answers."
+            ),
+        )
 
     raise HTTPException(status_code=400, detail=f"Unknown model provider for: {model}")
 

@@ -85,6 +85,12 @@ TESTGEN_PERSONA_TEMPERATURE: float = 0.7
 TESTGEN_QUESTION_TEMPERATURE: float = 0.8
 
 # ---------------------------------------------------------------------------
+# KG build concurrency (worker service)
+# ---------------------------------------------------------------------------
+MAX_CONCURRENT_KG_BUILDS = int(os.environ.get("MAX_CONCURRENT_KG_BUILDS", "1"))
+MAX_CONCURRENT_PERSONA_BUILDS = int(os.environ.get("MAX_CONCURRENT_PERSONA_BUILDS", "2"))
+
+# ---------------------------------------------------------------------------
 # Batch sizes
 # ---------------------------------------------------------------------------
 EMBEDDING_BATCH_SIZE = int(os.environ.get("EMBEDDING_BATCH_SIZE", "100"))

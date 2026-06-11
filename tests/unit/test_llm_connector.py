@@ -63,10 +63,13 @@ class TestChatCompletion:
             await chat_completion("unknown-model", [{"role": "user", "content": "Hi"}])
         assert exc_info.value.status_code == 400
 
-    async def test_glean_raises_501(self):
+    async def test_glean_rejected_with_connector_hint(self):
+        # Glean is not a chat-completion provider; the error must point users
+        # to the bot-connector path instead of a bare 501.
         with pytest.raises(HTTPException) as exc_info:
             await chat_completion("glean-agent", [{"role": "user", "content": "Hi"}])
-        assert exc_info.value.status_code == 501
+        assert exc_info.value.status_code == 400
+        assert "bot connector" in exc_info.value.detail.lower()
 
     async def test_rate_limit_error(self):
         mock_client = MagicMock()

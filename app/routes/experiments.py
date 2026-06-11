@@ -158,6 +158,42 @@ def _compute_aggregates(conn, exp_id: int) -> dict:
     return aggregate
 
 
+def _compute_token_usage(conn, exp_id: int) -> dict | None:
+    """Sum prompt/completion tokens recorded in result metadata.
+
+    Only generation-path tokens are recorded today (RAG queries through
+    pipeline/llm.py); judge/metric scoring goes through ragas's own clients.
+    Returns None when no usage was recorded at all.
+    """
+    rows = conn.execute(
+        "SELECT metadata_json FROM experiment_results WHERE experiment_id = ?",
+        (exp_id,),
+    ).fetchall()
+    prompt = completion = 0
+    seen = False
+    for r in rows:
+        if not r["metadata_json"]:
+            continue
+        try:
+            meta = json.loads(r["metadata_json"])
+        except (TypeError, ValueError):
+            continue
+        usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else meta
+        p = usage.get("prompt_tokens")
+        c = usage.get("completion_tokens")
+        if isinstance(p, int | float) or isinstance(c, int | float):
+            seen = True
+            prompt += int(p or 0)
+            completion += int(c or 0)
+    if not seen:
+        return None
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+
+
 def _aggregate_rows(result_rows) -> tuple[dict | None, float | None, int]:
     """Aggregate metric scores from experiment_results rows.
 
@@ -711,6 +747,8 @@ async def get_experiment(project_id: int, experiment_id: int):
         exp["aggregate_metrics"] = _compute_aggregates(conn, experiment_id)
     else:
         exp["aggregate_metrics"] = None
+
+    exp["token_usage"] = _compute_token_usage(conn, experiment_id)
 
     return exp
 

@@ -12,7 +12,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(messag
 
 from fastapi import FastAPI  # noqa: E402 — must import after load_dotenv() and logging setup
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from routes import router  # noqa: E402
+
+from worker.routes import router  # noqa: E402
 
 
 @asynccontextmanager

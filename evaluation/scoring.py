@@ -321,6 +321,7 @@ async def _score_custom(
     contexts: list[str],
     on_start=None,
     on_done=None,
+    metadata: dict | None = None,
 ) -> tuple[str, float | None]:
     """Score a single custom metric, returning (name, value)."""
     try:
@@ -341,8 +342,19 @@ async def _score_custom(
                 scorer, question, generated_answer, contexts,
             )
         elif cfg.metric_type == "instance_rubrics":
-            logger.info("Skipping instance_rubrics metric '%s' (per-question rubrics not yet supported in runner)", name)
-            return name, None
+            # Per-question rubrics live in the test question's metadata_json
+            # under "rubrics" (set via test set upload or question editing).
+            q_rubrics = (metadata or {}).get("rubrics")
+            if not isinstance(q_rubrics, dict) or not q_rubrics:
+                logger.info(
+                    "instance_rubrics metric '%s' skipped: question has no rubrics in metadata",
+                    name,
+                )
+                return name, None
+            val = await custom_metric.score_instance_rubrics(
+                scorer, question, generated_answer, reference_answer,
+                q_rubrics, contexts,
+            )
         else:
             return name, None
         if on_done:
@@ -393,6 +405,7 @@ async def evaluate_experiment_row(
             _score_custom(
                 name, cfg, scorer, llm, question, generated_answer, reference_answer, contexts,
                 on_start=on_metric_start, on_done=on_metric_done,
+                metadata=metadata,
             )
         )
 
