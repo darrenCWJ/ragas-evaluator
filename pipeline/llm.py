@@ -105,6 +105,25 @@ def _is_openai_model(model: str) -> bool:
     return any(model.startswith(p) for p in OPENAI_PREFIXES)
 
 
+def _registry_provider(model: str) -> str | None:
+    """Provider registered for a custom model in the editable model registry.
+
+    Lets ids that match no built-in prefix (external/self-hosted models added
+    via Manage Models) still route to the right client. Best-effort — any DB
+    problem just means "unknown".
+    """
+    try:
+        import db.init
+
+        conn = db.init.get_db()
+        row = conn.execute(
+            "SELECT provider FROM judge_model_overrides WHERE model_id = ?", (model,)
+        ).fetchone()
+        return row["provider"] if row else None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Public dispatch
 # ---------------------------------------------------------------------------
@@ -157,7 +176,25 @@ async def chat_completion(
             ),
         )
 
-    raise HTTPException(status_code=400, detail=f"Unknown model provider for: {model}")
+    # Custom models from the editable registry: route by their saved provider.
+    # "gateway"/"openai" → OpenAI client (honors OPENAI_BASE_URL for external
+    # OpenAI-compatible endpoints like LiteLLM/OpenRouter/vLLM/Ollama).
+    registered = _registry_provider(model)
+    if registered in ("openai", "gateway"):
+        return await _openai_completion(model, messages, params, tools)
+    if registered == "anthropic":
+        return await _anthropic_completion(model, messages, params, tools)
+    if registered == "gemini":
+        return await _gemini_completion(model, messages, params, tools)
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Unknown model provider for: {model}. Add it via Manage Models "
+            "with the right provider, or set OPENAI_BASE_URL for an "
+            "OpenAI-compatible gateway."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

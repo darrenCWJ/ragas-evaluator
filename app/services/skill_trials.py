@@ -123,12 +123,16 @@ async def _query_model_agentic(
     """
     from pipeline.agent_loop import run_agent
 
+    from app.services.scripted_replies import ScriptedReplies
+
     question = q_row["question"]
     try:
         q_meta = json.loads(q_row["metadata_json"]) if q_row.get("metadata_json") else {}
     except (TypeError, ValueError):
         q_meta = {}
-    scripted: list[str] = [str(s) for s in (q_meta.get("user_inputs") or []) if str(s).strip()]
+    scripted = ScriptedReplies(
+        [str(s) for s in (q_meta.get("user_inputs") or []) if str(s).strip()]
+    )
     exchanges = {"n": 0}
 
     tools: list[dict] = [{
@@ -163,11 +167,13 @@ async def _query_model_agentic(
             return f"File '{path}' not found. Available: {', '.join(sorted(skill_files)) or '(none)'}"
         if name == "ask_user":
             exchanges["n"] += 1
-            if scripted:
-                return scripted.pop(0)
+            asked = str(args.get("question", ""))
+            reply = scripted.take(asked)
+            if reply is not None:
+                return reply
             if exchanges["n"] > _MAX_USER_EXCHANGES:
                 return "No further input — proceed with your best judgment."
-            return await _simulate_user_reply(question, str(args.get("question", "")))
+            return await _simulate_user_reply(question, asked)
         return f"Error: unknown tool '{name}'"
 
     messages: list[dict] = []

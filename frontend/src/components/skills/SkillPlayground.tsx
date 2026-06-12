@@ -27,7 +27,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
   const [runs, setRuns] = useState<Record<string, PlaygroundRun>>({});
   const [error, setError] = useState<string | null>(null);
 
-  const usableModels = judgeModels.filter((m) => m.enabled !== false && m.available);
+  const visibleModels = judgeModels.filter((m) => m.enabled !== false);
   const selectedSkill = skills.find((s) => s.id === skillId);
   const anyRunning = Object.values(runs).some((r) => r.status === 'running');
   const canRun =
@@ -54,7 +54,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
-      .slice(0, 5);
+      .slice(0, 20);
 
     const initial: Record<string, PlaygroundRun> = {};
     for (const model of selectedModels) {
@@ -134,29 +134,39 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
           label="Models"
           hint={`Up to ${MAX_PARALLEL_MODELS} run in parallel, one transcript panel each`}
         >
-          {usableModels.length === 0 ? (
+          {visibleModels.length === 0 ? (
             <p className="text-xs text-text-muted">
               No models available — configure API keys or manage the model registry above.
             </p>
           ) : (
             <div className="grid max-h-32 gap-1 overflow-y-auto sm:grid-cols-2">
-              {usableModels.map((m) => (
+              {visibleModels.map((m) => (
                 <label
                   key={m.id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition ${
-                    selectedModels.includes(m.id)
-                      ? 'border-accent bg-accent/5 text-text-primary'
-                      : 'border-border text-text-secondary hover:border-border-focus'
+                  title={
+                    m.available
+                      ? m.id
+                      : `Set the ${m.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : m.provider === 'gemini' ? 'GOOGLE_API_KEY' : 'OPENAI_API_KEY'} env var to enable this model`
+                  }
+                  className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                    !m.available
+                      ? 'cursor-not-allowed border-border opacity-40'
+                      : selectedModels.includes(m.id)
+                        ? 'cursor-pointer border-accent bg-accent/5 text-text-primary'
+                        : 'cursor-pointer border-border text-text-secondary hover:border-border-focus'
                   }`}
                 >
                   <input
                     type="checkbox"
                     className="accent-accent"
+                    disabled={!m.available}
                     checked={selectedModels.includes(m.id)}
                     onChange={() => toggleModel(m.id)}
                   />
                   <span className="min-w-0 truncate">{m.name}</span>
-                  <span className="ml-auto shrink-0 text-2xs text-text-muted">{m.provider}</span>
+                  <span className="ml-auto shrink-0 text-2xs text-text-muted">
+                    {m.available ? m.provider : `${m.provider} — no API key`}
+                  </span>
                 </label>
               ))}
             </div>
@@ -178,13 +188,13 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
 
       <FormField
         label="Scripted user replies (optional)"
-        hint="One per line — every model consumes the same script in order before pausing for you (interactive) or handing off to the simulator"
+        hint="One per line. Use 'keyword => answer' to match by question content — models ask in different orders, so keyed lines pair the right answer with the right question. Plain lines are used in order as a fallback."
       >
         <TextArea
-          rows={2}
+          rows={3}
           value={userInputs}
           onChange={(e) => setUserInputs(e.target.value)}
-          placeholder={'e.g.\ncall it fraud-alert-daily\ndaily at 02:00'}
+          placeholder={'e.g.\nname => fraud-alert-daily\nschedule => daily at 02:00\nno other requirements'}
         />
       </FormField>
 

@@ -13,6 +13,7 @@ import logging
 import time
 import uuid
 
+from app.services.scripted_replies import ScriptedReplies
 from pipeline.llm import chat_completion
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ def start_session(
         "tools": _build_tools(skill_files),
         "skill_files": skill_files,
         "stages": stages,
-        "scripted": list(scripted),
+        "scripted": ScriptedReplies(scripted),
         "queue": [],           # unexecuted tool calls of the current round
         "awaiting": None,      # the ask_user call we paused on, if any
         "turns": [],
@@ -148,8 +149,8 @@ async def advance(session: dict) -> None:
             tc = session["queue"][0]
             if tc["name"] == "ask_user":
                 question = str(tc.get("arguments", {}).get("question", ""))
-                if session["scripted"]:
-                    reply = session["scripted"].pop(0)
+                reply = session["scripted"].take(question)
+                if reply is not None:
                     session["exchanges"] += 1
                     _record_step(session, "ask_user", {"question": question}, reply, from_user=True)
                     _append_tool_result(session, tc, reply)

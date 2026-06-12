@@ -898,9 +898,11 @@ class SkillDryRunRequest(BaseModel):
 
     prompt: str = Field(min_length=3, max_length=4000)
     model: str = Field(min_length=1, max_length=128)
-    # Scripted replies for the model's ask_user calls, consumed in order;
-    # the LLM user-simulator answers once these run out.
-    user_inputs: list[str] = Field(default_factory=list, max_length=5)
+    # Scripted replies for the model's ask_user calls. "keyword => answer"
+    # lines match by question content (models ask in different orders);
+    # plain lines are consumed positionally. When nothing fits: interactive
+    # runs pause for the human, one-shot runs fall back to the simulator.
+    user_inputs: list[str] = Field(default_factory=list, max_length=20)
     # Interactive: instead of the simulator, PAUSE when the model asks a
     # question and wait for the human's answer via the /continue endpoint.
     interactive: bool = False
