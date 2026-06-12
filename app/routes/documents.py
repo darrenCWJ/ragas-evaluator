@@ -30,16 +30,21 @@ _IMAGE_MIME = {
 
 def _save_original_image(project_id: int, filename: str, data: bytes) -> str:
     """Persist the original image under data/uploads; return the relative path."""
-    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).name)
-    upload_dir = Path(DATA_DIR) / "uploads" / str(project_id)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).name).strip(".")
+    if not safe_name:
+        safe_name = "image"
+    upload_dir = (Path(DATA_DIR) / "uploads" / str(int(project_id))).resolve()
     upload_dir.mkdir(parents=True, exist_ok=True)
-    target = upload_dir / safe_name
+    target = (upload_dir / safe_name).resolve()
+    # Containment check — the sanitized name must stay inside the upload dir
+    if upload_dir not in target.parents:
+        raise HTTPException(status_code=400, detail="Invalid image filename")
     counter = 1
     while target.exists():
         target = upload_dir / f"{target.stem}_{counter}{target.suffix}"
         counter += 1
     target.write_bytes(data)
-    return str(target.relative_to(DATA_DIR))
+    return str(target.relative_to(Path(DATA_DIR).resolve()))
 
 
 @router.post("/projects/{project_id}/documents", status_code=201)

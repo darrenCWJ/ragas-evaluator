@@ -213,7 +213,7 @@ async def upload_skill_zip(
     try:
         parsed = await parse_skill(skill_md)
     except Exception as exc:
-        logger.warning("Skill zip parse failed for project %d: %s", project_id, clean(exc))
+        logger.warning("Skill zip parse failed for project %d: %s", int(project_id), clean(exc))
         raise HTTPException(
             status_code=422,
             detail=f"Could not extract testable directives from SKILL.md: {exc}",

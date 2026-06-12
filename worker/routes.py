@@ -454,7 +454,7 @@ async def run_experiment(req: WorkerExperimentRequest):
             _active_experiments.pop(req.experiment_id, None)
         raise
     except Exception as exc:
-        logger.exception("Failed to start experiment %d on worker", req.experiment_id)
+        logger.exception("Failed to start experiment %d on worker", int(req.experiment_id))
         with _experiment_lock:
             _active_experiments.pop(req.experiment_id, None)
         raise HTTPException(status_code=500, detail=f"Failed to start experiment: {exc}") from exc
@@ -576,7 +576,7 @@ async def run_testgen(req: WorkerTestgenRequest):
             _active_testgens.pop(req.project_id, None)
         raise
     except Exception as exc:
-        logger.exception("Failed to start test generation %d on worker", req.test_set_id)
+        logger.exception("Failed to start test generation %d on worker", int(req.test_set_id))
         with _testgen_lock:
             _active_testgens.pop(req.project_id, None)
         raise HTTPException(status_code=500, detail=f"Failed to start test generation: {exc}") from exc

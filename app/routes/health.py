@@ -140,7 +140,7 @@ async def workers_status():
                         results.append({"url": url, "reachable": False, "error": f"HTTP {resp.status_code}"})
                 except Exception as e:
                     logger.debug("Worker %s unreachable: %s", url, e)
-                    results.append({"url": url, "reachable": False, "error": str(e)})
+                    results.append({"url": url, "reachable": False, "error": "unreachable"})
 
     return {"workers": results, "total_configured": len(KG_WORKER_URLS) + 1}
 
