@@ -39,7 +39,8 @@ def referenced_paths(content: str) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
     for match in list(_MD_LINK_RE.finditer(content)) + list(_BARE_REF_RE.finditer(content)):
-        raw = match.group(1).strip().lstrip("./")
+        # Trailing sentence punctuation is part of the prose, not the path.
+        raw = match.group(1).strip().lstrip("./").rstrip(".,;:)")
         if not raw or raw in seen:
             continue
         # Skip URLs, anchors, and absolute paths

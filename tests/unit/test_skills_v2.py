@@ -36,6 +36,14 @@ class TestReferencedPaths:
     def test_no_references(self):
         assert referenced_paths("# Plain skill\nAlways be brief.") == []
 
+    def test_trailing_sentence_punctuation_stripped(self):
+        content = "Read references/style.md. Then check references/rules.md, and scripts/run.py;"
+        paths = referenced_paths(content)
+        assert "references/style.md" in paths
+        assert "references/rules.md" in paths
+        assert "scripts/run.py" in paths
+        assert all(not p.endswith((".", ",", ";")) for p in paths)
+
 
 class TestDetectInteraction:
     def test_detects_user_interaction_phrases(self):
