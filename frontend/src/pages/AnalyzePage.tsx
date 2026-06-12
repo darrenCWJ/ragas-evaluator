@@ -8,6 +8,8 @@ import ExperimentResults from '../components/experiment/ExperimentResults';
 import ProjectReportPanel from '../components/experiment/ProjectReportPanel';
 import SourceVerificationPanel from '../components/experiment/SourceVerificationPanel';
 import HumanAnnotationPanel from '../components/experiment/HumanAnnotationPanel';
+import JudgeCalibrationPanel from '../components/experiment/JudgeCalibrationPanel';
+import HardCaseMiningPanel from '../components/experiment/HardCaseMiningPanel';
 
 export default function AnalyzePage() {
   const { project } = useProject();
@@ -107,6 +109,11 @@ export default function AnalyzePage() {
             <ProjectReportPanel projectId={project.id} />
           </section>
 
+          {/* Judge calibration — project level */}
+          <section className="rounded-xl border border-border bg-card p-5">
+            <JudgeCalibrationPanel projectId={project.id} />
+          </section>
+
           {/* Selected experiment sections */}
           {selected && (
             <>
@@ -153,6 +160,15 @@ export default function AnalyzePage() {
               <section className="rounded-xl border border-border bg-card p-5">
                 <HumanAnnotationPanel
                   key={`ann-${selected.id}`}
+                  projectId={project.id}
+                  experimentId={selected.id}
+                />
+              </section>
+
+              {/* Hard-case mining */}
+              <section className="rounded-xl border border-border bg-card p-5">
+                <HardCaseMiningPanel
+                  key={`mine-${selected.id}`}
                   projectId={project.id}
                   experimentId={selected.id}
                 />

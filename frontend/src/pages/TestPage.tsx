@@ -4,6 +4,7 @@ import { fetchTestSets, fetchChunkConfigs } from '../lib/api';
 import type { TestSet, ChunkConfig } from '../lib/api';
 import TestSetGenerate from '../components/test/TestSetGenerate';
 import TestSetUpload from '../components/test/TestSetUpload';
+import LogImportPanel from '../components/test/LogImportPanel';
 import TestSetList from '../components/test/TestSetList';
 import QuestionList from '../components/test/QuestionList';
 import Card from '../components/ui/Card';
@@ -101,6 +102,11 @@ export default function TestPage() {
           {/* Upload custom Q&A */}
           <Card padding="lg" className="p-5">
             <TestSetUpload projectId={project.id} onTestSetCreated={loadTestSets} />
+          </Card>
+
+          {/* Import real user logs (reference-free) */}
+          <Card padding="lg" className="p-5">
+            <LogImportPanel projectId={project.id} onTestSetCreated={loadTestSets} />
           </Card>
 
           {/* Generation form */}

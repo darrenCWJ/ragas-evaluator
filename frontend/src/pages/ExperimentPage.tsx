@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useProject } from '../contexts/ProjectContext';
-import { fetchExperiments } from '../lib/api';
-import type { Experiment } from '../lib/api';
+import { fetchBotConfigs, fetchExperiments, fetchRagConfigs, fetchTestSets } from '../lib/api';
+import type { BotConfig, Experiment, RagConfig, TestSet } from '../lib/api';
 import ExperimentCreate from '../components/experiment/ExperimentCreate';
 import ExperimentList from '../components/experiment/ExperimentList';
 import ExperimentCompare from '../components/experiment/ExperimentCompare';
 import ExperimentHistory from '../components/experiment/ExperimentHistory';
+import SweepPanel from '../components/experiment/SweepPanel';
+import SchedulePanel from '../components/experiment/SchedulePanel';
 import Card from '../components/ui/Card';
 
 const MIN_COMPARE = 2;
@@ -21,6 +23,11 @@ export default function ExperimentPage() {
   // Compare multi-select (independent of single-select)
   const [compareSet, setCompareSet] = useState<Set<number>>(new Set());
   const [comparingIds, setComparingIds] = useState<number[]>([]);
+
+  // Supporting data for the sweep + schedule panels (best effort)
+  const [testSets, setTestSets] = useState<TestSet[]>([]);
+  const [ragConfigs, setRagConfigs] = useState<RagConfig[]>([]);
+  const [botConfigs, setBotConfigs] = useState<BotConfig[]>([]);
 
   const loadExperiments = useCallback(async () => {
     if (!project) return;
@@ -42,6 +49,20 @@ export default function ExperimentPage() {
     setLoading(true);
     loadExperiments().finally(() => setLoading(false));
   }, [project, loadExperiments]);
+
+  useEffect(() => {
+    if (!project) return;
+    // Sweep/schedule form options — failures leave the panels usable but empty.
+    fetchTestSets(project.id)
+      .then(setTestSets)
+      .catch(() => setTestSets([]));
+    fetchRagConfigs(project.id)
+      .then(setRagConfigs)
+      .catch(() => setRagConfigs([]));
+    fetchBotConfigs(project.id)
+      .then(setBotConfigs)
+      .catch(() => setBotConfigs([]));
+  }, [project]);
 
   const handleToggleCompare = (id: number) => {
     setCompareSet((prev) => {
@@ -159,6 +180,16 @@ export default function ExperimentPage() {
               />
             </Card>
           )}
+
+          {/* Parameter sweeps */}
+          <Card padding="lg" className="p-5">
+            <SweepPanel projectId={project.id} testSets={testSets} ragConfigs={ragConfigs} />
+          </Card>
+
+          {/* Scheduled regression runs */}
+          <Card padding="lg" className="p-5">
+            <SchedulePanel projectId={project.id} testSets={testSets} botConfigs={botConfigs} />
+          </Card>
 
           {/* History — collapsible section at bottom */}
           <ExperimentHistory projectId={project.id} />

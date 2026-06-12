@@ -17,3 +17,6 @@ export * from './annotations';
 export * from './metrics';
 export * from './workers';
 export * from './skills';
+export * from './sweeps';
+export * from './schedules';
+export * from './mining';

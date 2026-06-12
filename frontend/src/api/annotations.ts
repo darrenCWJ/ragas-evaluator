@@ -66,3 +66,35 @@ export async function fetchEvaluatorAccuracy(
     `/api/projects/${projectId}/experiments/${experimentId}/evaluator-accuracy`,
   );
 }
+
+// --- Judge Calibration API ---
+
+export interface JudgeCalibrationModel {
+  model: string;
+  pairs: number;
+  agreement_rate: number;
+  mean_abs_error: number;
+  calibrated: boolean;
+}
+
+export interface JudgeCalibrationReport {
+  project_id: number;
+  total_pairs: number;
+  min_pairs_required: number;
+  models: JudgeCalibrationModel[];
+  recommended_assignments: string[] | null;
+}
+
+export async function fetchJudgeCalibration(projectId: number): Promise<JudgeCalibrationReport> {
+  return request<JudgeCalibrationReport>(`/api/projects/${projectId}/judge-calibration`);
+}
+
+export async function applyJudgeCalibration(
+  projectId: number,
+  models?: string[],
+): Promise<{ project_id: number; judge_model_assignments: string[] }> {
+  return request(`/api/projects/${projectId}/judge-calibration/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ models: models ?? null }),
+  });
+}
