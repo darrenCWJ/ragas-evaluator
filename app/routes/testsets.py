@@ -512,6 +512,12 @@ class TestSetUploadConfirm(BaseModel):
     name: str | None = None
 
 
+# Category values (case-insensitive) that mark a question as expecting the
+# agent to DECLINE rather than answer — wires uploaded questions into the
+# refusal_accuracy metric the same way generated out-of-KB questions are.
+_REFUSAL_CATEGORY_VALUES = {"out_of_knowledge_base", "out_of_scope", "refusal", "unanswerable"}
+
+
 @router.post("/projects/{project_id}/test-sets/upload", status_code=201)
 async def upload_test_set(
     project_id: int,
@@ -519,6 +525,7 @@ async def upload_test_set(
     question_column: str = Form(...),
     answer_column: str = Form(...),
     contexts_column: str | None = Form(None),
+    category_column: str | None = Form(None),
     reference_sql_column: str | None = Form(None),
     schema_contexts_column: str | None = Form(None),
     reference_data_column: str | None = Form(None),
@@ -531,6 +538,10 @@ async def upload_test_set(
       - question_column: which column to use as the question
       - answer_column: which column to use as the reference answer
       - contexts_column: (optional) column for reference contexts
+      - category_column: (optional) question category. Values like
+        "out_of_knowledge_base" / "refusal" / "unanswerable" additionally tag
+        the question as expecting a refusal, enabling the refusal_accuracy
+        metric and per-category breakdowns for external test sets.
       - name: (optional) test set name
     """
     conn = db.init.get_db()
@@ -576,6 +587,7 @@ async def upload_test_set(
             detail=f"Column '{contexts_column}' not found. Available: {sorted(columns)}",
         )
     for col_name, col_label in [
+        (category_column, "category_column"),
         (reference_sql_column, "reference_sql_column"),
         (schema_contexts_column, "schema_contexts_column"),
         (reference_data_column, "reference_data_column"),
@@ -609,6 +621,7 @@ async def upload_test_set(
             "question": question_column,
             "answer": answer_column,
             "contexts": contexts_column,
+            "category": category_column,
             "reference_sql": reference_sql_column,
             "schema_contexts": schema_contexts_column,
             "reference_data": reference_data_column,
@@ -688,17 +701,27 @@ async def upload_test_set(
                     metadata[meta_key] = [str(val).strip()]
             else:
                 metadata[meta_key] = str(val).strip()
+
+        # Category + refusal tagging — lets external test sets use the
+        # refusal_accuracy metric and per-category breakdowns.
+        category = ""
+        if category_column:
+            category = str(row.get(category_column) or "").strip()
+            if category.lower().replace(" ", "_") in _REFUSAL_CATEGORY_VALUES:
+                metadata["expected_behavior"] = "refusal"
+
         metadata_json_val = json.dumps(metadata) if metadata else None
 
         conn.execute(
             """INSERT INTO test_questions
-               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, metadata_json, status)
-               VALUES (?, ?, ?, ?, 'uploaded', '', ?, 'pending')""",
+               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, metadata_json, status)
+               VALUES (?, ?, ?, ?, 'uploaded', '', ?, ?, 'pending')""",
             (
                 test_set_id,
                 row[question_column].strip(),
                 row[answer_column].strip(),
                 json.dumps(ref_ctx),
+                category,
                 metadata_json_val,
             ),
         )
@@ -708,6 +731,7 @@ async def upload_test_set(
                 "reference_answer": row[answer_column].strip(),
                 "reference_contexts": ref_ctx,
                 "question_type": "uploaded",
+                "category": category,
                 "status": "pending",
                 "metadata": metadata or None,
             }

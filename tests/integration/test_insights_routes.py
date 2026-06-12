@@ -168,3 +168,99 @@ class TestBreakdown:
         assert r.json()["categories"][0]["category"] == "out_of_knowledge_base"
         weakest = cats["out_of_knowledge_base"]["weakest_questions"]
         assert weakest and "shoe size" in weakest[0]["question"]
+
+
+class TestExternalTestSetUpload:
+    """External scenario: test set uploaded via API, agent called via API."""
+
+    def test_upload_with_category_column_tags_refusal(self, client, project):
+        csv_content = (
+            "question,answer,category\n"
+            "What is the refund window?,30 days.,typical\n"
+            "What is the CEO's blood type?,Not in the knowledge base.,out_of_knowledge_base\n"
+            "Who won the 2030 World Cup?,I cannot answer that.,Unanswerable\n"
+        )
+        r = client.post(
+            f"/api/projects/{project}/test-sets/upload",
+            files={"file": ("external.csv", csv_content, "text/csv")},
+            data={
+                "question_column": "question",
+                "answer_column": "answer",
+                "category_column": "category",
+                "name": "external-set",
+            },
+        )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        questions = body.get("questions") or body.get("inserted") or []
+        by_q = {q["question"]: q for q in questions}
+
+        assert by_q["What is the refund window?"]["category"] == "typical"
+        assert (by_q["What is the refund window?"]["metadata"] or {}).get("expected_behavior") is None
+
+        # Both refusal-style category values (any casing) get the refusal tag
+        ceo = by_q["What is the CEO's blood type?"]
+        assert ceo["category"] == "out_of_knowledge_base"
+        assert ceo["metadata"]["expected_behavior"] == "refusal"
+        cup = by_q["Who won the 2030 World Cup?"]
+        assert cup["metadata"]["expected_behavior"] == "refusal"
+
+    def test_unknown_category_column_rejected(self, client, project):
+        csv_content = "question,answer\nQ1?,A1.\n"
+        r = client.post(
+            f"/api/projects/{project}/test-sets/upload",
+            files={"file": ("x.csv", csv_content, "text/csv")},
+            data={
+                "question_column": "question",
+                "answer_column": "answer",
+                "category_column": "nonexistent",
+            },
+        )
+        assert r.status_code == 422
+        assert "category_column" in r.json()["detail"]
+
+    def test_breakdown_works_for_uploaded_categories(self, client, project):
+        """Full external loop: uploaded set -> experiment rows -> breakdown."""
+        csv_content = (
+            "question,answer,category\n"
+            "What is the refund window?,30 days.,typical\n"
+            "What is the CEO's blood type?,Not available.,out_of_knowledge_base\n"
+        )
+        r = client.post(
+            f"/api/projects/{project}/test-sets/upload",
+            files={"file": ("external.csv", csv_content, "text/csv")},
+            data={
+                "question_column": "question",
+                "answer_column": "answer",
+                "category_column": "category",
+            },
+        )
+        ts_id = r.json()["id"]
+
+        conn = db.init.get_db()
+        q_rows = conn.execute(
+            "SELECT id, category FROM test_questions WHERE test_set_id = ?", (ts_id,)
+        ).fetchall()
+        exp = conn.execute(
+            "INSERT INTO experiments (project_id, test_set_id, name, model, status) "
+            "VALUES (?, ?, 'ext', 'bot', 'completed')",
+            (project, ts_id),
+        ).lastrowid
+        for q in q_rows:
+            metrics = (
+                {"refusal_accuracy": 1.0}
+                if q["category"] == "out_of_knowledge_base"
+                else {"faithfulness": 0.8}
+            )
+            conn.execute(
+                "INSERT INTO experiment_results (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json) "
+                "VALUES (?, ?, 'resp', '[]', ?, '{}')",
+                (exp, q["id"], json.dumps(metrics)),
+            )
+        conn.commit()
+
+        bd = client.get(f"/api/projects/{project}/experiments/{exp}/breakdown")
+        assert bd.status_code == 200, bd.text
+        cats = {c["category"]: c for c in bd.json()["categories"]}
+        assert set(cats) == {"typical", "out_of_knowledge_base"}
+        assert cats["out_of_knowledge_base"]["metrics"]["refusal_accuracy"] == 1.0

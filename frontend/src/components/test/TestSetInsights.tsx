@@ -139,7 +139,15 @@ export default function TestSetInsights({ projectId, testSetId, onAudited }: Pro
           </div>
         )}
 
-        {coverage.data && (
+        {coverage.data && coverage.data.total_documents === 0 && (
+          <p className="mt-2 text-xs text-text-muted">
+            Coverage tracks which of your uploaded documents the test set exercises. This project
+            has no documents — coverage doesn&apos;t apply when testing an external agent against an
+            external test set.
+          </p>
+        )}
+
+        {coverage.data && coverage.data.total_documents > 0 && (
           <div className="mt-2 space-y-2 text-xs">
             <div className="flex flex-wrap items-center gap-3">
               <span
