@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { continueDryRun, dryRunSkill } from '../../api';
-import type { AgentTurn, JudgeModel, Skill, SkillDryRunResult } from '../../api';
-import { Button, Card, ErrorAlert, FormField, Select, TextArea, TextInput } from '../ui';
+import type { JudgeModel, Skill } from '../../api';
+import { Button, Card, ErrorAlert, FormField, Select, TextArea } from '../ui';
+import PlaygroundRunPanel, { type PlaygroundRun } from './PlaygroundRunPanel';
 
 interface SkillPlaygroundProps {
   projectId: number;
@@ -9,127 +10,106 @@ interface SkillPlaygroundProps {
   judgeModels: JudgeModel[];
 }
 
-/** One round of the transcript: thought + the tool calls it made. */
-function TurnView({ turn }: { turn: AgentTurn }) {
-  return (
-    <div className="space-y-1">
-      {turn.thought && (
-        <div className="flex gap-2">
-          <span className="shrink-0 text-2xs" title="Model reasoning this round">
-            💭
-          </span>
-          <p className="min-w-0 whitespace-pre-wrap text-xs italic text-text-secondary">
-            {turn.thought}
-          </p>
-        </div>
-      )}
-      {turn.steps.map((step, j) =>
-        step.tool === 'ask_user' ? (
-          <div key={j} className="space-y-0.5">
-            <div className="flex gap-2">
-              <span className="shrink-0 text-2xs" title="Model asked the user">
-                ❓
-              </span>
-              <p className="min-w-0 text-xs text-text-primary">
-                {String(step.arguments.question ?? '')}
-              </p>
-            </div>
-            <div className="flex gap-2 pl-5">
-              <span className="shrink-0 text-2xs" title="User reply">
-                🧑
-              </span>
-              <p className="min-w-0 whitespace-pre-wrap text-xs text-accent">{step.result}</p>
-            </div>
-          </div>
-        ) : (
-          <div key={j} className="flex gap-2">
-            <span className="shrink-0 text-2xs" title="Tool call">
-              🔧
-            </span>
-            <div className="min-w-0 text-xs">
-              <span className={`font-mono ${step.error ? 'text-score-low' : 'text-accent'}`}>
-                {step.tool}
-              </span>
-              <span className="ml-1.5 break-all font-mono text-2xs text-text-muted">
-                {JSON.stringify(step.arguments)}
-              </span>
-              {step.error ? (
-                <p className="text-2xs text-score-low">{step.error}</p>
-              ) : (
-                <p className="line-clamp-2 break-all text-2xs text-text-muted">{step.result}</p>
-              )}
-            </div>
-          </div>
-        ),
-      )}
-    </div>
-  );
-}
+const MAX_PARALLEL_MODELS = 6;
 
 /**
- * Watch a single model walk a skill on one ad-hoc prompt — no test set, no
- * judging, nothing stored. Made for process-flow skills where the point is
- * HOW the model works through the stages, not the final answer.
- *
- * Interactive mode pauses whenever the model asks the user something and
- * lets YOU type the answer; otherwise a simulated user replies.
+ * Watch one or more models walk a skill on a single ad-hoc prompt — no test
+ * set, no judging, nothing stored. Runs all selected models in parallel with
+ * a side-by-side transcript per model, so you can compare HOW each one works
+ * through the stages. Interactive mode pauses each run on its own questions.
  */
 export default function SkillPlayground({ projectId, skills, judgeModels }: SkillPlaygroundProps) {
   const [skillId, setSkillId] = useState<number | ''>('');
-  const [model, setModel] = useState('');
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [prompt, setPrompt] = useState('');
   const [userInputs, setUserInputs] = useState('');
   const [interactive, setInteractive] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<SkillDryRunResult | null>(null);
-  const [pendingAnswer, setPendingAnswer] = useState('');
+  const [runs, setRuns] = useState<Record<string, PlaygroundRun>>({});
   const [error, setError] = useState<string | null>(null);
 
   const usableModels = judgeModels.filter((m) => m.enabled !== false && m.available);
   const selectedSkill = skills.find((s) => s.id === skillId);
-  const canRun = skillId !== '' && model && prompt.trim().length >= 3 && !running;
-  const awaiting = result?.status === 'awaiting_input';
+  const anyRunning = Object.values(runs).some((r) => r.status === 'running');
+  const canRun =
+    skillId !== '' && selectedModels.length > 0 && prompt.trim().length >= 3 && !anyRunning;
 
-  const handleRun = async () => {
+  const toggleModel = (id: string) => {
+    setSelectedModels((prev) =>
+      prev.includes(id)
+        ? prev.filter((m) => m !== id)
+        : prev.length < MAX_PARALLEL_MODELS
+          ? [...prev, id]
+          : prev,
+    );
+  };
+
+  const setRun = (model: string, run: PlaygroundRun) => {
+    setRuns((prev) => ({ ...prev, [model]: run }));
+  };
+
+  const handleRunAll = () => {
     if (skillId === '') return;
-    setRunning(true);
     setError(null);
-    setResult(null);
-    setPendingAnswer('');
-    try {
-      const scripted = userInputs
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(0, 5);
-      const res = await dryRunSkill(projectId, skillId, {
+    const scripted = userInputs
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+
+    const initial: Record<string, PlaygroundRun> = {};
+    for (const model of selectedModels) {
+      initial[model] = { status: 'running', result: null };
+    }
+    setRuns(initial);
+
+    for (const model of selectedModels) {
+      dryRunSkill(projectId, skillId, {
         prompt: prompt.trim(),
         model,
         user_inputs: scripted,
         interactive,
-      });
-      setResult(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Dry run failed');
-    } finally {
-      setRunning(false);
+      })
+        .then((res) => {
+          setRun(model, {
+            status: res.status === 'awaiting_input' ? 'awaiting_input' : 'completed',
+            result: res,
+          });
+        })
+        .catch((err) => {
+          setRun(model, {
+            status: 'error',
+            result: null,
+            error: err instanceof Error ? err.message : 'Dry run failed',
+          });
+        });
     }
   };
 
-  const handleContinue = async () => {
-    if (!result?.run_id || !pendingAnswer.trim()) return;
-    setRunning(true);
-    setError(null);
-    try {
-      const res = await continueDryRun(projectId, result.run_id, pendingAnswer.trim());
-      setResult(res);
-      setPendingAnswer('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to continue the run');
-    } finally {
-      setRunning(false);
-    }
+  const handleContinue = (model: string, answer: string) => {
+    const run = runs[model];
+    const runId = run?.result?.run_id;
+    if (!runId) return;
+    setRun(model, { ...run, status: 'running' });
+    continueDryRun(projectId, runId, answer)
+      .then((res) => {
+        setRun(model, {
+          status: res.status === 'awaiting_input' ? 'awaiting_input' : 'completed',
+          result: res,
+        });
+      })
+      .catch((err) => {
+        setRun(model, {
+          ...run,
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Failed to continue the run',
+        });
+      });
   };
+
+  const modelName = (id: string) => judgeModels.find((m) => m.id === id)?.name ?? id;
+  const orderedRuns = selectedModels
+    .map((m) => ({ model: m, run: runs[m] }))
+    .filter((entry): entry is { model: string; run: PlaygroundRun } => entry.run != null);
 
   return (
     <Card padding="lg" className="space-y-4">
@@ -150,15 +130,37 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
             ))}
           </Select>
         </FormField>
-        <FormField label="Model" hint="Models with an API key configured">
-          <Select value={model} onChange={(e) => setModel(e.target.value)}>
-            <option value="">Select a model...</option>
-            {usableModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name} ({m.provider})
-              </option>
-            ))}
-          </Select>
+        <FormField
+          label="Models"
+          hint={`Up to ${MAX_PARALLEL_MODELS} run in parallel, one transcript panel each`}
+        >
+          {usableModels.length === 0 ? (
+            <p className="text-xs text-text-muted">
+              No models available — configure API keys or manage the model registry above.
+            </p>
+          ) : (
+            <div className="grid max-h-32 gap-1 overflow-y-auto sm:grid-cols-2">
+              {usableModels.map((m) => (
+                <label
+                  key={m.id}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                    selectedModels.includes(m.id)
+                      ? 'border-accent bg-accent/5 text-text-primary'
+                      : 'border-border text-text-secondary hover:border-border-focus'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={selectedModels.includes(m.id)}
+                    onChange={() => toggleModel(m.id)}
+                  />
+                  <span className="min-w-0 truncate">{m.name}</span>
+                  <span className="ml-auto shrink-0 text-2xs text-text-muted">{m.provider}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </FormField>
       </div>
 
@@ -176,7 +178,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
 
       <FormField
         label="Scripted user replies (optional)"
-        hint="One per line — used in order when the model asks something, before pausing for you (interactive) or handing off to the simulator"
+        hint="One per line — every model consumes the same script in order before pausing for you (interactive) or handing off to the simulator"
       >
         <TextArea
           rows={2}
@@ -190,7 +192,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
         <div className="flex flex-wrap items-center gap-4">
           <label
             className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary"
-            title="Pause the run whenever the model asks the user a question, and answer it yourself. Off = an LLM simulates the user."
+            title="Pause each run whenever its model asks the user a question, and answer it yourself. Off = an LLM simulates the user."
           >
             <input
               type="checkbox"
@@ -198,7 +200,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
               checked={interactive}
               onChange={(e) => setInteractive(e.target.checked)}
             />
-            Interactive — I answer the model&apos;s questions myself
+            Interactive — I answer each model&apos;s questions myself
           </label>
           <span className="text-xs text-text-muted">
             Nothing is saved, no judge involved.
@@ -207,82 +209,28 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
               : ''}
           </span>
         </div>
-        <Button onClick={handleRun} loading={running && !awaiting} disabled={!canRun}>
-          {running && !awaiting ? 'Watching the model work...' : 'Run'}
+        <Button onClick={handleRunAll} loading={anyRunning} disabled={!canRun}>
+          {anyRunning
+            ? 'Models working...'
+            : `Run ${selectedModels.length > 1 ? `${selectedModels.length} models` : ''}`}
         </Button>
       </div>
 
-      {result && (
-        <div className="space-y-3 border-t border-border pt-4">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-text-muted">
-            <span>{result.turns.length} rounds</span>
-            <span>{result.files_read.length} files read</span>
-            <span>{result.user_exchanges} user exchanges</span>
-            <span>
-              {result.tokens_in}&rarr;{result.tokens_out} tok
-            </span>
-            <span>{(result.latency_ms / 1000).toFixed(1)}s</span>
-            {result.stage_scores && (
-              <span
-                className="rounded-full bg-accent/10 px-2 py-0.5 text-accent"
-                title="Stage-plan files read / read in plan order"
-              >
-                stages {(result.stage_scores.stage_coverage * 100).toFixed(0)}% · order{' '}
-                {(result.stage_scores.stage_order * 100).toFixed(0)}%
-              </span>
-            )}
-          </div>
-
-          <div className="space-y-2 rounded-lg bg-input p-3">
-            {result.turns.length === 0 && !awaiting && (
-              <p className="text-xs text-text-muted">
-                The model answered directly without using any tools — for staged skills that usually
-                means it skipped the process.
-              </p>
-            )}
-            {result.turns.map((turn, i) => (
-              <TurnView key={i} turn={turn} />
-            ))}
-
-            {awaiting ? (
-              <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/5 p-3">
-                <div className="flex gap-2">
-                  <span className="shrink-0 text-2xs" title="The model is asking you">
-                    ❓
-                  </span>
-                  <p className="min-w-0 text-xs font-medium text-text-primary">
-                    {result.question || '(the model asked a question)'}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <TextInput
-                    value={pendingAnswer}
-                    onChange={(e) => setPendingAnswer(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleContinue();
-                    }}
-                    placeholder="Type your answer and press Enter..."
-                  />
-                  <Button
-                    onClick={handleContinue}
-                    loading={running}
-                    disabled={!pendingAnswer.trim() || running}
-                  >
-                    Continue
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex gap-2 border-t border-border/50 pt-2">
-                <span className="shrink-0 text-2xs" title="Final answer">
-                  ✅
-                </span>
-                <pre className="max-h-72 min-w-0 overflow-auto whitespace-pre-wrap text-xs text-text-primary">
-                  {result.answer || '(empty answer)'}
-                </pre>
-              </div>
-            )}
-          </div>
+      {orderedRuns.length > 0 && (
+        <div
+          className={`grid gap-3 border-t border-border pt-4 ${
+            orderedRuns.length > 1 ? 'lg:grid-cols-2' : ''
+          }`}
+        >
+          {orderedRuns.map(({ model, run }) => (
+            <PlaygroundRunPanel
+              key={model}
+              model={model}
+              modelName={modelName(model)}
+              run={run}
+              onContinue={handleContinue}
+            />
+          ))}
         </div>
       )}
     </Card>

@@ -64,10 +64,10 @@ export async function continueDryRun(
   runId: string,
   answer: string,
 ): Promise<SkillDryRunResult> {
-  return request<SkillDryRunResult>(
-    `/api/projects/${projectId}/skills/dry-run/${runId}/continue`,
-    { method: 'POST', body: JSON.stringify({ answer }) },
-  );
+  return request<SkillDryRunResult>(`/api/projects/${projectId}/skills/dry-run/${runId}/continue`, {
+    method: 'POST',
+    body: JSON.stringify({ answer }),
+  });
 }
 
 // --- Trial lifecycle ---
