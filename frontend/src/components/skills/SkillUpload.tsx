@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react';
-import { createSkill } from '../../api';
+import { createSkill, uploadSkillZip } from '../../api';
 import type { Skill, SkillDirectiveKind } from '../../api';
 import { Button, Card, ErrorAlert, FormField, TextArea, TextInput } from '../ui';
 
@@ -45,6 +45,26 @@ export default function SkillUpload({ projectId, onUploaded }: SkillUploadProps)
     const file = e.target.files?.[0];
     if (!file) return;
     setError(null);
+
+    // Multi-file skill: zip with SKILL.md + references — uploaded directly
+    if (file.name.toLowerCase().endsWith('.zip')) {
+      setSubmitting(true);
+      uploadSkillZip(projectId, file)
+        .then((skill) => {
+          setUploaded(skill);
+          setContent('');
+          setName('');
+          setFileName(null);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          onUploaded(skill);
+        })
+        .catch((err) =>
+          setError(err instanceof Error ? err.message : 'Failed to upload skill archive'),
+        )
+        .finally(() => setSubmitting(false));
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       setContent(typeof reader.result === 'string' ? reader.result : '');
@@ -91,11 +111,14 @@ export default function SkillUpload({ projectId, onUploaded }: SkillUploadProps)
             placeholder="e.g. support-tone"
           />
         </FormField>
-        <FormField label="File" hint={fileName ? `Loaded ${fileName}` : 'Or paste below'}>
+        <FormField
+          label="File"
+          hint={fileName ? `Loaded ${fileName}` : '.md/.txt, or .zip for multi-file skills'}
+        >
           <input
             ref={fileInputRef}
             type="file"
-            accept=".md,.txt,text/markdown,text/plain"
+            accept=".md,.txt,.zip,text/markdown,text/plain,application/zip"
             onChange={handleFile}
             className="block w-full text-sm text-text-secondary file:mr-3 file:rounded-lg file:border file:border-border file:bg-input file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-text-primary hover:file:bg-elevated"
           />
@@ -140,6 +163,30 @@ export default function SkillUpload({ projectId, onUploaded }: SkillUploadProps)
           </div>
           {uploaded.summary && (
             <p className="mb-2 text-xs text-text-secondary">{uploaded.summary}</p>
+          )}
+          {(uploaded.files?.length ?? 0) > 0 && (
+            <p className="mb-1 text-xs text-text-secondary">
+              📄 {uploaded.files!.length} reference file{uploaded.files!.length !== 1 ? 's' : ''}{' '}
+              stored — run an <span className="text-accent">agentic</span> trial so models can
+              read them on demand.
+            </p>
+          )}
+          {(uploaded.missing_references?.length ?? 0) > 0 && (
+            <p className="mb-1 text-xs text-amber-400">
+              ⚠ References not found in archive: {uploaded.missing_references!.join(', ')}
+            </p>
+          )}
+          {uploaded.interaction_required && (
+            <p className="mb-1 text-xs text-text-secondary">
+              💬 This skill asks the user questions — agentic trials answer them with a simulated
+              user (scripted via the question&apos;s <code>user_inputs</code> metadata when
+              present).
+            </p>
+          )}
+          {(uploaded.skipped_files?.length ?? 0) > 0 && (
+            <p className="mb-1 text-xs text-text-muted">
+              Skipped (binary/oversized): {uploaded.skipped_files!.join(', ')}
+            </p>
           )}
           <ul className="space-y-1.5">
             {uploaded.directives.map((d) => (

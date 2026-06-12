@@ -373,6 +373,14 @@ export default function GuidePage() {
             <strong>format compliance</strong> (deterministic checks), and <strong>lift</strong>{' '}
             (improvement over the baseline). The matrix shows which model follows your skill best.
           </p>
+          <p className="text-sm text-text-secondary leading-relaxed">
+            Multi-file skills (SKILL.md + references/ + scripts/) upload as a <strong>.zip</strong>.
+            Run those with <strong>agentic mode</strong>: the model gets a <code>read_file</code>{' '}
+            tool and pulls reference files on demand — exactly how progressive-disclosure skills
+            work in a real harness. Skills that ask the user questions get an{' '}
+            <code>ask_user</code> tool answered by a simulated user; add a{' '}
+            <code>user_inputs</code> list to a question&apos;s metadata to script exact replies.
+          </p>
         </Section>
 
         <Section id="feedback" title="Human feedback & judge calibration">

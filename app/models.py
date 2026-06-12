@@ -897,6 +897,18 @@ class SkillTrialCreate(BaseModel):
     test_set_id: int
     models: list[dict] = Field(min_length=1, max_length=10)
     include_baseline: bool = True
+    # "inline": full SKILL.md as system context (default).
+    # "agentic": SKILL.md as system context + read_file/ask_user tools — the
+    # model pulls reference files on demand (progressive disclosure) and a
+    # simulated user answers its clarifying questions.
+    mode: str = "inline"
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        if v not in {"inline", "agentic"}:
+            raise ValueError("mode must be 'inline' or 'agentic'")
+        return v
 
     @field_validator("models")
     @classmethod

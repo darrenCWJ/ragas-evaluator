@@ -784,13 +784,15 @@ async def run_experiment(
     custom_names = {r["name"] for r in all_custom_rows}
     valid_names = set(ALL_METRICS) | custom_names
 
+    explicit_request = bool(req.metrics)
     requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
     selected_metrics = [m for m in requested_metrics if m in valid_names]
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
-    # Enforce dataset/metric compatibility — the UI grays these out, but the
-    # API must also reject metrics the test set cannot support.
+    # Dataset/metric compatibility — the UI grays these out, but the API must
+    # also guard. Explicitly requested metrics are rejected with the missing
+    # capability; the default fallback set is silently filtered instead.
     from evaluation.capabilities import dataset_capabilities, metric_availability
 
     if experiment["bot_config_id"] is None:
@@ -810,12 +812,19 @@ async def run_experiment(
         for m in selected_metrics
         if m in availability and not availability[m]["available"]
     }
-    if unavailable:
+    if unavailable and explicit_request:
         details = "; ".join(f"{m} requires {', '.join(missing)}" for m, missing in unavailable.items())
         raise HTTPException(
             status_code=422,
             detail=f"Metrics incompatible with this test set: {details}",
         )
+    if unavailable:
+        selected_metrics = [m for m in selected_metrics if m not in unavailable]
+        if not selected_metrics:
+            raise HTTPException(
+                status_code=422,
+                detail="No default metrics are compatible with this test set — select metrics explicitly",
+            )
 
     # Atomically claim the experiment — set status to 'running' now so any
     # concurrent page load or refresh immediately sees the correct state.

@@ -87,6 +87,110 @@ async def _query_model(
     }
 
 
+_MAX_USER_EXCHANGES = 3
+
+
+async def _simulate_user_reply(original_question: str, assistant_question: str) -> str:
+    """LLM plays the user when a skill asks a clarifying question mid-flow."""
+    from config import DEFAULT_EVAL_MODEL
+
+    prompt = (
+        "You are simulating the USER in a conversation with an AI assistant. "
+        f"Your original request was:\n{original_question}\n\n"
+        f"The assistant asked you:\n{assistant_question}\n\n"
+        "Reply briefly (1-2 sentences), staying consistent with your original "
+        "request. Output the user reply only."
+    )
+    response = await chat_completion(
+        DEFAULT_EVAL_MODEL,
+        [{"role": "user", "content": prompt}],
+        {"temperature": 0.3, "max_tokens": 200},
+    )
+    return response["content"]
+
+
+async def _query_model_agentic(
+    spec: dict,
+    q_row: dict,
+    system_context: str | None,
+    skill_files: dict[str, str],
+) -> dict:
+    """Agentic cell: the model can read skill reference files on demand
+    (progressive disclosure) and ask a simulated user clarifying questions.
+
+    Scripted answers (question metadata ``user_inputs``) take priority over
+    the LLM user simulator and are consumed in order.
+    """
+    from pipeline.agent_loop import run_agent
+
+    question = q_row["question"]
+    try:
+        q_meta = json.loads(q_row["metadata_json"]) if q_row.get("metadata_json") else {}
+    except (TypeError, ValueError):
+        q_meta = {}
+    scripted: list[str] = [str(s) for s in (q_meta.get("user_inputs") or []) if str(s).strip()]
+    exchanges = {"n": 0}
+
+    tools: list[dict] = [{
+        "name": "ask_user",
+        "description": "Ask the user a clarifying question and receive their reply.",
+        "parameters": {
+            "type": "object",
+            "properties": {"question": {"type": "string", "description": "Question for the user"}},
+            "required": ["question"],
+        },
+    }]
+    if skill_files:
+        tools.append({
+            "name": "read_file",
+            "description": (
+                "Read one of the skill's reference files by path. Available: "
+                + ", ".join(sorted(skill_files))
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string", "description": "File path to read"}},
+                "required": ["path"],
+            },
+        })
+
+    async def executor(name: str, args: dict) -> str:
+        if name == "read_file":
+            path = str(args.get("path", "")).strip().lstrip("./")
+            for file_path, content in skill_files.items():
+                if file_path == path or file_path.endswith("/" + path):
+                    return content
+            return f"File '{path}' not found. Available: {', '.join(sorted(skill_files)) or '(none)'}"
+        if name == "ask_user":
+            exchanges["n"] += 1
+            if scripted:
+                return scripted.pop(0)
+            if exchanges["n"] > _MAX_USER_EXCHANGES:
+                return "No further input — proceed with your best judgment."
+            return await _simulate_user_reply(question, str(args.get("question", "")))
+        return f"Error: unknown tool '{name}'"
+
+    messages: list[dict] = []
+    if system_context:
+        messages.append({"role": "system", "content": system_context})
+    messages.append({"role": "user", "content": question})
+
+    result = await run_agent(
+        spec["model"], messages, tools, executor, params={"max_tokens": 4096}
+    )
+    files_read = [
+        str(s["arguments"].get("path", "")) for s in result["steps"] if s["tool"] == "read_file"
+    ]
+    return {
+        "answer": result["answer"],
+        "tokens_in": result["usage"]["prompt_tokens"],
+        "tokens_out": result["usage"]["completion_tokens"],
+        "agent_steps": result["steps"],
+        "files_read": files_read,
+        "user_exchanges": exchanges["n"],
+    }
+
+
 async def _run_cell(
     trial_id: int,
     skill: dict | None,
@@ -96,6 +200,8 @@ async def _run_cell(
     judge_model: str | None,
     semaphore: asyncio.Semaphore,
     cancel_event: asyncio.Event,
+    mode: str = "inline",
+    skill_files: dict[str, str] | None = None,
 ) -> dict | None:
     """Run one matrix cell. Returns a result-row dict or None when cancelled."""
     label = model_spec_label(spec)
@@ -125,13 +231,30 @@ async def _run_cell(
             with trace.span("prepare", skill_chars=len(skill["content"]) if skill else 0):
                 system_context = skill["content"] if skill else None
 
+            # Agentic mode applies to direct-LLM specs only — bot connectors
+            # cannot run the tool loop and fall back to inline injection.
+            agentic = mode == "agentic" and spec.get("kind") != "bot"
+
             t0 = time.monotonic()
-            with trace.span("query", model=label):
-                reply = await _query_model(spec, q_row["question"], system_context, conn)
+            with trace.span("query", model=label, mode="agentic" if agentic else "inline"):
+                if agentic:
+                    reply = await _query_model_agentic(
+                        spec, q_row, system_context, skill_files or {}
+                    )
+                else:
+                    reply = await _query_model(spec, q_row["question"], system_context, conn)
             row["latency_ms"] = int((time.monotonic() - t0) * 1000)
             row["response"] = reply["answer"]
             row["tokens_in"] = int(reply["tokens_in"] or 0)
             row["tokens_out"] = int(reply["tokens_out"] or 0)
+            for step in reply.get("agent_steps", []):
+                with trace.span(
+                    f"tool:{step['tool']}",
+                    arguments=json.dumps(step["arguments"])[:500],
+                    result=str(step["result"])[:500],
+                    error=step.get("error"),
+                ):
+                    pass
 
             with trace.span("judge", directives=len(directives)):
                 verdicts = await judge_adherence(
@@ -143,10 +266,14 @@ async def _run_cell(
                 sum(1 for r in fmt_checked if r["verdict"] == "pass") / len(fmt_checked)
                 if fmt_checked else None
             )
-            row["scores_json"] = json.dumps({
+            scores = {
                 "skill_adherence": verdicts["score"],
                 "format_compliance": fmt_score,
-            })
+            }
+            if agentic:
+                scores["files_read_count"] = len(reply.get("files_read", []))
+                scores["user_exchanges"] = reply.get("user_exchanges", 0)
+            row["scores_json"] = json.dumps(scores)
             row["directive_results_json"] = json.dumps(results)
         except Exception as exc:
             logger.warning(
@@ -189,6 +316,17 @@ async def run_skill_trial(trial_id: int) -> None:
         if not directives:
             raise ValueError("Trial skill has no parsed directives — re-upload the skill")
 
+        mode = trial["mode"] or "inline"
+        skill_files: dict[str, str] = {}
+        if mode == "agentic" and trial["skill_id"]:
+            skill_files = {
+                r["path"]: r["content"]
+                for r in conn.execute(
+                    "SELECT path, content FROM skill_files WHERE skill_id = ?",
+                    (trial["skill_id"],),
+                ).fetchall()
+            }
+
         specs = json.loads(trial["models_json"])
         questions = conn.execute(
             "SELECT * FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited') ORDER BY id",
@@ -226,6 +364,7 @@ async def run_skill_trial(trial_id: int) -> None:
         tasks = [
             asyncio.create_task(_run_cell(
                 trial_id, variant, directives, spec, q, judge_model, semaphore, cancel_event,
+                mode=mode, skill_files=skill_files,
             ))
             for variant, spec, q in cells
         ]

@@ -1143,6 +1143,16 @@ export interface Skill {
   summary: string;
   directive_count: number;
   directives: SkillDirective[];
+  /** The skill instructs the assistant to ask the user questions mid-flow. */
+  interaction_required?: boolean;
+  /** Relative paths the SKILL.md references (progressive disclosure). */
+  referenced_paths?: string[];
+  /** Reference files stored with the skill (zip uploads). */
+  files?: string[];
+  /** Referenced paths with no matching stored file. */
+  missing_references?: string[];
+  /** Binary/oversized files skipped during zip ingestion (zip upload response only). */
+  skipped_files?: string[];
   created_at: string;
   /** Present on POST/GET-by-id responses; absent from list responses. */
   content?: string;
@@ -1162,6 +1172,7 @@ export interface SkillTrial {
   test_set_id: number;
   models: SkillTrialModelSpec[];
   include_baseline: boolean;
+  mode?: 'inline' | 'agentic';
   status: SkillTrialStatus;
   error_message: string | null;
   created_at: string;
@@ -1199,6 +1210,7 @@ export interface SkillTrialCreatePayload {
   test_set_id: number;
   models: SkillTrialModelSpec[];
   include_baseline: boolean;
+  mode?: 'inline' | 'agentic';
 }
 
 export interface SkillTrialCreateResponse {
