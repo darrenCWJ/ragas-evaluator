@@ -34,8 +34,15 @@ function TurnView({ turn }: { turn: AgentTurn }) {
               </p>
             </div>
             <div className="flex gap-2 pl-5">
-              <span className="shrink-0 text-2xs" title="User reply">
-                🧑
+              <span
+                className="shrink-0 text-2xs"
+                title={
+                  step.simulated
+                    ? 'AI-simulated user — answered from your project details brief'
+                    : 'User reply (you or your script)'
+                }
+              >
+                {step.simulated ? '🤖' : '🧑'}
               </span>
               <p className="min-w-0 whitespace-pre-wrap text-xs text-accent">{step.result}</p>
             </div>

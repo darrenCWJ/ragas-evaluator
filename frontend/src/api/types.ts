@@ -1184,6 +1184,8 @@ export interface AgentTurnStep {
   error?: string | null;
   /** ask_user steps: the result came from the (real or scripted) user. */
   from_user?: boolean;
+  /** ask_user steps: an AI answered from the user-details brief. */
+  simulated?: boolean;
 }
 
 export interface AgentTurn {

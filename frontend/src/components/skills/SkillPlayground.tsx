@@ -23,6 +23,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [prompt, setPrompt] = useState('');
   const [userInputs, setUserInputs] = useState('');
+  const [userBrief, setUserBrief] = useState('');
   const [interactive, setInteractive] = useState(true);
   const [runs, setRuns] = useState<Record<string, PlaygroundRun>>({});
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +69,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
         model,
         user_inputs: scripted,
         interactive,
+        user_brief: userBrief.trim() || undefined,
       })
         .then((res) => {
           setRun(model, {
@@ -187,14 +189,30 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
       </FormField>
 
       <FormField
-        label="Scripted user replies (optional)"
-        hint="One per line. Use 'keyword => answer' to match by question content — models ask in different orders, so keyed lines pair the right answer with the right question. Plain lines are used in order as a fallback."
+        label="Project details brief (optional)"
+        hint="Full free-form details about what you want. An AI reads each question the model asks and answers FROM this brief — any question, any order, no pausing. Marked 🤖 in the transcript."
       >
         <TextArea
           rows={3}
+          value={userBrief}
+          onChange={(e) => setUserBrief(e.target.value)}
+          placeholder={
+            "e.g. App name fraud-alert-daily, owned by the platform team, Python, runs daily at 02:00 SGT. Reads cdo_dev.landing.payments, writes cdo_dev.gold.payment_recon. Never backfill more than 30 days. No Claude context needed."
+          }
+        />
+      </FormField>
+
+      <FormField
+        label="Scripted user replies (optional)"
+        hint="One per line, exact answers that take priority over the brief. Use 'keyword => answer' to match by question content — models ask in different orders. Plain lines are used in order as a fallback."
+      >
+        <TextArea
+          rows={2}
           value={userInputs}
           onChange={(e) => setUserInputs(e.target.value)}
-          placeholder={'e.g.\nname => fraud-alert-daily\nschedule => daily at 02:00\nno other requirements'}
+          placeholder={
+            'e.g.\nname => fraud-alert-daily\nschedule => daily at 02:00\nno other requirements'
+          }
         />
       </FormField>
 

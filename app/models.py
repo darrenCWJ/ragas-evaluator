@@ -906,6 +906,10 @@ class SkillDryRunRequest(BaseModel):
     # Interactive: instead of the simulator, PAUSE when the model asks a
     # question and wait for the human's answer via the /continue endpoint.
     interactive: bool = False
+    # Full project/task details. When set, an AI reads each question the
+    # model asks and answers FROM these details — works in any order, for
+    # any model, without pausing. Scripted replies still take priority.
+    user_brief: str | None = Field(default=None, max_length=8000)
 
     @field_validator("model")
     @classmethod

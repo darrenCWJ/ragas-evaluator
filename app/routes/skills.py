@@ -321,7 +321,7 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
     if req.interactive:
         run_id = skill_dryrun.start_session(
             project_id, row["content"], skill_files, stages,
-            req.model, req.prompt, req.user_inputs,
+            req.model, req.prompt, req.user_inputs, user_brief=req.user_brief,
         )
         session = skill_dryrun.get_session(run_id, project_id)
         try:
@@ -346,7 +346,9 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
     spec = {"kind": "llm", "model": req.model}
     t0 = time.monotonic()
     try:
-        reply = await _query_model_agentic(spec, q_row, row["content"], skill_files)
+        reply = await _query_model_agentic(
+            spec, q_row, row["content"], skill_files, user_brief=req.user_brief
+        )
     except Exception as exc:
         logger.warning("Skill dry-run failed (skill=%d model=%s): %s", skill_id, clean(req.model), clean(exc))
         raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc

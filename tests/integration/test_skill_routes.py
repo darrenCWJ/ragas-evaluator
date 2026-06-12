@@ -236,6 +236,50 @@ class TestDryRun:
             )
             assert r3.status_code == 404
 
+    def test_dry_run_brief_answers_questions_without_pausing(self, client, project):
+        """A details brief lets an AI answer every question — no pause needed."""
+        skill_id = self._upload_skill(client, project)
+
+        responses = iter([
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1", "name": "ask_user",
+                    "arguments": {"question": "What should the app be called?"},
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+            {"content": "Done.", "tool_calls": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ])
+
+        async def fake_completion(model, messages, params=None, tools=None):
+            return next(responses)
+
+        with (
+            patch("app.services.skill_dryrun.chat_completion", new=fake_completion),
+            patch(
+                "app.services.skill_trials._simulate_user_reply",
+                new=AsyncMock(return_value="fraud-alert-daily"),
+            ) as simulator,
+        ):
+            r = client.post(
+                f"/api/projects/{project}/skills/{skill_id}/dry-run",
+                json={
+                    "prompt": "Build the app",
+                    "model": "gpt-4o-mini",
+                    "interactive": True,
+                    "user_brief": "App name fraud-alert-daily, Python, daily at 02:00 SGT.",
+                },
+            )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["status"] == "completed"  # never paused
+        step = data["turns"][0]["steps"][0]
+        assert step["result"] == "fraud-alert-daily"
+        assert step["simulated"] is True
+        # The simulator received the brief
+        assert "fraud-alert-daily" in simulator.call_args.kwargs["brief"]
+
     def test_interactive_dry_run_uses_scripted_replies_first(self, client, project):
         skill_id = self._upload_skill(client, project)
 

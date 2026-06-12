@@ -72,6 +72,7 @@ def start_session(
     model: str,
     prompt: str,
     scripted: list[str],
+    user_brief: str | None = None,
 ) -> str:
     """Create an interactive dry-run session and return its run id."""
     _evict_stale()
@@ -88,6 +89,8 @@ def start_session(
         "skill_files": skill_files,
         "stages": stages,
         "scripted": ScriptedReplies(scripted),
+        "brief": (user_brief or "").strip() or None,
+        "prompt": prompt,
         "queue": [],           # unexecuted tool calls of the current round
         "awaiting": None,      # the ask_user call we paused on, if any
         "turns": [],
@@ -110,13 +113,22 @@ def get_session(run_id: str, project_id: int) -> dict | None:
     return session
 
 
-def _record_step(session: dict, tool: str, arguments: dict, result: str, *, from_user: bool = False) -> None:
+def _record_step(
+    session: dict,
+    tool: str,
+    arguments: dict,
+    result: str,
+    *,
+    from_user: bool = False,
+    simulated: bool = False,
+) -> None:
     step = {
         "tool": tool,
         "arguments": arguments,
         "result": str(result)[:4000],
         "error": None,
         "from_user": from_user,
+        "simulated": simulated,
     }
     if session["turns"]:
         session["turns"][-1]["steps"].append(step)
@@ -153,6 +165,20 @@ async def advance(session: dict) -> None:
                 if reply is not None:
                     session["exchanges"] += 1
                     _record_step(session, "ask_user", {"question": question}, reply, from_user=True)
+                    _append_tool_result(session, tc, reply)
+                elif session["brief"]:
+                    # A details brief was supplied — an AI reads the question
+                    # and answers from it, so the run never has to pause.
+                    from app.services.skill_trials import _simulate_user_reply
+
+                    reply = await _simulate_user_reply(
+                        session["prompt"], question, brief=session["brief"]
+                    )
+                    session["exchanges"] += 1
+                    _record_step(
+                        session, "ask_user", {"question": question}, reply,
+                        from_user=True, simulated=True,
+                    )
                     _append_tool_result(session, tc, reply)
                 else:
                     # Pause — the UI shows this question and /continue resumes.
@@ -256,6 +282,7 @@ def session_payload(run_id: str, session: dict, stage_metrics_fn) -> dict:
                         "result": s["result"][:800],
                         "error": s["error"],
                         "from_user": s.get("from_user", False),
+                        "simulated": s.get("simulated", False),
                     }
                     for s in turn["steps"]
                 ],

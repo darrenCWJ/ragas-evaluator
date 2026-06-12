@@ -90,16 +90,34 @@ async def _query_model(
 _MAX_USER_EXCHANGES = 3
 
 
-async def _simulate_user_reply(original_question: str, assistant_question: str) -> str:
-    """LLM plays the user when a skill asks a clarifying question mid-flow."""
+async def _simulate_user_reply(
+    original_question: str,
+    assistant_question: str,
+    brief: str | None = None,
+) -> str:
+    """LLM plays the user when a skill asks a clarifying question mid-flow.
+
+    With a *brief* (full project/task details supplied by the human), the
+    simulator answers each question FROM those details — so any model can ask
+    anything, in any order, and still get the right answer.
+    """
     from config import DEFAULT_EVAL_MODEL
 
+    brief_block = (
+        "Here is everything you know about your project/task — answer from "
+        f"these details whenever they cover the question:\n{brief}\n\n"
+        if brief else ""
+    )
     prompt = (
         "You are simulating the USER in a conversation with an AI assistant. "
         f"Your original request was:\n{original_question}\n\n"
-        f"The assistant asked you:\n{assistant_question}\n\n"
+        + brief_block
+        + f"The assistant asked you:\n{assistant_question}\n\n"
         "Reply briefly (1-2 sentences), staying consistent with your original "
-        "request. Output the user reply only."
+        "request"
+        + (" and the details above" if brief else "")
+        + ". If the details don't cover the question, give a short sensible "
+        "answer consistent with them. Output the user reply only."
     )
     response = await chat_completion(
         DEFAULT_EVAL_MODEL,
@@ -114,6 +132,7 @@ async def _query_model_agentic(
     q_row: dict,
     system_context: str | None,
     skill_files: dict[str, str],
+    user_brief: str | None = None,
 ) -> dict:
     """Agentic cell: the model can read skill reference files on demand
     (progressive disclosure) and ask a simulated user clarifying questions.
@@ -173,7 +192,7 @@ async def _query_model_agentic(
                 return reply
             if exchanges["n"] > _MAX_USER_EXCHANGES:
                 return "No further input — proceed with your best judgment."
-            return await _simulate_user_reply(question, asked)
+            return await _simulate_user_reply(question, asked, brief=user_brief)
         return f"Error: unknown tool '{name}'"
 
     messages: list[dict] = []

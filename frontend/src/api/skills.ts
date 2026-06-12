@@ -51,7 +51,13 @@ export async function deleteSkill(projectId: number, skillId: number): Promise<v
 export async function dryRunSkill(
   projectId: number,
   skillId: number,
-  payload: { prompt: string; model: string; user_inputs?: string[]; interactive?: boolean },
+  payload: {
+    prompt: string;
+    model: string;
+    user_inputs?: string[];
+    interactive?: boolean;
+    user_brief?: string;
+  },
 ): Promise<SkillDryRunResult> {
   return request<SkillDryRunResult>(`/api/projects/${projectId}/skills/${skillId}/dry-run`, {
     method: 'POST',
