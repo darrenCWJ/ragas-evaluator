@@ -30,6 +30,7 @@ from app.routes import (
     projects,
     rag,
     reports,
+    schedules,
     skills,
     sweeps,
     system,
@@ -98,13 +99,17 @@ async def lifespan(application: FastAPI):
 
     monitor_task = asyncio.create_task(_monitor_worker_experiments())
 
+    from app.services.schedule_service import schedule_loop
+    schedule_task = asyncio.create_task(schedule_loop())
+
     yield
 
-    monitor_task.cancel()
-    try:
-        await monitor_task
-    except asyncio.CancelledError:
-        pass
+    for task in (monitor_task, schedule_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     # Cleanup: close shared HTTP clients to avoid "Event loop is closed" warnings
     from evaluation.metrics.testgen import close_openai_clients
     from pipeline.embedding import close_openai_embed_client
@@ -224,6 +229,7 @@ def create_app() -> FastAPI:
     application.include_router(multi_llm_judge.router)
     application.include_router(skills.router)
     application.include_router(sweeps.router)
+    application.include_router(schedules.router)
     application.include_router(insights.router)
     application.include_router(system.router)
 

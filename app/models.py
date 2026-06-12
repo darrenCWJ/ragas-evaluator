@@ -711,6 +711,65 @@ class HumanAnnotationCreate(BaseModel):
         return v
 
 
+class ScheduleCreate(BaseModel):
+    """Recurring regression run against an external agent."""
+
+    name: str
+    bot_config_id: int
+    test_set_id: int
+    interval_minutes: int
+    metrics: list[str] | None = None
+    alert_drop_threshold: float = 0.1
+    webhook_url: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_schedule_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+    @field_validator("interval_minutes")
+    @classmethod
+    def validate_interval(cls, v: int) -> int:
+        if v < 15 or v > 60 * 24 * 7:
+            raise ValueError("interval_minutes must be between 15 minutes and 7 days")
+        return v
+
+    @field_validator("alert_drop_threshold")
+    @classmethod
+    def validate_threshold(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError("alert_drop_threshold must be between 0.0 and 1.0")
+        return v
+
+
+class ScheduleUpdate(BaseModel):
+    name: str | None = None
+    interval_minutes: int | None = None
+    metrics: list[str] | None = None
+    alert_drop_threshold: float | None = None
+    webhook_url: str | None = None
+    enabled: bool | None = None
+
+    @field_validator("interval_minutes")
+    @classmethod
+    def validate_interval(cls, v: int | None) -> int | None:
+        if v is not None and (v < 15 or v > 60 * 24 * 7):
+            raise ValueError("interval_minutes must be between 15 minutes and 7 days")
+        return v
+
+    @field_validator("alert_drop_threshold")
+    @classmethod
+    def validate_threshold(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0.0 or v > 1.0):
+            raise ValueError("alert_drop_threshold must be between 0.0 and 1.0")
+        return v
+
+
 class JudgeCalibrationApply(BaseModel):
     """Explicit judge panel, or empty to apply the calibration recommendation."""
 

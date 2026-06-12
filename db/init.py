@@ -347,6 +347,32 @@ CREATE TABLE IF NOT EXISTS custom_metrics (
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    bot_config_id INTEGER NOT NULL REFERENCES bot_configs(id),
+    test_set_id INTEGER NOT NULL REFERENCES test_sets(id),
+    metrics_json TEXT NOT NULL,
+    interval_minutes INTEGER NOT NULL,
+    alert_drop_threshold REAL NOT NULL DEFAULT 0.1,
+    webhook_url TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_run_at TIMESTAMP,
+    last_experiment_id INTEGER REFERENCES experiments(id),
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS schedule_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    experiment_id INTEGER REFERENCES experiments(id),
+    baseline_experiment_id INTEGER REFERENCES experiments(id),
+    drops_json TEXT NOT NULL,
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS sweeps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
