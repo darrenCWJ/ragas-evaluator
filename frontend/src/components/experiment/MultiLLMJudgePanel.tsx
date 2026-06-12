@@ -352,7 +352,7 @@ export default function MultiLLMJudgePanel({
         setSavingKey(null);
       }
     },
-    [projectId, experimentId, resultId],
+    [projectId, experimentId, resultId, onAnnotationChange],
   );
 
   if (loading) {

@@ -1100,8 +1100,10 @@ export interface WorkerTask {
 export interface WorkerInfo {
   url: string;
   reachable: boolean;
+  is_local?: boolean;
   status?: string;
   rss_mb?: number | null;
+  peak_rss_mb?: number | null;
   tasks?: WorkerTask[];
   active_kg_builds?: number;
   active_persona_builds?: number;

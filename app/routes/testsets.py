@@ -26,7 +26,6 @@ from config import (
     KG_SUBPROCESS_TIMEOUT,
     KG_THREAD_MODE,
     KG_WORKER_URLS,
-    MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
     MAX_UPLOAD_SIZE,
 )
@@ -141,76 +140,11 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 detail="A test set is already being generated for this project",
             )
 
-    # Determine how to source the chunk texts.
-    #
-    # Option A — use_kg_as_source=True:
-    #   Load node page_content directly from the stored KG.  No chunk config
-    #   required.  Always reuses the stored KG (no hash check, no rebuild).
-    #
-    # Option B — Graph RAG Documents only:
-    #   No chunks needed; the Graph RAG path loads its own document KG.
-    #
-    # Option C — normal (default):
-    #   Load chunks from the specified chunk_config_id.
+    # Determine how to source the chunk texts (KG-as-source, Graph RAG
+    # documents only, or a chunk config) — shared with the worker service.
+    from app.services.testset_chunks import load_generation_chunks
 
-    _GRAPH_RAG_ONLY_CATS = {"bridge", "comparative", "community"}
-
-    chunks: list[str] = []
-
-    if req.use_kg_as_source:
-        import json as _json
-
-        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
-
-        _kg_json = _load_full_kg_json(project_id, "chunks")
-        if _kg_json is None:
-            raise HTTPException(
-                status_code=422,
-                detail="No complete knowledge graph found for this project. Build a knowledge graph first.",
-            )
-        _nodes = _json.loads(_kg_json).get("nodes", [])
-        chunks = [
-            n.get("properties", {}).get("page_content", "")
-            for n in _nodes
-            if n.get("properties", {}).get("page_content", "").strip()
-        ]
-        if not chunks:
-            raise HTTPException(
-                status_code=422,
-                detail="Knowledge graph exists but contains no node content.",
-            )
-    elif not (
-        req.graph_rag_kg_source == "documents"
-        and req.question_categories
-        and set(req.question_categories.keys()) <= _GRAPH_RAG_ONLY_CATS
-    ):
-        if req.chunk_config_id is None:
-            raise HTTPException(status_code=422, detail="chunk_config_id required unless using only Graph RAG (Documents) categories")
-
-        cc = conn.execute(
-            "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
-            (req.chunk_config_id, project_id),
-        ).fetchone()
-        if cc is None:
-            raise HTTPException(status_code=404, detail="Chunk config not found")
-
-        chunk_rows = conn.execute(
-            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
-            (req.chunk_config_id,),
-        ).fetchall()
-        if not chunk_rows:
-            raise HTTPException(
-                status_code=422,
-                detail="No chunks found for this config. Generate chunks first.",
-            )
-
-        if MAX_CHUNKS_FOR_GENERATION > 0 and len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Too many chunks ({len(chunk_rows)}). Maximum {MAX_CHUNKS_FOR_GENERATION} supported for test generation.",
-            )
-
-        chunks = [r["content"] for r in chunk_rows]
+    chunks = load_generation_chunks(conn, project_id, req)
 
     total_chunks = len(chunks)
 
