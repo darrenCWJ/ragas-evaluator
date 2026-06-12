@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-RAG Evaluator â€” an LLM-as-a-judge platform for testing and improving RAG chatbots. Configures RAG pipelines, generates synthetic test sets, runs evaluation experiments against 20+ metrics, and produces actionable suggestions.
+RAG Evaluator — an LLM-as-a-judge platform for testing and improving RAG chatbots. Configures RAG pipelines, generates synthetic test sets, runs evaluation experiments against 20+ metrics, and produces actionable suggestions.
 
 ## Commands
 
@@ -16,7 +16,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 # Frontend (separate terminal)
 cd frontend && npm install && npm run dev   # dev server on :5173
-cd frontend && npm run build                # production build â†’ frontend/dist/
+cd frontend && npm run build                # production build → frontend/dist/
 
 # Docker (full stack)
 docker compose up --build
@@ -32,26 +32,26 @@ pytest --cov=app --cov=evaluation --cov=pipeline --cov-report=term-missing
 ## Architecture
 
 ```
-main.py â†’ loads .env, imports app from app/__init__.py
-app/__init__.py â†’ create_app() factory: lifespan (init_db, cleanup), CORS, router registration, SPA catch-all
-app/routes/ â†’ 16 route modules, each exports `router = APIRouter(prefix=..., tags=[...])`
-app/models.py â†’ all Pydantic request/response models
-config.py â†’ centralized env-var-driven configuration (paths, model defaults, thresholds, limits)
-db/init.py â†’ SQLite schema, migrations, all DB query functions (single module)
-pipeline/ â†’ RAG engine: chunking.py, embedding.py, vectorstore.py (ChromaDB), bm25.py, rag.py, llm.py
-evaluation/ â†’ metrics/, scoring.py (orchestration), suggestions.py (rule engine), testgen.py (synthetic QA)
-frontend/ â†’ React 18 + TypeScript + Vite + Tailwind SPA
+main.py → loads .env, imports app from app/__init__.py
+app/__init__.py → create_app() factory: lifespan (init_db, cleanup), CORS, router registration, SPA catch-all
+app/routes/ → 16 route modules, each exports `router = APIRouter(prefix=..., tags=[...])`
+app/models.py → all Pydantic request/response models
+config.py → centralized env-var-driven configuration (paths, model defaults, thresholds, limits)
+db/init.py → SQLite schema, migrations, all DB query functions (single module)
+pipeline/ → RAG engine: chunking.py, embedding.py, vectorstore.py (ChromaDB), bm25.py, rag.py, llm.py
+evaluation/ → metrics/, scoring.py (orchestration), suggestions.py (rule engine), testgen.py (synthetic QA)
+frontend/ → React 18 + TypeScript + Vite + Tailwind SPA
 ```
 
 ### Key data flow
 
-1. **App startup**: `main.py` â†’ `app/__init__.py:lifespan()` â†’ `db.init.init_db()` creates/migrates SQLite at `data/ragas.db` (WAL mode)
-2. **Experiment execution**: `app/routes/experiments.py` streams progress via SSE â†’ calls `evaluation/scoring.py` which dynamically imports metric functions from `evaluation/metrics/`
+1. **App startup**: `main.py` → `app/__init__.py:lifespan()` → `db.init.init_db()` creates/migrates SQLite at `data/ragas.db` (WAL mode)
+2. **Experiment execution**: `app/routes/experiments.py` streams progress via SSE → calls `evaluation/scoring.py` which dynamically imports metric functions from `evaluation/metrics/`
 3. **SPA serving**: Built frontend in `frontend/dist/` is served by FastAPI static files mount; all `/app/*` routes fall through to `index.html`
 
 ### Key patterns
 
-- **Database**: Single shared `sqlite3.Connection` in `db/init.py` (module-level `_connection`). All DB access is through functions in that module â€” no ORM.
+- **Database**: Single shared `sqlite3.Connection` in `db/init.py` (module-level `_connection`). All DB access is through functions in that module — no ORM.
 - **Metrics**: Each file in `evaluation/metrics/` exports a single async function. Wired into `scoring.py` which maintains `ALL_METRICS` list and a dispatch map.
 - **LLM routing**: `pipeline/llm.py` handles OpenAI, Anthropic, Google GenAI. Bot connectors (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) configured via `app/routes/bot_configs.py`.
 - **Config**: All tuneable values live in `config.py`, reading from env vars with defaults. Validation sets (`VALID_CHUNK_METHODS`, `VALID_SEARCH_TYPES`, etc.) are also here.
@@ -60,23 +60,23 @@ frontend/ â†’ React 18 + TypeScript + Vite + Tailwind SPA
 ## Database
 
 - **Local / self-hosted**: SQLite at `data/ragas.db` (created on first run via `db/init.py`), WAL mode enabled
-- **Server / production**: PostgreSQL via `DATABASE_URL` env var (e.g. Neon) â€” auto-detected in `db/init.py`
-- Schema and all migrations in `db/init.py` â€” no separate migration files
+- **Server / production**: PostgreSQL via `DATABASE_URL` env var (e.g. Neon) — auto-detected in `db/init.py`
+- Schema and all migrations in `db/init.py` — no separate migration files
 - Query functions also live in `db/init.py` (single-module data layer)
 
 ## Deployment Modes
 
-- **Self-host**: `docker compose up --build` â€” serves on `PORT` (default 8000), SQLite storage in `./data/`
+- **Self-host**: `docker compose up --build` — serves on `PORT` (default 8000), SQLite storage in `./data/`
 - **Server (Northflank + Neon)**: Dockerfile exposes port 3000, `PORT` set by platform, `DATABASE_URL` points to Neon PostgreSQL
 - **Local dev**: `uvicorn main:app --reload` + `cd frontend && npm run dev` (Vite on :5173)
 
 ## Environment Variables
 
-- `OPENAI_API_KEY` (required) â€” OpenAI API access
-- `RAGAS_API_KEY` (optional but recommended) â€” Bearer token auth; without it all endpoints are public
-- `DATABASE_URL` (optional) â€” PostgreSQL connection string; defaults to SQLite if unset
-- `PORT` (optional) â€” server port; defaults to 3000 in Dockerfile, 8000 in docker-compose
-- `CORS_ORIGINS` (optional) â€” comma-separated allowed origins (default: `localhost:3000,localhost:5173`)
+- `OPENAI_API_KEY` (required) — OpenAI API access
+- `RAGAS_API_KEY` (optional but recommended) — Bearer token auth; without it all endpoints are public
+- `DATABASE_URL` (optional) — PostgreSQL connection string; defaults to SQLite if unset
+- `PORT` (optional) — server port; defaults to 3000 in Dockerfile, 8000 in docker-compose
+- `CORS_ORIGINS` (optional) — comma-separated allowed origins (default: `localhost:3000,localhost:5173`)
 - See `.env.example` for full list: storage paths, default models, timeouts, batch sizes, suggestion thresholds
 
 ## Testing

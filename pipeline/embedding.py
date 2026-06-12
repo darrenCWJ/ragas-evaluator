@@ -7,6 +7,7 @@ Supports multiple embedding strategies with type-based dispatch:
 
 import asyncio
 import functools
+import inspect
 
 from openai import AsyncOpenAI
 
@@ -29,10 +30,16 @@ def _get_openai_embed_client() -> AsyncOpenAI:
 
 
 async def close_openai_embed_client() -> None:
-    """Close module-level embedding OpenAI client. Call during app shutdown."""
+    """Close module-level embedding OpenAI client. Call during app shutdown.
+
+    Defensive about the close result: tests may swap the client for a mock
+    whose close() is synchronous — shutdown must never raise over that.
+    """
     global _openai_embed_client
     if _openai_embed_client is not None:
-        await _openai_embed_client.close()
+        result = _openai_embed_client.close()
+        if inspect.isawaitable(result):
+            await result
         _openai_embed_client = None
 
 

@@ -302,3 +302,43 @@ Suggestions can be applied individually or in batch to create a new experiment c
 **What it does:** Stream knowledge graph nodes and edges via SSE as the KG is built. The frontend renders the graph incrementally using Sigma.js with force-directed layout, allowing you to inspect entities, relationships, and community structure in real time.
 
 **Why:** Understanding what entities and relationships the KG has extracted helps diagnose test generation quality — if the graph misses key concepts, the generated questions will too.
+
+---
+
+## Skill Arena
+
+**What it does:** Tests how well different AI models follow a *skill file* — a SKILL.md-style instruction document injected as system context. Upload a skill, pick the models to compare (any judge-eligible LLM and/or your configured bot connectors), pick an approved test set, and run a matrix:
+
+```
+(skill | no-skill baseline) × (selected models) × (test questions)
+```
+
+On upload the skill is distilled into a checklist of testable directives (behavior / format / prohibition / tone). Every response — including baseline responses — is judged against that checklist by an LLM judge with per-directive pass/fail verdicts; mechanically verifiable format rules (valid JSON, bullet usage, word caps) are checked deterministically and override the judge.
+
+**Scores:**
+
+| Metric | Meaning |
+|---|---|
+| `skill_adherence` | passed ÷ (passed + failed) directives, per response |
+| `format_compliance` | deterministic format checks only |
+| `skill_lift` | per-model adherence delta vs the no-skill baseline — the headline number |
+
+Each matrix cell also records tokens in/out and latency, so "follows the skill best" can be weighed against cost.
+
+**Step tracing:** every trial cell records a span timeline (`prepare → query → judge`) with durations and errors, viewable in the drill-down. Set `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (and `pip install langfuse`) to also export every trace to Langfuse; the built-in timeline works without it.
+
+**Apply the winner:** one click sets the best model as the project's `preferred_model`, which downstream config forms read as their default.
+
+**Why:** Skill files behave differently across models — one model follows format rules religiously but ignores prohibitions, another inverts that. Spot-checking can't quantify this; a judged matrix with a baseline can.
+
+---
+
+## Memory & Storage Controls
+
+**What it does:** Keeps KG builds, test generation, and evaluation inside RAM/disk budgets:
+
+- KG JSON is stored zlib-compressed (`KG_COMPRESSION=false` to disable) — typically 10–25× smaller.
+- `KG_SUBPROCESS_MAX_RSS_MB` caps KG build subprocess memory via RLIMIT_AS (Linux).
+- KG transforms run batched with per-batch checkpoint persistence — a hard kill (OOM, timeout) loses one batch, not the step; resumed builds skip already-processed nodes.
+- Per-batch `gc` + `malloc_trim` returns freed memory to the OS; RSS is logged each step.
+- `POST /api/system/maintenance` reclaims space on demand: WAL checkpoint, optional `VACUUM`, stale progress eviction, and release of cached reranker/sentence-transformer models.

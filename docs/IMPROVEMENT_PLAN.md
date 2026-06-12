@@ -1,8 +1,27 @@
-# RAG Evaluator — Full Critique & Improvement Plan
+# Tribunal (RAG Evaluator) — Full Critique & Improvement Plan
 
 > Generated 2026-06-12 from a complete audit of every layer: backend routes, DB layer,
 > evaluation engine, RAG pipeline, worker service, React frontend, tests, CI, config,
 > deployment, and docs. This is the working plan for the v0.4+ overhaul.
+
+## Execution status (updated 2026-06-12)
+
+| Phase | Status | Commits |
+|---|---|---|
+| 0 — Repo hygiene & tooling | ✅ Done | `adc2c069` |
+| 1 — Critical correctness fixes | ✅ Done | `c58b255e` |
+| 2 — Backend restructure (worker fork eliminated, ghost features closed) | ✅ Done (lean: services extracted incrementally — ProgressStore, skill_trials, tracing; full experiments.py/testsets.py decomposition deferred) | `a809dd2e` |
+| 2.5 — Memory & storage optimization | ✅ Done (KG zlib compression, RLIMIT_AS cap, maintenance endpoint, per-batch checkpoints + gc/malloc_trim) | `6ad82c34` |
+| 3 — Frontend restructure | 🟡 Partial: api.ts split into 15 domain modules, 12 UI primitives, useFetch/usePolling/useConfirm hooks, ErrorBoundary. **Deferred:** TestSetGenerate/ExperimentRunner/KGGraphView god-component splits and the codebase-wide primitive sweep | `0b29eb13`, `a5d705e2` |
+| 4 — Test & CI hardening | 🟡 Partial: ruff+eslint+prettier in CI, strict markers verified, 23 new mocked-LLM tests for Skill Arena (the fake-LLM pattern to extend). **Deferred:** route tests for testsets/analyze/personas/custom_metrics, Vitest setup, concurrency tests | (rolled into other commits) |
+| 5 — Skill Arena (+ model compare/apply + Langfuse tracing) | ✅ Done | `b2181249`, `d61a79d7` |
+| 6 — Polish & docs | ✅ Done (FEATURES.md, README, this status table). **Deferred:** request-id middleware, CODEMAPS regeneration | (this commit) |
+
+### Recommended next steps (deferred work, in priority order)
+1. Split `TestSetGenerate.tsx` (1.9k lines) and `ExperimentRunner.tsx` (1.2k) using the now-existing hooks/primitives; ratchet `react-hooks/set-state-in-effect` and `react-hooks/refs` back to `error` in eslint.config.js afterwards.
+2. Route tests for the four untested backend modules using the mocked-LLM pattern from `tests/integration/test_skill_routes.py`.
+3. Extract `app/services/experiment_runner.py` from `experiments.py`'s `_run_background` (the route file is still ~2.3k lines).
+4. Vitest + RTL smoke tests; request-id logging middleware.
 
 ---
 
