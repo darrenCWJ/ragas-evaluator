@@ -21,9 +21,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Ensure app loggers output to console (uvicorn only shows its own by default)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
+# Ensure app loggers output to console (uvicorn only shows its own by default).
+# Every record carries the per-request id (see app/services/request_context.py)
+# so one request's log lines can be grepped together; "-" outside a request.
+# The formatter default covers records emitted during app import, before the
+# RequestIDFilter (which lives inside the app package) can be attached.
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(
+    logging.Formatter(
+        "%(levelname)s:%(name)s:[%(request_id)s] %(message)s",
+        defaults={"request_id": "-"},
+    )
+)
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler])
 
 from app import app  # noqa: E402
+from app.services.request_context import RequestIDFilter  # noqa: E402
+
+_console_handler.addFilter(RequestIDFilter())
 
 __all__ = ["app"]

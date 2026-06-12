@@ -34,6 +34,7 @@ from app.routes import (
     system,
     testsets,
 )
+from app.services.request_context import RequestIDMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,9 @@ class _AuthMiddleware(BaseHTTPMiddleware):
 def create_app() -> FastAPI:
     application = FastAPI(title="Tribunal — RAG Evaluator", version="0.4.1-alpha", lifespan=lifespan)
 
+    # Middleware execution order is the reverse of registration: RequestID is
+    # registered last so it runs OUTERMOST — even auth-rejected and CORS
+    # responses carry a correlatable X-Request-ID.
     application.add_middleware(_AuthMiddleware)
     application.add_middleware(
         CORSMiddleware,
@@ -198,6 +202,7 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
     )
+    application.add_middleware(RequestIDMiddleware)
 
     # Register routers
     application.include_router(health.router)
