@@ -27,7 +27,27 @@ from evaluation.scoring import ALL_METRICS
 MAX_WAIT = 600
 POLL_INTERVAL = 5
 
-_ALL_METRICS = list(ALL_METRICS)
+# Metrics whose scores only materialize under runtime conditions the mock
+# Glean bot doesn't produce: configured judge panels (multi_llm_judge) or an
+# agent trace / topic lists (tool_call_*, agent_goal_accuracy, topic_adherence).
+_RUNNER_CONDITIONAL = {
+    "multi_llm_judge",
+    "tool_call_f1",
+    "tool_call_accuracy",
+    "agent_goal_accuracy",
+    "topic_adherence",
+}
+
+# Metrics gated on per-question metadata this fixture doesn't carry
+# (see evaluation.capabilities.METRIC_REQUIREMENTS) — requesting them
+# is rejected with 422 by the run endpoint.
+_NEEDS_EXTRA_DATA = {
+    "conversation_retention",  # multi-turn "turns" metadata
+    "sql_semantic_equivalence",  # reference_sql metadata
+    "datacompy_score",  # reference_data metadata
+}
+
+_ALL_METRICS = [m for m in ALL_METRICS if m not in _RUNNER_CONDITIONAL | _NEEDS_EXTRA_DATA]
 
 _DETERMINISTIC = [
     "bleu_score", "rouge_score", "chrf_score", "exact_match",
@@ -144,6 +164,9 @@ def _start_server(tmp_dir, port):
         "DATABASE_PATH": db_path,
         "CHROMADB_PATH": str(tmp_dir / "chromadb"),
         "PYTHONUNBUFFERED": "1",
+        # The mock Glean server lives on 127.0.0.1, which the SSRF guard
+        # rejects by default — allow private endpoints for this test only.
+        "ALLOW_PRIVATE_ENDPOINTS": "true",
     }
     # Redirect stdout to devnull to prevent pipe buffer from blocking the server
     proc = subprocess.Popen(
@@ -257,14 +280,16 @@ class TestGleanExperiment:
         )
         conn.commit()
         tsid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        # category tags the question so the dataset gains the CATEGORY
+        # capability — without it refusal_accuracy is rejected with 422.
         conn.execute(
             "INSERT INTO test_questions (test_set_id, question, reference_answer, "
-            "reference_contexts, question_type, status) VALUES (?,?,?,?,?,?)",
+            "reference_contexts, question_type, status, category) VALUES (?,?,?,?,?,?,?)",
             (tsid, "What is RAG and how does it reduce hallucination?",
              "RAG combines retrieval with generation and reduces hallucination by anchoring output in source material.",
              json.dumps(["RAG is a technique that combines retrieval with generation.",
                          "RAG reduces hallucination by anchoring output in real sources."]),
-             "manual", "approved"),
+             "manual", "approved", "in_knowledge_base"),
         )
         conn.commit()
         conn.close()
@@ -319,10 +344,14 @@ class TestGleanExperiment:
               f"{len(citations)} citations, {len(contexts)} contexts")
 
     def test_all_scoring_paths_covered(self):
-        """Verify _ALL_METRICS covers every scoring code path."""
+        """Verify _ALL_METRICS covers every scoring code path.
+
+        metadata_sql / metadata_data need per-question reference SQL/data the
+        fixture doesn't carry — same exclusion as the CSV experiment test.
+        """
         from evaluation.scoring import _SCORE_SIGNATURES
         tested = {sig for sig, mset in _SCORE_SIGNATURES.items() if mset & set(_ALL_METRICS)}
-        untested = set(_SCORE_SIGNATURES.keys()) - tested
+        untested = set(_SCORE_SIGNATURES.keys()) - tested - {"metadata_sql", "metadata_data"}
         assert not untested, f"Untested scoring paths: {untested}"
 
     def test_glean_bot_config_crud(self, tmp_path):
