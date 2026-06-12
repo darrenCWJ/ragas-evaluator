@@ -8,7 +8,7 @@ This directory contains architectural maps of the Tribunal (RAG Evaluator) codeb
 
 Tribunal is an LLM-as-a-judge platform for testing AI agents — internal RAG pipelines built in-app, or external agents called via API — with a full diagnose → fix → verify loop. The codebase is split into:
 
-1. **Main Application** (`/`) — FastAPI server, auth, RAG pipeline, 26 metrics, suggestion engine + prompt doctor, Skill Arena, insights (quality audit / coverage / breakdowns / CI gate)
+1. **Main Application** (`/`) — FastAPI server, auth, RAG pipeline (query expansion/HyDE, score threshold, MMR, small-to-big, KG-assisted retrieval, reranker), 26 metrics, suggestion engine + prompt doctor, Skill Arena, parameter sweeps, scheduled regression runs, judge calibration, log import + hard-case mining, insights (quality audit / coverage / breakdowns / CI gate)
 2. **Worker Service** (`/worker`) — offloaded KG construction and persona generation; imports the main app's shared modules (no forked code)
 3. **Frontend** (`/frontend`) — React/TypeScript SPA with login, guided Start flow, and live experiment streaming
 
@@ -37,7 +37,7 @@ The load-bearing pieces most other code depends on:
 
 ## Database Schema
 
-Main app and worker share one database (SQLite or PostgreSQL via `DATABASE_URL`), initialized and migrated **only** by `db/init.py` (the worker imports the same module). Core tables: `users`, `project_members`, `projects`, `documents`, `chunk_configs`, `chunks`, `embedding_configs`, `rag_configs`, `test_sets`, `test_questions`, `bot_configs`, `experiments`, `experiment_results`, `suggestions`, `skills`, `skill_trials`, `skill_trial_results`, `knowledge_graphs`, `multi_llm_evaluations`, `personas`, `custom_metrics`, `human_annotations`, `external_baselines`, `source_verifications`.
+Main app and worker share one database (SQLite or PostgreSQL via `DATABASE_URL`), initialized and migrated **only** by `db/init.py` (the worker imports the same module). Core tables: `users`, `project_members`, `projects`, `documents`, `chunk_configs`, `chunks`, `embedding_configs`, `rag_configs`, `test_sets`, `test_questions`, `bot_configs`, `experiments`, `experiment_results`, `suggestions`, `skills`, `skill_trials`, `skill_trial_results`, `sweeps`, `sweep_runs`, `schedules`, `schedule_alerts`, `knowledge_graphs`, `multi_llm_evaluations`, `personas`, `custom_metrics`, `human_annotations`, `external_baselines`, `source_verifications`.
 
 ## Development Workflow
 

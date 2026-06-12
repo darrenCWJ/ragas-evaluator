@@ -33,7 +33,7 @@ What each feature does and the idea behind it.
 | `markdown` | Markdown-aware splitting (headers, code blocks) |
 | `token` | Token-level splitting |
 | `fixed_overlap` | Fixed window with configurable overlap |
-| `parent_child` | Large parent chunks with smaller child chunks for retrieval |
+| `parent_child` | Small-to-big: small child chunks are embedded for precise matching; each child stores its parent window, and retrieval swaps matched children for their parents (sibling-deduplicated) |
 | `semantic` | Embedding-based semantic boundary detection |
 
 Supports a **2-step pipeline** where you chain two strategies sequentially (e.g., markdown split then recursive). Post-chunking quality filters (`filter_params`) remove chunks that are too short, too long, or below a minimum token count. Chunks can be previewed before committing.
@@ -67,11 +67,23 @@ Chunks are stored in ChromaDB (dense) or a BM25 index (sparse). Hybrid search co
 - **single_shot** — standard single-turn retrieval + generation
 - **multi_step** — iterative retrieval over multiple rounds; configurable `max_steps`
 
-**Reranker** — an optional cross-encoder reranker applied after retrieval with a configurable `top_k` cutoff. Reranks the initial candidate list before passing context to the LLM.
+**Reranker** — an optional cross-encoder reranker applied after retrieval with a configurable `top_k` cutoff (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`, `BAAI/bge-reranker-v2-m3`). Reranks the initial candidate list before passing context to the LLM.
 
 Search types: `dense`, `sparse`, `hybrid`.
 
-**Why:** RAG configs encapsulate the entire pipeline so you can test variations systematically. Multi-step mode handles complex queries that need iterative reasoning. Reranking improves precision when the initial retrieval set is noisy.
+**Retrieval quality options** (all per-config, all snapshotted into experiments):
+
+| Option | What it does |
+|---|---|
+| `query_expansion=multi_query` | An LLM rewrites the query N ways (`num_expansions`, 1–8); all variants are retrieved and merged with reciprocal-rank fusion |
+| `query_expansion=hyde` | An LLM drafts a hypothetical answer passage and retrieval matches against it (embedding-space match against answers, not questions) |
+| `score_threshold` | Drops weakly-scored hits instead of blindly keeping top-k (unscored contexts pass through) |
+| `mmr_lambda` | Maximal-marginal-relevance diversity selection over a 3× over-fetched candidate pool — avoids near-duplicate chunks. λ=1 pure relevance, λ=0 pure diversity |
+| `kg_expansion` | Appends 1-hop knowledge-graph neighbours of the retrieved chunks as extra candidates (needs a built chunks-KG; pair with a reranker so the extras get scored) |
+
+Expansion LLM tokens are counted into experiment usage; expansion failures fall back to the plain query so retrieval never dies on a rewrite call.
+
+**Why:** RAG configs encapsulate the entire pipeline so you can test variations systematically. Multi-step mode handles complex queries that need iterative reasoning. Reranking improves precision when the initial retrieval set is noisy. The quality options are individually toggleable so each one's impact can be measured in an experiment (or swept — see Parameter Sweeps).
 
 ---
 
@@ -393,6 +405,42 @@ Missing metrics fail the gate — silence never passes CI.
 - **Honest numbers everywhere** — aggregate metrics display 95% bootstrap confidence intervals, and `retrieval_hit_rate`/`retrieval_mrr` (computed free from question provenance) separate "retrieval missed the source" from "the model botched the answer".
 
 **Why:** without verification, suggestion engines train users to make random changes. With it, every iteration is evidence.
+
+---
+
+## Parameter Sweeps
+
+**What it does:** Grid-search retrieval parameters without burning judge tokens. Pick a base RAG config, a test set, and a grid over sweepable fields (`top_k`, `alpha`, `score_threshold`, `mmr_lambda`, `query_expansion`, `num_expansions`, `reranker_model`/`top_k`, `kg_expansion`, `llm_model`) — capped at 36 combinations. One experiment is created per combination (standard config snapshot, so results are reproducible) and they run sequentially in the background with judge-free default metrics (BLEU/ROUGE/string similarity + embedding similarity).
+
+The **leaderboard** (`GET .../sweeps/{id}/leaderboard`, or the Experiment-page panel) ranks combinations by `retrieval_hit_rate` (free, provenance-based), then overall score. Cancel stops queued runs; the in-flight experiment finishes.
+
+**Why:** "Which top_k is right?" is an empirical question with a cheap, deterministic answer — retrieval hit rate doesn't need an LLM judge. Sweep judge-free, then spend judge tokens only on the one or two finalists.
+
+---
+
+## Scheduled Regression Runs
+
+**What it does:** Re-run a bot-connector test set on an interval (15 minutes to 7 days). Each run's aggregate metrics are compared to the previous scheduled run; any shared metric dropping more than the configured threshold raises an **alert** — stored in-app (badge + per-metric drop detail + acknowledge) and optionally POSTed to a webhook (validated with the same SSRF guard as custom bot endpoints). A "Run now" button triggers an immediate check.
+
+**Why:** External agents change underneath you — model upgrades, prompt edits, index rebuilds. A scheduled regression run with drop alerts catches "the bot got worse last Tuesday" without anyone remembering to re-test.
+
+---
+
+## Judge Calibration
+
+**What it does:** Every multi-LLM-judge evaluation records which model produced it. The calibration report (`GET .../judge-calibration`, or the Analyze-page panel) pairs human annotations with per-model judge scores project-wide and ranks judge models by bucket agreement (accurate / partially accurate / inaccurate) and mean absolute error. Models need 5+ human-paired evaluations and ≥50% agreement to be recommended; one click applies the top models as the project's default judge panel.
+
+**Why:** "Which LLM should judge my domain?" shouldn't be a guess. The human annotations you're already collecting (20% samples) answer it empirically — and the panel that agrees with *your* humans is the right panel for *your* project.
+
+---
+
+## Log Import & Hard-Case Mining
+
+**Log import** (`POST .../test-sets/import-logs`, or the Test-page panel) turns raw production query logs (`.txt` one-per-line, `.csv`, `.jsonl`) into a reference-free test set: trivial (<8 char) and duplicate queries are dropped, the query column is auto-detected, and at most 1000 queries are imported. Score these sets with reference-free metrics (faithfulness, answer relevancy, context metrics).
+
+**Hard-case mining** (`POST .../experiments/{id}/mine-hard-cases`, or the Analyze-page panel) takes a completed experiment's worst-scoring questions (mean metric score below a threshold) and has an LLM write 1–5 harder variants of each — different vocabulary, indirect phrasing, distractors — while the original reference answer stays correct. Variants land in a new test set inheriting reference answers, contexts, and `source_chunk_ids` provenance, so retrieval diagnostics keep working on the mined set.
+
+**Why:** Generated test sets drift from how users actually talk; logs are ground truth for phrasing. And the questions your agent already failed are the best seeds for the next round of tests — mining them closes the evaluation loop on real weaknesses.
 
 ---
 

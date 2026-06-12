@@ -118,7 +118,7 @@ Auth-endpoint exemption: `notifyUnauthorized` skips dispatch for paths starting 
 
 ### `api/types.ts` -- all shared TypeScript interfaces (no runtime code)
 
-### Domain modules (15)
+### Domain modules (18)
 
 | Module | Purpose |
 |--------|---------|
@@ -133,10 +133,13 @@ Auth-endpoint exemption: `notifyUnauthorized` skips dispatch for paths starting 
 | `kg.ts` | KG build/reset/rebuild-links, progress polling, stream graph data (SSE ReadableStream), fetch all KGs, delete |
 | `experiments.ts` | Experiment CRUD, `runExperimentSSE` (POST /run + `observeExperimentProgress`), cancel, progress snapshot, results, export, suggestions, batch apply, prompt doctor, delta, compare, history, source verification |
 | `insights.ts` | Quality audit, corpus coverage, experiment category breakdown |
-| `annotations.ts` | Human annotation sample, create annotation, evaluator accuracy |
+| `annotations.ts` | Human annotation sample, create annotation, evaluator accuracy, judge calibration report + apply |
 | `metrics.ts` | Custom metric CRUD |
 | `workers.ts` | Worker status, clear persona/build tasks |
 | `skills.ts` | Skill CRUD, trial CRUD, trial matrix, trial results, apply preferred model |
+| `sweeps.ts` | Parameter sweep create/list/detail, leaderboard, cancel, delete |
+| `schedules.ts` | Schedule CRUD, run-now, alert list + acknowledge |
+| `mining.ts` | `importLogs` (formRequest), `mineHardCases` |
 
 `lib/api.ts` is a one-line compatibility barrel: `export * from '../api'`
 
@@ -161,9 +164,9 @@ Auth-endpoint exemption: `notifyUnauthorized` skips dispatch for paths starting 
 | `StartPage` | `/start` | Two-path progress card (external-agent vs RAG-pipeline); "What's next" highlight; step rows with completion ticks via four `useFetch` calls |
 | `SetupPage` | `/setup` | Project selection/creation; `BotConnectorConfig`; `ExternalBaselineUpload`; `CustomMetricBuilder`; `CsvUploadsList`; `ProjectMembersPanel` (auth mode only) |
 | `BuildPage` | `/build` | Document upload + list; `ChunkConfigPanel` with chunk preview; `EmbeddingConfigPanel`; `RagConfigPanel`; `PipelineStatus` |
-| `TestPage` | `/test` | Test set list; inline question browser; `TestSetGenerate` wizard; `TestSetUpload` CSV import; `TestSetInsights` quality audit |
-| `ExperimentPage` | `/experiment` | Experiment list; `ExperimentCreate` form; single-experiment `ExperimentRunner` + `useExperimentStream`; multi-select compare (2-5) via `ExperimentCompare`; `ExperimentHistory` trend |
-| `AnalyzePage` | `/analyze` | Completed-experiment selector; `ExperimentResults`; `ExperimentSuggestions` + apply; `ExperimentDelta`; `SourceVerificationPanel`; `HumanAnnotationPanel`; `ProjectReportPanel` |
+| `TestPage` | `/test` | Test set list; inline question browser; `TestSetGenerate` wizard; `TestSetUpload` CSV import; `LogImportPanel` (reference-free sets from query logs); `TestSetInsights` quality audit |
+| `ExperimentPage` | `/experiment` | Experiment list; `ExperimentCreate` form; single-experiment `ExperimentRunner` + `useExperimentStream`; multi-select compare (2-5) via `ExperimentCompare`; `SweepPanel` (grid builder + polling + leaderboard); `SchedulePanel` (CRUD + alerts + ack); `ExperimentHistory` trend |
+| `AnalyzePage` | `/analyze` | Completed-experiment selector; `ExperimentResults`; `ExperimentSuggestions` + apply; `ExperimentDelta`; `SourceVerificationPanel`; `HumanAnnotationPanel`; `JudgeCalibrationPanel`; `HardCaseMiningPanel`; `ProjectReportPanel` |
 | `KnowledgeGraphPage` | `/knowledge-graph` | Cross-project KG list via `KGCard`; graph streaming into `KGGraphView` + `KGNodeDetail` |
 | `PersonasPage` | `/personas` | Inline CRUD for saved personas (edit/delete with confirm) |
 | `SkillsPage` | `/skills` | `SkillLibrary` + `SkillUpload`; `TrialCreate`; `TrialList` -> `TrialMatrix` -> `TrialDrilldown` + `TraceTimeline`; apply preferred model |
@@ -241,6 +244,10 @@ All exported via `components/ui/index.ts` barrel.
 | `ExperimentCreate` | New experiment form: name, test set, RAG config or bot config selector |
 | `ExperimentList` | Sortable list with status badges, compare checkboxes, delete/reset |
 | `HumanAnnotationPanel` | Sample-based human rating (accurate/partial/inaccurate) + evaluator agreement stats |
+| `JudgeCalibrationPanel` | Per-judge-model human-agreement table + one-click apply of the recommended panel |
+| `HardCaseMiningPanel` | Threshold + variants controls; mines worst questions into a new test set |
+| `SweepPanel` | Sweep grid builder, 5s polling while active, per-sweep leaderboard, cancel/delete |
+| `SchedulePanel` | Schedule CRUD, enable/disable, run-now, alert history with acknowledge |
 | `MultiLLMJudgeDashboard` | Judge reliability stats + claim annotation UI |
 | `MultiLLMJudgePanel` | Per-result judge verdict viewer |
 | `QuestionResultRow` | Expandable row: question, response, contexts, per-metric scores with color coding |

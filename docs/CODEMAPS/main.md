@@ -14,18 +14,19 @@
             |
             v
     app/__init__.py: create_app()
-      |-- lifespan: init_db() + _monitor_worker_experiments task + client cleanup
+      |-- lifespan: init_db() + _monitor_worker_experiments + schedule_loop tasks + client cleanup
       |-- _AuthMiddleware (open/user mode, per-project RE check, machine token)
       |-- CORSMiddleware (CORS_ORIGINS env var, default localhost:3000/5173)
-      |-- 19 routers registered
+      |-- RequestIDMiddleware (outermost; X-Request-ID in/out, [request_id] in every log line)
+      |-- 22 routers registered
       |-- SPA catch-all: /app/{path} -> frontend/dist/index.html
       |-- GET / -> RedirectResponse(/app/setup)
 
     Layers:
-      app/routes/      (19 modules -- HTTP handlers)
-      app/services/    (4 modules -- shared state/logic)
+      app/routes/      (22 modules -- thin HTTP handlers)
+      app/services/    (10 modules -- shared state/logic, incl. the experiment run loop)
       evaluation/      (scoring engine, metrics, suggestions, testset quality)
-      pipeline/        (chunking, embedding, vectorstore, bm25, rag, llm, connectors)
+      pipeline/        (chunking, embedding, vectorstore, bm25, rag, kg_retrieval, llm, connectors)
       db/init.py       (schema, dual-backend connection, migrations)
       config.py        (all env-driven constants)
 
@@ -85,7 +86,7 @@ frontend/dist/index.html; 503 with build instructions when dist not found.
 
 ---
 
-## app/routes/ -- 19 Modules
+## app/routes/ -- 22 Modules
 
 | Module | One-line purpose |
 |--------|-----------------|
@@ -107,10 +108,19 @@ frontend/dist/index.html; 503 with build instructions when dist not found.
 | custom_metrics.py | Custom metric CRUD; 6 types: integer_range, similarity, rubrics, instance_rubrics, criteria_judge, reference_judge |
 | multi_llm_judge.py | Fetch judge evaluations, annotation sample, claim annotations, reliability stats |
 | skills.py | Skill CRUD (SKILL.md-style docs), skill trial lifecycle, results, apply-model endpoint |
+| sweeps.py | Parameter sweeps: create+start grid (max 36 combos), list/detail, judge-free leaderboard, cancel, delete |
+| schedules.py | Scheduled regression runs: CRUD, enable/disable, run-now, drop alerts + acknowledge (SSRF-guarded webhook) |
+| mining.py | POST /test-sets/import-logs (reference-free sets from query logs), POST /experiments/{id}/mine-hard-cases |
 | system.py | POST /system/maintenance: WAL checkpoint, VACUUM, progress eviction, cache release, GC |
 
 
 ### experiments.py -- Core Evaluation Loop
+
+Routes are a thin HTTP layer; the background run loop and the shared
+aggregation helpers live in app/services/experiment_runner.py
+(run_experiment_background, sanitize_nan, parse_experiment_row,
+compute_aggregates, aggregate_rows, compute_token_usage,
+retrieval_diagnostics, build_virtual_rag_config_row).
 
 Notable endpoints:
 
@@ -130,8 +140,8 @@ Multi-turn conversation flow (_process_question):
   so conversation_retention metric can see it
 
 Retrieval diagnostics (internal RAG only, no LLM call):
-- _retrieval_diagnostics() computes retrieval_hit_rate and retrieval_mrr
-  against metadata.source_chunk_ids
+- retrieval_diagnostics() (services/experiment_runner.py) computes
+  retrieval_hit_rate and retrieval_mrr against metadata.source_chunk_ids
 
 Worker delegation (bot-connector experiments only):
 - Tries each KG_WORKER_URLS with POST /run-experiment; on 202 sets
@@ -201,6 +211,46 @@ HTML report: server-rendered; bootstrap_ci, breakdown, suggestions with outcome 
 - TraceRecorder: context-manager span() with wall time, status, attrs
 - Optional Langfuse export; supports Langfuse v2 and v3 APIs
 
+### experiment_runner.py -- background run loop (extracted from routes)
+- run_experiment_background(experiment_id, project_id, experiment, selected_metrics,
+  all_custom_rows, req, cancel_event) -- full lifecycle after the route claims the
+  experiment: scorer setup, concurrent question fan-out (semaphore), judge passes
+  (multi-LLM / criteria / reference), progress updates, cancellation, final status
+- Shared helpers used by several route modules: sanitize_nan, parse_experiment_row,
+  compute_aggregates, aggregate_rows, compute_token_usage, retrieval_diagnostics,
+  build_virtual_rag_config_row
+
+### sweep_service.py -- parameter sweeps
+- expand_grid() cartesian product (sorted keys); SWEEPABLE_FIELDS + 36-combo cap in models.py
+- run_sweep_background(sweep_id) -- one experiment per combo, sequential, judge-free
+  default metrics; cancellation checked between runs
+- sweep_leaderboard() -- per-combo aggregates ranked by retrieval_hit_rate then overall
+
+### schedule_service.py -- scheduled regression runs
+- schedule_loop() -- 60s ticker started in lifespan; find_due_schedules() by interval
+- run_scheduled_check(schedule_id) -- runs a bot experiment, compares aggregates to the
+  previous scheduled run, detect_drops() beyond alert_drop_threshold -> schedule_alerts
+  row + best-effort webhook POST
+- last_run_at stamped before running so a crash cannot tight-loop
+
+### judge_calibration.py
+- judge_calibration_report(conn, project_id) -- pairs human_annotations with per-model
+  multi_llm_evaluations (model column; NULL/custom-metric rows excluded); agreement on
+  accurate/partial/inaccurate buckets + mean abs error; recommendation needs 5+ pairs
+  and >=50% agreement
+- apply_judge_assignments() -- writes projects.judge_model_assignments_json
+
+### case_mining.py
+- clean_log_queries() -- trivial (<8 chars) + duplicate filtering, 1000 cap
+- find_hard_cases() -- results with mean numeric metric score below threshold, worst first
+- mine_hard_cases() -- LLM variants (semaphore 4) into a provenance-preserving test set;
+  all-failure runs leave no empty test set
+
+### request_context.py
+- request_id_var ContextVar; RequestIDMiddleware (X-Request-ID in/out, sanitized);
+  RequestIDFilter stamps [request_id] on every log record; background tasks inherit
+  the id via contextvars
+
 ---
 
 ## pipeline/
@@ -220,11 +270,24 @@ ChromaDB calls wrapped in asyncio.to_thread() from rag.py (blocking API).
 ### bm25.py
 build_bm25_index(), search_bm25(), persistent pickle indices in BM25_PATH.
 
-### rag.py -- dense / sparse / hybrid RRF + reranker + multi-step
-- single_shot_query -- retrieve -> truncate -> LLM
-- multi_step_query -- up to max_steps: retrieve -> reason -> refine query
+### rag.py -- dense / sparse / hybrid RRF + retrieval quality + reranker + multi-step
+- single_shot_query -- _retrieve_enhanced -> rerank -> truncate -> LLM
+- multi_step_query -- up to max_steps: _retrieve_enhanced -> reason -> refine query
+- _retrieve_enhanced() pipeline: query expansion (multi_query rewrites RRF-fused, or
+  HyDE hypothetical-passage retrieval; failures fall back to the plain query) ->
+  score_threshold cut -> MMR diversity over 3x over-fetch (token-set Jaccard) ->
+  optional KG neighbour expansion -> small-to-big parent swap (_expand_to_parents,
+  parent_key/parent_content metadata from parent_child chunk sets, sibling dedupe)
 - Hybrid: parallel dense + sparse, RRF merge (alpha weight), optional reranker
 - _truncate_contexts() -- drops lowest-scored contexts to fit CONTEXT_CHAR_BUDGET
+- Expansion LLM tokens are added into the returned usage
+
+### kg_retrieval.py -- KG-assisted retrieval
+- Parses stored KG JSON directly (no ragas import on the query path; local zlib64 decode)
+- KGIndex: content -> node id, adjacency sorted by edge score; one cached index per KG row
+- build_index() is CPU-heavy -- called via asyncio.to_thread from rag.py
+- select_neighbours() 1-hop expansion (deduped, capped); attach_chunk_ids() maps
+  neighbour content back to chunk rows for provenance
 
 ### llm.py -- provider routing + gateway mode
 - _LLM_GATEWAY_MODE: when OPENAI_BASE_URL set, all models route via OpenAI client
@@ -378,7 +441,7 @@ Connection model:
     POST /api/projects/1/experiments/10/run
       |-- atomic UPDATE status to running
       |-- try worker delegation (bot exps only) -> set_worker or run local
-      |-- asyncio.create_task(_run_background)
+      |-- asyncio.create_task(run_experiment_background)   # app/services/experiment_runner.py
       |   |-- setup_scorers()
       |   |-- Semaphore(concurrency) limits parallel questions
       |   |-- for each question:

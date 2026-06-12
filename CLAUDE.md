@@ -33,18 +33,24 @@ pytest --cov=app --cov=evaluation --cov=pipeline --cov-report=term-missing
 
 ```
 main.py → loads .env, imports app from app/__init__.py
-app/__init__.py → create_app() factory: lifespan (init_db, worker monitor), _AuthMiddleware
-                  (sessions + per-project access; open mode until a user registers),
+app/__init__.py → create_app() factory: lifespan (init_db, worker monitor, schedule ticker),
+                  _AuthMiddleware (sessions + per-project access; open mode until a user
+                  registers), RequestIDMiddleware (outermost — X-Request-ID log correlation),
                   CORS, router registration, SPA catch-all
-app/routes/ → 19 route modules, each exports `router = APIRouter(prefix=..., tags=[...])`
-              (incl. auth.py, insights.py, skills.py, system.py)
+app/routes/ → 22 route modules, each exports `router = APIRouter(prefix=..., tags=[...])`
+              (incl. auth.py, insights.py, skills.py, sweeps.py, schedules.py, mining.py)
 app/services/ → shared business logic: auth.py (argon2 + session cookies + access checks),
-                progress.py (lock-guarded run-state, used by SSE), skill_trials.py, tracing.py
+                progress.py (lock-guarded run-state, used by SSE), experiment_runner.py
+                (background run loop + aggregation helpers), sweep_service.py,
+                schedule_service.py, judge_calibration.py, case_mining.py,
+                request_context.py, skill_trials.py, tracing.py
 app/models.py → all Pydantic request/response models
 config.py → centralized env-var-driven configuration (paths, model defaults, thresholds, limits)
 db/init.py → schema, migrations, SQLite/PostgreSQL dual backend (single module, no ORM)
-pipeline/ → RAG engine: chunking.py, embedding.py, vectorstore.py (ChromaDB), bm25.py, rag.py,
-            llm.py (multi-provider routing), retry.py (backoff for ALL LLM/HTTP calls),
+pipeline/ → RAG engine: chunking.py, embedding.py, vectorstore.py (ChromaDB), bm25.py, rag.py
+            (retrieval + query expansion/HyDE, score threshold, MMR, small-to-big parent swap),
+            kg_retrieval.py (KG neighbour expansion), llm.py (multi-provider routing),
+            retry.py (backoff for ALL LLM/HTTP calls),
             bot_connectors/ (7 connectors; all accept system_context + history kwargs)
 evaluation/ → metrics/ (26 modules), skills/ (skill parsing + adherence), scoring.py
               (orchestration + retries), suggestions.py (rule engine + guardrail snippets),
@@ -58,7 +64,7 @@ frontend/ → React 18 + TS + Vite + Tailwind SPA: src/api/ (typed client per do
 ### Key data flow
 
 1. **App startup**: `main.py` → `app/__init__.py:lifespan()` → `db.init.init_db()` creates/migrates SQLite at `data/ragas.db` (WAL mode)
-2. **Experiment execution**: `app/routes/experiments.py` streams progress via SSE → calls `evaluation/scoring.py` which dynamically imports metric functions from `evaluation/metrics/`
+2. **Experiment execution**: `app/routes/experiments.py` (thin HTTP layer) claims the experiment and streams progress via SSE; the run loop lives in `app/services/experiment_runner.py` → calls `evaluation/scoring.py` which dynamically imports metric functions from `evaluation/metrics/`
 3. **SPA serving**: Built frontend in `frontend/dist/` is served by FastAPI static files mount; all `/app/*` routes fall through to `index.html`
 
 ### Key patterns

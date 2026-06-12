@@ -4,7 +4,18 @@
 > evaluation engine, RAG pipeline, worker service, React frontend, tests, CI, config,
 > deployment, and docs. This is the working plan for the v0.4+ overhaul.
 
-## Execution status (updated 2026-06-13 — verified against code, not memory)
+## ✅ PLAN CLOSED — 2026-06-12
+
+**Every phase (0–12), every remaining-work item (1–13), the frontend panels, and the
+docs refresh are complete.** All work is on `feat/v0.4-overhaul` / PR #54
+(github.com/darrenCWJ/tribunal), verified green: `ruff check .`, 547+ non-slow backend
+tests, 46 frontend Vitest tests, tsc/eslint (0 errors)/prettier/production build.
+The only open action is **merging PR #54**. Routine items that outlived the plan
+(eslint warn→error ratchet once legacy-page warnings are cleared; the "Known quirks"
+list below) are ordinary maintenance, not plan work. This document is now a
+historical record — the CODEMAPS and FEATURES docs are the living references.
+
+## Execution status (updated 2026-06-12 — verified against code, not memory)
 
 > **Session handoff notes (read first in a fresh session):**
 > - All work lives on branch **`feat/v0.4-overhaul`**, fully pushed — **PR #54**
@@ -17,7 +28,7 @@
 >   `frontend/`: `npx tsc --noEmit && npm run build && npx eslint src`.
 > - A `langchain_community.chat_models.vertexai` stub is needed to import ragas
 >   outside pytest — copy the pattern from `tests/conftest.py`.
-> - Known pre-existing quirk: eslint has 77 warnings baseline (react-hooks v7
+> - Known pre-existing quirk: eslint has a ~71-warning baseline (react-hooks v7
 >   compiler rules at 'warn'); 0 errors is the gate.
 
 | Phase | Status | Commits |
@@ -27,7 +38,7 @@
 | 2 — Backend restructure: worker fork DELETED (worker imports root modules; Docker builds from repo root), ghost features closed (instance_rubrics, Glean-as-LLM, token tracking) | ✅ Done | `a809dd2e` |
 | 2.5 — Memory & storage: KG zlib compression (~25x), RLIMIT_AS subprocess cap, /api/system/maintenance, per-batch KG checkpoints + gc/malloc_trim | ✅ Done | `6ad82c34` |
 | 3 — Frontend restructure: api.ts → 15 domain modules, 12 ui/ primitives, useFetch/usePolling/useConfirm/useSSE hooks, ErrorBoundary, god-component splits (TestSetGenerate → generate/, ExperimentRunner → runner/) | ✅ Done | `0b29eb13`, `a5d705e2`, `25ca083b` |
-| 4 — Tests & CI: mocked-LLM pattern, strict markers, route tests for ALL legacy modules (testsets/analyze/personas/custom_metrics/auth/conversation) — 36 backend test files | ✅ Done (backend) / ❌ frontend has zero tests (no Vitest) | `9d9a7687` + feature commits |
+| 4 — Tests & CI: mocked-LLM pattern, strict markers, route tests for ALL legacy modules (testsets/analyze/personas/custom_metrics/auth/conversation) — 36 backend test files | ✅ Done (backend + frontend: Vitest suite added later, see remaining-work item 1) | `9d9a7687`, `1e6befbb` + feature commits |
 | 5 — Skill Arena: skill file × model matrix, adherence/format/lift metrics, step traces + optional Langfuse export, apply-winner | ✅ Done | `b2181249`, `d61a79d7` |
 | 6 — Docs: README/FEATURES/WORKFLOW refreshed, all CODEMAPS regenerated from code | ✅ Done | `0bb17eeb`, `349201fe` |
 | 7 — Test set transparency: quality audit (deterministic + LLM), provenance (source_chunk_ids), coverage report, refusal_accuracy metric, category breakdown; external (uploaded) test sets fully supported incl. category column + refusal tagging | ✅ Done | `76ea0bb9`, `7e6d7588` |
@@ -52,7 +63,10 @@
    (ContextVar + RequestIDMiddleware outermost + RequestIDFilter); log format carries
    `[request_id]`; X-Request-ID honored/echoed; background tasks inherit the id via
    contextvars. 8 unit tests.
-4. Check whether eslint `react-hooks/set-state-in-effect`/`react-hooks/refs` can now ratchet from 'warn' back to 'error' (god splits landed; remaining warners are legacy pages — 71 warnings as of this session).
+4. ~~Check eslint warn→error ratchet~~ ✅ Checked — answer: **not yet**. 71
+   `react-hooks/set-state-in-effect`-family warnings remain in legacy pages/components
+   (0 errors is the CI gate). Ratcheting to 'error' is routine maintenance once those
+   pages are refactored; no longer tracked by this plan.
 
 **Retrieval upgrades**
 5. ~~**Small-to-big retrieval**~~ ✅ Done — NOTE: the original premise was wrong;
@@ -81,18 +95,18 @@
 10. ~~**Parameter sweep experiments**~~ ✅ Done — POST /sweeps with a grid over
     sweepable fields (≤36 combos), one experiment per combo run sequentially with
     judge-free metrics; /leaderboard ranks by retrieval_hit_rate then overall.
-    Backend only — no UI panel yet.
+    UI: SweepPanel on the Experiment page.
 11. ~~**Judge calibration**~~ ✅ Done — multi_llm_evaluations now records the judge
     model; GET /judge-calibration ranks models by human-annotation agreement
     (5+ pairs, ≥50% agreement to be recommended); POST /apply sets the project
-    default panel. Backend only — no UI yet. Pre-existing rows (model NULL) excluded.
+    default panel. UI: JudgeCalibrationPanel on Analyze. Pre-existing rows (model NULL) excluded.
 12. ~~**Scheduled regression runs**~~ ✅ Done — schedules table + 60s in-process
     ticker (lifespan task); drop alerts stored + optional SSRF-guarded webhook.
-    Backend only — no UI yet.
+    UI: SchedulePanel on the Experiment page.
 13. ~~Log import + hard-case mining~~ ✅ Done — /test-sets/import-logs creates
     reference-free sets from raw query logs (dedupe, trivial filter, 1000 cap);
     /experiments/{id}/mine-hard-cases LLM-generates harder variants of worst
-    results into a provenance-preserving test set. Backend only — no UI yet.
+    results into a provenance-preserving test set. UI: LogImportPanel (Test page) + HardCaseMiningPanel (Analyze).
 
 **New follow-up work (from this session)**
 - ~~Frontend panels~~ ✅ Done — SweepPanel (grid builder + polling + leaderboard)
@@ -101,8 +115,10 @@
   New api/ modules: sweeps.ts, schedules.ts, mining.ts (+ calibration in annotations.ts).
 - Sweep/schedule runs execute in the API process; a server restart leaves a
   'running' sweep until cancelled (documented in service docstrings).
-- Docs refresh pending: README/FEATURES/CODEMAPS don't yet describe the new
-  retrieval options, sweeps, schedules, calibration, or mining endpoints.
+- ~~Docs refresh~~ ✅ Done — README (features + structure tree), FEATURES.md (retrieval
+  quality options + 4 new feature sections), CLAUDE.md (22 routes, 10 services,
+  middleware/data-flow), CODEMAPS main/frontend/INDEX (new modules, panels, tables,
+  stale _run_background/_retrieval_diagnostics references fixed).
 
 **Known quirks to be aware of**
 - `tests/integration/test_glean_experiment.py::test_glean_all_metrics` (slow marker) fails

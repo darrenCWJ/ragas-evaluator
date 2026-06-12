@@ -147,7 +147,11 @@ Applying a suggestion clones the config, spawns a follow-up experiment, and — 
 - **Persona-based test generation** — auto-generate diverse personas (fast: direct LLM call; full: KG-based) with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
 - **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
 - **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously with chain-of-thought reasoning and claim-level annotations. Computes a reliability score based on inter-judge agreement; flags results where judges disagree.
-- **Reranker support** — optional cross-encoder reranker applied after retrieval with configurable top-k cutoff.
+- **Retrieval upgrades** — per-config query expansion (multi-query with rank fusion, or HyDE), score-threshold cutoff, MMR diversity selection, small-to-big parent expansion for `parent_child` chunk sets, knowledge-graph neighbour expansion, and an optional cross-encoder reranker (e.g. `BAAI/bge-reranker-v2-m3`) with configurable top-k.
+- **Parameter sweeps** — grid-search retrieval parameters (top_k, alpha, threshold, MMR, expansion, model); one experiment per combination runs with judge-free metrics and a leaderboard ranks combos by retrieval hit rate, so judge tokens are spent only on finalists.
+- **Scheduled regression runs** — re-run a bot test set on an interval (15 min–7 days); metric drops beyond a threshold raise in-app alerts and optional webhook notifications.
+- **Judge calibration** — every judge evaluation records its model; the calibration report ranks judge models by agreement with your human annotations and applies the best panel as the project default in one click.
+- **Log import & hard-case mining** — turn raw production query logs into reference-free test sets (dedupe + trivial filter), and mine an experiment's worst-scoring questions into LLM-generated harder variants that keep reference answers and provenance.
 - **Source verification** — automatically check bot-cited URLs for reachability and content alignment. Statuses: `verified`, `hallucinated`, `inaccessible`, `unverifiable`.
 - **Human annotation** — deterministic 20% sample of experiment results for human review; computes evaluator accuracy against ground truth.
 - **Custom metrics** — define project-specific evaluation criteria (integer range, similarity, rubrics, instance rubrics, criteria judge, reference judge) without code changes. Includes LLM-powered description refinement.
@@ -267,9 +271,15 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 |   +-- services/             # Business logic shared across routes
 |   |   +-- auth.py           # Password hashing, sessions, project access
 |   |   +-- progress.py       # Lock-guarded run-state registry (SSE-safe)
+|   |   +-- experiment_runner.py # Background experiment run loop + aggregation
+|   |   +-- sweep_service.py  # Parameter sweep expansion, runner, leaderboard
+|   |   +-- schedule_service.py # Scheduled regression ticker + drop alerts
+|   |   +-- judge_calibration.py # Judge-vs-human agreement ranking
+|   |   +-- case_mining.py    # Log import cleaning + hard-case variant mining
+|   |   +-- request_context.py # Per-request ID middleware + log correlation
 |   |   +-- skill_trials.py   # Skill Arena matrix runner
 |   |   +-- tracing.py        # Step tracing (+ optional Langfuse export)
-|   +-- routes/               # 19 route modules
+|   +-- routes/               # 22 route modules
 |       +-- auth.py           # Register/login/logout, admin user management
 |       +-- projects.py       # Project CRUD, members, baselines, API config
 |       +-- documents.py      # Document upload (PDF/TXT/DOCX)
@@ -282,6 +292,9 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 |       +-- analyze.py        # Suggestions, prompt doctor, apply + outcomes
 |       +-- insights.py       # Quality audit, coverage, breakdown, CI gate, HTML report
 |       +-- skills.py         # Skill Arena (skills, trials, apply-model)
+|       +-- sweeps.py         # Parameter sweeps + judge-free leaderboard
+|       +-- schedules.py      # Scheduled regression runs + drop alerts
+|       +-- mining.py         # User-log import + hard-case mining
 |       +-- bot_configs.py    # External bot connector configs
 |       +-- annotations.py    # Human annotation and evaluator accuracy
 |       +-- reports.py        # Project-level reporting and trends
@@ -294,7 +307,8 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 |   +-- embedding.py          # OpenAI + SentenceTransformers + contextual prefix
 |   +-- vectorstore.py        # ChromaDB integration
 |   +-- bm25.py               # BM25 sparse search
-|   +-- rag.py                # Retrieval + generation (dense/sparse/hybrid/reranker)
+|   +-- rag.py                # Retrieval + generation (expansion/HyDE, threshold, MMR, small-to-big, reranker)
+|   +-- kg_retrieval.py       # KG neighbour expansion of vector hits
 |   +-- llm.py                # Multi-provider LLM routing (OpenAI, Anthropic, Google)
 |   +-- retry.py              # Backoff/retry for all LLM and HTTP calls
 |   +-- bot_connectors/       # 7 connectors (system context + conversation history)
@@ -317,7 +331,7 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 |       +-- components/       # Feature components + ui/ primitives
 |       +-- hooks/            # useFetch, usePolling, useExperimentStream...
 |       +-- contexts/         # Auth + project state
-+-- tests/                    # pytest suite (450+ tests, mocked LLM layer)
++-- tests/                    # pytest suite (550+ tests, mocked LLM layer) + frontend Vitest suite
 +-- main.py                   # Uvicorn entrypoint
 +-- Dockerfile
 +-- docker-compose.yml
