@@ -901,6 +901,9 @@ class SkillDryRunRequest(BaseModel):
     # Scripted replies for the model's ask_user calls, consumed in order;
     # the LLM user-simulator answers once these run out.
     user_inputs: list[str] = Field(default_factory=list, max_length=5)
+    # Interactive: instead of the simulator, PAUSE when the model asks a
+    # question and wait for the human's answer via the /continue endpoint.
+    interactive: bool = False
 
     @field_validator("model")
     @classmethod
@@ -908,6 +911,12 @@ class SkillDryRunRequest(BaseModel):
         if not _LLM_MODEL_RE.match(v):
             raise ValueError("invalid model id")
         return v
+
+
+class SkillDryRunContinue(BaseModel):
+    """The human's reply to the question an interactive dry-run paused on."""
+
+    answer: str = Field(min_length=1, max_length=4000)
 
 
 class SkillTrialCreate(BaseModel):

@@ -1182,6 +1182,8 @@ export interface AgentTurnStep {
   arguments: Record<string, unknown>;
   result: string;
   error?: string | null;
+  /** ask_user steps: the result came from the (real or scripted) user. */
+  from_user?: boolean;
 }
 
 export interface AgentTurn {
@@ -1193,6 +1195,11 @@ export interface AgentTurn {
 }
 
 export interface SkillDryRunResult {
+  /** Set for interactive runs — needed to continue a paused run. */
+  run_id?: string | null;
+  status?: 'completed' | 'awaiting_input';
+  /** The question the model paused on (interactive runs only). */
+  question?: string | null;
   answer: string;
   turns: AgentTurn[];
   files_read: string[];

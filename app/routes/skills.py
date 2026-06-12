@@ -17,7 +17,14 @@ from pathlib import PurePosixPath
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 import db.init
-from app.models import ApplyModelRequest, SkillCreate, SkillDryRunRequest, SkillTrialCreate
+from app.models import (
+    ApplyModelRequest,
+    SkillCreate,
+    SkillDryRunContinue,
+    SkillDryRunRequest,
+    SkillTrialCreate,
+)
+from app.services import skill_dryrun
 from app.services.skill_trials import (
     _query_model_agentic,
     _stage_metrics,
@@ -309,6 +316,29 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
     if stages is None:
         stages = extract_stages(row["content"] or "")
 
+    # Interactive: the loop pauses on ask_user and waits for the human via
+    # the /continue endpoint instead of using the LLM user-simulator.
+    if req.interactive:
+        run_id = skill_dryrun.start_session(
+            project_id, row["content"], skill_files, stages,
+            req.model, req.prompt, req.user_inputs,
+        )
+        session = skill_dryrun.get_session(run_id, project_id)
+        try:
+            async with session["lock"]:
+                await skill_dryrun.advance(session)
+        except Exception as exc:
+            skill_dryrun.drop_session(run_id)
+            logger.warning(
+                "Interactive dry-run failed (skill=%d model=%s): %s",
+                skill_id, clean(req.model), clean(exc),
+            )
+            raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
+        payload = skill_dryrun.session_payload(run_id, session, _stage_metrics)
+        if payload["status"] == "completed":
+            skill_dryrun.drop_session(run_id)
+        return payload
+
     q_row = {
         "question": req.prompt,
         "metadata_json": json.dumps({"user_inputs": req.user_inputs}),
@@ -341,6 +371,9 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
     ]
     stage_scores = _stage_metrics(stages, reply.get("files_read", [])) if stages else None
     return {
+        "run_id": None,
+        "status": "completed",
+        "question": None,
         "answer": reply["answer"],
         "turns": turns,
         "files_read": reply.get("files_read", []),
@@ -350,6 +383,29 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
         "tokens_out": reply.get("tokens_out", 0),
         "latency_ms": latency_ms,
     }
+
+
+@router.post("/projects/{project_id}/skills/dry-run/{run_id}/continue")
+async def continue_dry_run(project_id: int, run_id: str, req: SkillDryRunContinue):
+    """Answer the question an interactive dry-run paused on and resume it."""
+    session = skill_dryrun.get_session(run_id, project_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Dry run not found or expired")
+    if session["status"] != "awaiting_input":
+        raise HTTPException(status_code=409, detail="Dry run is not waiting for input")
+    try:
+        async with session["lock"]:
+            await skill_dryrun.resume_with_answer(session, req.answer)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        skill_dryrun.drop_session(run_id)
+        logger.warning("Interactive dry-run continue failed (run=%s): %s", clean(run_id), clean(exc))
+        raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
+    payload = skill_dryrun.session_payload(run_id, session, _stage_metrics)
+    if payload["status"] == "completed":
+        skill_dryrun.drop_session(run_id)
+    return payload
 
 
 # --- Trial lifecycle ----------------------------------------------------------

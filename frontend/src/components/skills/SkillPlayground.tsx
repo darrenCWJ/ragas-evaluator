@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { dryRunSkill } from '../../api';
-import type { JudgeModel, Skill, SkillDryRunResult } from '../../api';
+import { continueDryRun, dryRunSkill } from '../../api';
+import type { AgentTurn, JudgeModel, Skill, SkillDryRunResult } from '../../api';
 import { Button, Card, ErrorAlert, FormField, Select, TextArea, TextInput } from '../ui';
 
 interface SkillPlaygroundProps {
@@ -9,29 +9,93 @@ interface SkillPlaygroundProps {
   judgeModels: JudgeModel[];
 }
 
+/** One round of the transcript: thought + the tool calls it made. */
+function TurnView({ turn }: { turn: AgentTurn }) {
+  return (
+    <div className="space-y-1">
+      {turn.thought && (
+        <div className="flex gap-2">
+          <span className="shrink-0 text-2xs" title="Model reasoning this round">
+            💭
+          </span>
+          <p className="min-w-0 whitespace-pre-wrap text-xs italic text-text-secondary">
+            {turn.thought}
+          </p>
+        </div>
+      )}
+      {turn.steps.map((step, j) =>
+        step.tool === 'ask_user' ? (
+          <div key={j} className="space-y-0.5">
+            <div className="flex gap-2">
+              <span className="shrink-0 text-2xs" title="Model asked the user">
+                ❓
+              </span>
+              <p className="min-w-0 text-xs text-text-primary">
+                {String(step.arguments.question ?? '')}
+              </p>
+            </div>
+            <div className="flex gap-2 pl-5">
+              <span className="shrink-0 text-2xs" title="User reply">
+                🧑
+              </span>
+              <p className="min-w-0 whitespace-pre-wrap text-xs text-accent">{step.result}</p>
+            </div>
+          </div>
+        ) : (
+          <div key={j} className="flex gap-2">
+            <span className="shrink-0 text-2xs" title="Tool call">
+              🔧
+            </span>
+            <div className="min-w-0 text-xs">
+              <span className={`font-mono ${step.error ? 'text-score-low' : 'text-accent'}`}>
+                {step.tool}
+              </span>
+              <span className="ml-1.5 break-all font-mono text-2xs text-text-muted">
+                {JSON.stringify(step.arguments)}
+              </span>
+              {step.error ? (
+                <p className="text-2xs text-score-low">{step.error}</p>
+              ) : (
+                <p className="line-clamp-2 break-all text-2xs text-text-muted">{step.result}</p>
+              )}
+            </div>
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
 /**
  * Watch a single model walk a skill on one ad-hoc prompt — no test set, no
  * judging, nothing stored. Made for process-flow skills where the point is
  * HOW the model works through the stages, not the final answer.
+ *
+ * Interactive mode pauses whenever the model asks the user something and
+ * lets YOU type the answer; otherwise a simulated user replies.
  */
 export default function SkillPlayground({ projectId, skills, judgeModels }: SkillPlaygroundProps) {
   const [skillId, setSkillId] = useState<number | ''>('');
   const [model, setModel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [userInputs, setUserInputs] = useState('');
+  const [interactive, setInteractive] = useState(true);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<SkillDryRunResult | null>(null);
+  const [pendingAnswer, setPendingAnswer] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const usableModels = judgeModels.filter((m) => m.enabled !== false && m.available);
   const selectedSkill = skills.find((s) => s.id === skillId);
   const canRun = skillId !== '' && model && prompt.trim().length >= 3 && !running;
+  const awaiting = result?.status === 'awaiting_input';
 
   const handleRun = async () => {
     if (skillId === '') return;
     setRunning(true);
     setError(null);
     setResult(null);
+    setPendingAnswer('');
     try {
       const scripted = userInputs
         .split('\n')
@@ -42,10 +106,26 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
         prompt: prompt.trim(),
         model,
         user_inputs: scripted,
+        interactive,
       });
       setResult(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Dry run failed');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const handleContinue = async () => {
+    if (!result?.run_id || !pendingAnswer.trim()) return;
+    setRunning(true);
+    setError(null);
+    try {
+      const res = await continueDryRun(projectId, result.run_id, pendingAnswer.trim());
+      setResult(res);
+      setPendingAnswer('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to continue the run');
     } finally {
       setRunning(false);
     }
@@ -96,24 +176,39 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
 
       <FormField
         label="Scripted user replies (optional)"
-        hint="One per line — used in order when the model asks the user something; a simulated user answers after they run out"
+        hint="One per line — used in order when the model asks something, before pausing for you (interactive) or handing off to the simulator"
       >
-        <TextInput
+        <TextArea
+          rows={2}
           value={userInputs}
           onChange={(e) => setUserInputs(e.target.value)}
-          placeholder="e.g. call it fraud-alert-daily"
+          placeholder={'e.g.\ncall it fraud-alert-daily\ndaily at 02:00'}
         />
       </FormField>
 
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-text-muted">
-          Agentic dry run — nothing is saved, no judge is involved.
-          {selectedSkill && (selectedSkill.files?.length ?? 0) > 0
-            ? ` ${selectedSkill.files?.length} reference files available via read_file.`
-            : ''}
-        </span>
-        <Button onClick={handleRun} loading={running} disabled={!canRun}>
-          {running ? 'Watching the model work...' : 'Run'}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <label
+            className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary"
+            title="Pause the run whenever the model asks the user a question, and answer it yourself. Off = an LLM simulates the user."
+          >
+            <input
+              type="checkbox"
+              className="accent-accent"
+              checked={interactive}
+              onChange={(e) => setInteractive(e.target.checked)}
+            />
+            Interactive — I answer the model&apos;s questions myself
+          </label>
+          <span className="text-xs text-text-muted">
+            Nothing is saved, no judge involved.
+            {selectedSkill && (selectedSkill.files?.length ?? 0) > 0
+              ? ` ${selectedSkill.files?.length} reference files available.`
+              : ''}
+          </span>
+        </div>
+        <Button onClick={handleRun} loading={running && !awaiting} disabled={!canRun}>
+          {running && !awaiting ? 'Watching the model work...' : 'Run'}
         </Button>
       </div>
 
@@ -139,58 +234,54 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
           </div>
 
           <div className="space-y-2 rounded-lg bg-input p-3">
-            {result.turns.length === 0 && (
+            {result.turns.length === 0 && !awaiting && (
               <p className="text-xs text-text-muted">
-                The model answered directly without using any tools — for staged skills that
-                usually means it skipped the process.
+                The model answered directly without using any tools — for staged skills that usually
+                means it skipped the process.
               </p>
             )}
             {result.turns.map((turn, i) => (
-              <div key={i} className="space-y-1">
-                {turn.thought && (
-                  <div className="flex gap-2">
-                    <span className="shrink-0 text-2xs" title="Model reasoning this round">
-                      💭
-                    </span>
-                    <p className="min-w-0 whitespace-pre-wrap text-xs italic text-text-secondary">
-                      {turn.thought}
-                    </p>
-                  </div>
-                )}
-                {turn.steps.map((step, j) => (
-                  <div key={j} className="flex gap-2">
-                    <span className="shrink-0 text-2xs" title="Tool call">
-                      🔧
-                    </span>
-                    <div className="min-w-0 text-xs">
-                      <span
-                        className={`font-mono ${step.error ? 'text-score-low' : 'text-accent'}`}
-                      >
-                        {step.tool}
-                      </span>
-                      <span className="ml-1.5 break-all font-mono text-2xs text-text-muted">
-                        {JSON.stringify(step.arguments)}
-                      </span>
-                      {step.error ? (
-                        <p className="text-2xs text-score-low">{step.error}</p>
-                      ) : (
-                        <p className="line-clamp-2 break-all text-2xs text-text-muted">
-                          {step.result}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <TurnView key={i} turn={turn} />
             ))}
-            <div className="flex gap-2 border-t border-border/50 pt-2">
-              <span className="shrink-0 text-2xs" title="Final answer">
-                ✅
-              </span>
-              <pre className="max-h-72 min-w-0 overflow-auto whitespace-pre-wrap text-xs text-text-primary">
-                {result.answer || '(empty answer)'}
-              </pre>
-            </div>
+
+            {awaiting ? (
+              <div className="space-y-2 rounded-lg border border-accent/40 bg-accent/5 p-3">
+                <div className="flex gap-2">
+                  <span className="shrink-0 text-2xs" title="The model is asking you">
+                    ❓
+                  </span>
+                  <p className="min-w-0 text-xs font-medium text-text-primary">
+                    {result.question || '(the model asked a question)'}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <TextInput
+                    value={pendingAnswer}
+                    onChange={(e) => setPendingAnswer(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleContinue();
+                    }}
+                    placeholder="Type your answer and press Enter..."
+                  />
+                  <Button
+                    onClick={handleContinue}
+                    loading={running}
+                    disabled={!pendingAnswer.trim() || running}
+                  >
+                    Continue
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 border-t border-border/50 pt-2">
+                <span className="shrink-0 text-2xs" title="Final answer">
+                  ✅
+                </span>
+                <pre className="max-h-72 min-w-0 overflow-auto whitespace-pre-wrap text-xs text-text-primary">
+                  {result.answer || '(empty answer)'}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       )}

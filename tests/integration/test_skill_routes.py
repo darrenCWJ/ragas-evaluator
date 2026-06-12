@@ -174,6 +174,102 @@ class TestDryRun:
         assert data["stage_scores"]["stage_coverage"] == 0.5
         assert data["stage_scores"]["stage_order"] == 1.0
 
+    def test_interactive_dry_run_pauses_and_resumes(self, client, project):
+        skill_id = self._upload_skill(client, project)
+
+        responses = iter([
+            # Round 1: the model asks the user something mid-flow
+            {
+                "content": "I need the app name before scaffolding.",
+                "tool_calls": [{
+                    "id": "c1", "name": "ask_user",
+                    "arguments": {"question": "What should the app be called?"},
+                }],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+            # Round 2 (after the human answers): final answer
+            {
+                "content": "Scaffolded fraud-alert-daily.",
+                "tool_calls": [],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 8},
+            },
+        ])
+
+        async def fake_completion(model, messages, params=None, tools=None):
+            return next(responses)
+
+        with patch("app.services.skill_dryrun.chat_completion", new=fake_completion):
+            r1 = client.post(
+                f"/api/projects/{project}/skills/{skill_id}/dry-run",
+                json={
+                    "prompt": "Build a fraud alert app",
+                    "model": "gpt-4o-mini",
+                    "interactive": True,
+                },
+            )
+            assert r1.status_code == 200, r1.text
+            paused = r1.json()
+            assert paused["status"] == "awaiting_input"
+            assert paused["question"] == "What should the app be called?"
+            assert paused["run_id"]
+            assert paused["turns"][0]["thought"] == "I need the app name before scaffolding."
+
+            r2 = client.post(
+                f"/api/projects/{project}/skills/dry-run/{paused['run_id']}/continue",
+                json={"answer": "fraud-alert-daily"},
+            )
+            assert r2.status_code == 200, r2.text
+            done = r2.json()
+            assert done["status"] == "completed"
+            assert done["answer"] == "Scaffolded fraud-alert-daily."
+            assert done["user_exchanges"] == 1
+            # The human's reply appears in the transcript as the ask_user result
+            ask_step = done["turns"][0]["steps"][0]
+            assert ask_step["tool"] == "ask_user"
+            assert ask_step["result"] == "fraud-alert-daily"
+            assert ask_step["from_user"] is True
+
+            # Completed sessions are dropped — continuing again 404s
+            r3 = client.post(
+                f"/api/projects/{project}/skills/dry-run/{paused['run_id']}/continue",
+                json={"answer": "anything"},
+            )
+            assert r3.status_code == 404
+
+    def test_interactive_dry_run_uses_scripted_replies_first(self, client, project):
+        skill_id = self._upload_skill(client, project)
+
+        responses = iter([
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1", "name": "ask_user",
+                    "arguments": {"question": "App name?"},
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+            {"content": "Done.", "tool_calls": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ])
+
+        async def fake_completion(model, messages, params=None, tools=None):
+            return next(responses)
+
+        with patch("app.services.skill_dryrun.chat_completion", new=fake_completion):
+            r = client.post(
+                f"/api/projects/{project}/skills/{skill_id}/dry-run",
+                json={
+                    "prompt": "Build the app",
+                    "model": "gpt-4o-mini",
+                    "interactive": True,
+                    "user_inputs": ["recon-app"],
+                },
+            )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # Scripted reply consumed — no pause needed
+        assert data["status"] == "completed"
+        assert data["turns"][0]["steps"][0]["result"] == "recon-app"
+
     def test_dry_run_unknown_skill_404(self, client, project):
         r = client.post(
             f"/api/projects/{project}/skills/99999/dry-run",
