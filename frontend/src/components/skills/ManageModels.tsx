@@ -129,9 +129,7 @@ export default function ManageModels({ judgeModels, onChanged }: ManageModelsPro
                 <button
                   type="button"
                   className="text-2xs text-accent hover:underline disabled:opacity-50"
-                  disabled={
-                    busy || Number.isNaN(Number(priceIn)) || Number.isNaN(Number(priceOut))
-                  }
+                  disabled={busy || Number.isNaN(Number(priceIn)) || Number.isNaN(Number(priceOut))}
                   onClick={() =>
                     run(async () => {
                       await setJudgeModelPrices(m.id, Number(priceIn), Number(priceOut));

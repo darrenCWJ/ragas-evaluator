@@ -26,7 +26,13 @@ function ThemeToggle() {
       aria-label="Toggle color theme"
     >
       {theme === 'dark' ? (
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1.5}
+        >
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -34,7 +40,13 @@ function ThemeToggle() {
           />
         </svg>
       ) : (
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1.5}
+        >
           <path
             strokeLinecap="round"
             strokeLinejoin="round"

@@ -36,9 +36,7 @@ export function diffLines(oldText: string, newText: string): DiffLine[] | null {
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       lcs[i]![j] =
-        midA[i] === midB[j]
-          ? lcs[i + 1]![j + 1]! + 1
-          : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+        midA[i] === midB[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
     }
   }
 
@@ -72,7 +70,11 @@ export function collapseUnchanged(
   const keep = new Array<boolean>(lines.length).fill(false);
   lines.forEach((line, idx) => {
     if (line.op !== 'same') {
-      for (let k = Math.max(0, idx - context); k <= Math.min(lines.length - 1, idx + context); k++) {
+      for (
+        let k = Math.max(0, idx - context);
+        k <= Math.min(lines.length - 1, idx + context);
+        k++
+      ) {
         keep[k] = true;
       }
     }

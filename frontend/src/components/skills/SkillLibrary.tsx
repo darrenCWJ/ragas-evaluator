@@ -65,65 +65,65 @@ export default function SkillLibrary({
           {skills.map((skill) => (
             <li key={skill.id} className="rounded-xl border border-border bg-card px-4 py-3">
               <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-text-primary">
-                  {skill.name}
-                  <span className="ml-2 rounded bg-elevated px-1.5 py-0.5 text-2xs font-mono text-text-muted">
-                    v{skill.version}
-                  </span>
-                  <span className="ml-2 text-xs text-text-muted">
-                    {skill.directive_count} directive{skill.directive_count !== 1 ? 's' : ''}
-                  </span>
-                  {(skill.stage_count ?? 0) > 0 && (
-                    <span
-                      className="ml-2 rounded-full bg-accent/10 px-1.5 py-0.5 text-2xs text-accent"
-                      title={(skill.stages ?? [])
-                        .map((s) => s.title + (s.files.length ? ` (${s.files.join(', ')})` : ''))
-                        .join('\n')}
-                    >
-                      {skill.stage_count} stages
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-text-primary">
+                    {skill.name}
+                    <span className="ml-2 rounded bg-elevated px-1.5 py-0.5 text-2xs font-mono text-text-muted">
+                      v{skill.version}
                     </span>
-                  )}
-                  {(skill.files?.length ?? 0) > 0 && (
-                    <span className="ml-2 text-2xs text-text-muted">
-                      {skill.files?.length} files
+                    <span className="ml-2 text-xs text-text-muted">
+                      {skill.directive_count} directive{skill.directive_count !== 1 ? 's' : ''}
                     </span>
-                  )}
-                </p>
-                {skill.summary && (
-                  <p className="mt-1 truncate text-xs text-text-secondary" title={skill.summary}>
-                    {skill.summary}
+                    {(skill.stage_count ?? 0) > 0 && (
+                      <span
+                        className="ml-2 rounded-full bg-accent/10 px-1.5 py-0.5 text-2xs text-accent"
+                        title={(skill.stages ?? [])
+                          .map((s) => s.title + (s.files.length ? ` (${s.files.join(', ')})` : ''))
+                          .join('\n')}
+                      >
+                        {skill.stage_count} stages
+                      </span>
+                    )}
+                    {(skill.files?.length ?? 0) > 0 && (
+                      <span className="ml-2 text-2xs text-text-muted">
+                        {skill.files?.length} files
+                      </span>
+                    )}
                   </p>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {previousVersionOf(skill) && (
-                  <button
-                    onClick={() => setDiffForId(diffForId === skill.id ? null : skill.id)}
-                    className="rounded-lg px-2 py-1 text-xs text-text-muted transition hover:text-accent"
-                    title={`Compare against v${previousVersionOf(skill)?.version}`}
-                  >
-                    {diffForId === skill.id ? 'Hide diff' : 'Diff'}
-                  </button>
-                )}
-                {confirm.isConfirming(skill.id) ? (
-                  deletingId === skill.id ? (
-                    <Spinner size="sm" />
+                  {skill.summary && (
+                    <p className="mt-1 truncate text-xs text-text-secondary" title={skill.summary}>
+                      {skill.summary}
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {previousVersionOf(skill) && (
+                    <button
+                      onClick={() => setDiffForId(diffForId === skill.id ? null : skill.id)}
+                      className="rounded-lg px-2 py-1 text-xs text-text-muted transition hover:text-accent"
+                      title={`Compare against v${previousVersionOf(skill)?.version}`}
+                    >
+                      {diffForId === skill.id ? 'Hide diff' : 'Diff'}
+                    </button>
+                  )}
+                  {confirm.isConfirming(skill.id) ? (
+                    deletingId === skill.id ? (
+                      <Spinner size="sm" />
+                    ) : (
+                      <ConfirmButtons
+                        onConfirm={() => handleDelete(skill.id)}
+                        onCancel={confirm.clear}
+                      />
+                    )
                   ) : (
-                    <ConfirmButtons
-                      onConfirm={() => handleDelete(skill.id)}
-                      onCancel={confirm.clear}
-                    />
-                  )
-                ) : (
-                  <button
-                    onClick={() => confirm.requestConfirm(skill.id)}
-                    className="rounded-lg px-2 py-1 text-xs text-text-muted transition hover:text-score-low"
-                  >
-                    Delete
-                  </button>
-                )}
-              </div>
+                    <button
+                      onClick={() => confirm.requestConfirm(skill.id)}
+                      className="rounded-lg px-2 py-1 text-xs text-text-muted transition hover:text-score-low"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
               </div>
               {diffForId === skill.id && previousVersionOf(skill) && (
                 <SkillDiff

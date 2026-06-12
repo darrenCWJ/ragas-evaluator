@@ -27,10 +27,7 @@ export default function SkillDiff({ projectId, current, previous, onClose }: Ski
   // mount — no synchronous setState in the effect body.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      fetchSkill(projectId, previous.id),
-      fetchSkill(projectId, current.id),
-    ])
+    Promise.all([fetchSkill(projectId, previous.id), fetchSkill(projectId, current.id)])
       .then(([oldSkill, newSkill]) => {
         if (cancelled) return;
         const diff = diffLines(oldSkill.content ?? '', newSkill.content ?? '');

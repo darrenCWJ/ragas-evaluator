@@ -325,15 +325,17 @@ export default function QuestionCard({
               {convoEditing ? (
                 <div className="space-y-2 rounded-lg bg-deep px-3 py-2.5">
                   <p className="text-xs font-medium text-text-secondary">
-                    Conversation setup — prior user messages, one per line. The bot answers each
-                    in order (with history) before this question is asked; unlocks the
+                    Conversation setup — prior user messages, one per line. The bot answers each in
+                    order (with history) before this question is asked; unlocks the
                     conversation_retention metric.
                   </p>
                   <textarea
                     rows={3}
                     value={convoText}
                     onChange={(e) => setConvoText(e.target.value)}
-                    placeholder={"I'm on the Pro plan, billed annually.\nI signed up in March 2024."}
+                    placeholder={
+                      "I'm on the Pro plan, billed annually.\nI signed up in March 2024."
+                    }
                     className="w-full rounded-lg border border-border bg-input px-3 py-2 text-xs text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
                   />
                   <div className="flex items-center gap-2">
@@ -366,10 +368,7 @@ export default function QuestionCard({
                         {t}
                       </p>
                     ))}
-                    <button
-                      onClick={openConvoEdit}
-                      className="text-xs text-accent hover:underline"
-                    >
+                    <button onClick={openConvoEdit} className="text-xs text-accent hover:underline">
                       Edit conversation
                     </button>
                   </div>
