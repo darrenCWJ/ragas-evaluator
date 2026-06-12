@@ -4,26 +4,27 @@ export default {
   theme: {
     extend: {
       // "Instrument" theme — graphite engineering-lab surfaces, cyan signal
-      // accent. Score colors stay semantic (green/amber/red) and the accent
-      // deliberately avoids them.
+      // accent. Values live as RGB-triple CSS variables in index.css so the
+      // light theme can override them at runtime (html[data-theme='light'])
+      // while every /opacity utility keeps working.
       colors: {
-        deep: '#090d12',
-        base: '#0d131b',
-        card: '#131b26',
-        elevated: '#1a2532',
-        input: '#0a1018',
-        border: '#223144',
-        'border-focus': '#22d3ee',
-        'text-primary': '#e8eef5',
-        'text-secondary': '#93a5ba',
-        'text-muted': '#5c6f85',
-        accent: '#22d3ee',
-        'accent-glow': 'rgba(34,211,238,0.14)',
-        'score-high': '#34d399',
-        'score-mid': '#fbbf24',
-        'score-low': '#f87171',
-        'delta-pos': '#34d399',
-        'delta-neg': '#f87171',
+        deep: 'rgb(var(--color-deep) / <alpha-value>)',
+        base: 'rgb(var(--color-base) / <alpha-value>)',
+        card: 'rgb(var(--color-card) / <alpha-value>)',
+        elevated: 'rgb(var(--color-elevated) / <alpha-value>)',
+        input: 'rgb(var(--color-input) / <alpha-value>)',
+        border: 'rgb(var(--color-border) / <alpha-value>)',
+        'border-focus': 'rgb(var(--color-accent) / <alpha-value>)',
+        'text-primary': 'rgb(var(--color-text-primary) / <alpha-value>)',
+        'text-secondary': 'rgb(var(--color-text-secondary) / <alpha-value>)',
+        'text-muted': 'rgb(var(--color-text-muted) / <alpha-value>)',
+        accent: 'rgb(var(--color-accent) / <alpha-value>)',
+        'accent-glow': 'rgb(var(--color-accent) / 0.14)',
+        'score-high': 'rgb(var(--color-score-high) / <alpha-value>)',
+        'score-mid': 'rgb(var(--color-score-mid) / <alpha-value>)',
+        'score-low': 'rgb(var(--color-score-low) / <alpha-value>)',
+        'delta-pos': 'rgb(var(--color-score-high) / <alpha-value>)',
+        'delta-neg': 'rgb(var(--color-score-low) / <alpha-value>)',
       },
       fontSize: {
         '2xs': ['0.625rem', { lineHeight: '0.875rem' }], // 10px

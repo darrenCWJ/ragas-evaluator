@@ -400,32 +400,42 @@ async def evaluate_experiment_row(
 ) -> dict:
     """Evaluate a generated answer against reference using selected metrics.
 
-    All metrics are scored concurrently for maximum throughput.
+    Metrics score concurrently, capped at METRIC_SCORING_CONCURRENCY per
+    question — firing 15+ provider-backed scorers simultaneously was observed
+    to stall (rate-limit/connection burst), while bounded batches complete.
 
     Optional callbacks:
       on_metric_start(metric_name) — called when a metric begins scoring
       on_metric_done(metric_name)  — called when a metric finishes
     """
+    from config import METRIC_SCORING_CONCURRENCY
+
+    semaphore = asyncio.Semaphore(max(1, METRIC_SCORING_CONCURRENCY))
+
+    async def _bounded(coro):
+        async with semaphore:
+            return await coro
+
     tasks = []
 
     for name, scorer in scorers.items():
-        tasks.append(
+        tasks.append(_bounded(
             _score_builtin(
                 name, scorer, question, generated_answer, reference_answer, contexts,
                 on_start=on_metric_start, on_done=on_metric_done,
                 rubrics=rubrics,
                 metadata=metadata,
             )
-        )
+        ))
 
     for name, (cfg, scorer) in (custom_scorers or {}).items():
-        tasks.append(
+        tasks.append(_bounded(
             _score_custom(
                 name, cfg, scorer, llm, question, generated_answer, reference_answer, contexts,
                 on_start=on_metric_start, on_done=on_metric_done,
                 metadata=metadata,
             )
-        )
+        ))
 
     scored = await asyncio.gather(*tasks)
     return dict(scored)

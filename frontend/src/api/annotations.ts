@@ -25,6 +25,18 @@ export async function annotateQuestion(
   );
 }
 
+export async function updateQuestionMetadata(
+  projectId: number,
+  testSetId: number,
+  questionId: number,
+  metadata: Record<string, unknown>,
+): Promise<TestQuestion> {
+  return request<TestQuestion>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/questions/${questionId}/metadata`,
+    { method: 'PATCH', body: JSON.stringify({ metadata }) },
+  );
+}
+
 export async function bulkAnnotateQuestions(
   projectId: number,
   testSetId: number,

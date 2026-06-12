@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { QuestionQuality, TestQuestion } from '../../lib/api';
-import { annotateQuestion } from '../../lib/api';
+import { annotateQuestion, updateQuestionMetadata } from '../../lib/api';
 
 const CATEGORY_COLORS: Record<string, string> = {
   typical: 'bg-blue-500/15 text-blue-300',
@@ -71,6 +71,8 @@ export default function QuestionCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [convoEditing, setConvoEditing] = useState(false);
+  const [convoText, setConvoText] = useState('');
 
   // Sync if parent re-fetches
   if (question.id === q.id && question.status !== q.status) {
@@ -161,6 +163,39 @@ export default function QuestionCard({
   const triggerFlash = (status: string) => {
     setFlash(status);
     setTimeout(() => setFlash(null), 800);
+  };
+
+  // Multi-turn conversation setup (metadata.turns)
+  const turns: string[] = Array.isArray(q.metadata?.turns)
+    ? (q.metadata.turns as unknown[]).map(String)
+    : [];
+
+  const openConvoEdit = () => {
+    setConvoText(turns.join('\n'));
+    setConvoEditing(true);
+    setError(null);
+  };
+
+  const doSaveTurns = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const newTurns = convoText
+        .split('\n')
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .slice(0, 10);
+      const updated = await updateQuestionMetadata(projectId, testSetId, q.id, {
+        turns: newTurns.length > 0 ? newTurns : null,
+      });
+      setQ(updated);
+      setConvoEditing(false);
+      onAnnotated();
+    } catch (err) {
+      setError((err as Error).message || 'Failed to save conversation');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const borderClass = flash
@@ -283,6 +318,73 @@ export default function QuestionCard({
                 </div>
               </details>
             )}
+
+          {/* Conversation setup (multi-turn) */}
+          {!editing && (
+            <div className="mt-2">
+              {convoEditing ? (
+                <div className="space-y-2 rounded-lg bg-deep px-3 py-2.5">
+                  <p className="text-xs font-medium text-text-secondary">
+                    Conversation setup — prior user messages, one per line. The bot answers each
+                    in order (with history) before this question is asked; unlocks the
+                    conversation_retention metric.
+                  </p>
+                  <textarea
+                    rows={3}
+                    value={convoText}
+                    onChange={(e) => setConvoText(e.target.value)}
+                    placeholder={"I'm on the Pro plan, billed annually.\nI signed up in March 2024."}
+                    className="w-full rounded-lg border border-border bg-input px-3 py-2 text-xs text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={doSaveTurns}
+                      disabled={saving}
+                      className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-deep transition hover:opacity-90 disabled:opacity-50"
+                    >
+                      Save conversation
+                    </button>
+                    <button
+                      onClick={() => setConvoEditing(false)}
+                      className="rounded-md px-2 py-1 text-xs text-text-muted transition hover:text-text-primary"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : turns.length > 0 ? (
+                <details className="group" open>
+                  <summary className="cursor-pointer select-none text-xs text-text-muted transition hover:text-text-secondary">
+                    <span className="ml-0.5">
+                      Conversation setup ({turns.length} turn{turns.length !== 1 ? 's' : ''})
+                    </span>
+                  </summary>
+                  <div className="mt-1.5 space-y-1 rounded-lg bg-deep px-3 py-2">
+                    {turns.map((t, i) => (
+                      <p key={i} className="text-xs text-text-secondary">
+                        <span className="mr-1.5 font-mono text-text-muted">{i + 1}.</span>
+                        {t}
+                      </p>
+                    ))}
+                    <button
+                      onClick={openConvoEdit}
+                      className="text-xs text-accent hover:underline"
+                    >
+                      Edit conversation
+                    </button>
+                  </div>
+                </details>
+              ) : (
+                <button
+                  onClick={openConvoEdit}
+                  className="text-xs text-text-muted transition hover:text-accent"
+                  title="Turn this into a multi-turn question: add prior user messages the bot must remember"
+                >
+                  + Add conversation setup (multi-turn)
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Edit mode */}
           {editing && (

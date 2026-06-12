@@ -140,9 +140,8 @@ async def _query_model_agentic(
     Scripted answers (question metadata ``user_inputs``) take priority over
     the LLM user simulator and are consumed in order.
     """
-    from pipeline.agent_loop import run_agent
-
     from app.services.scripted_replies import ScriptedReplies
+    from pipeline.agent_loop import run_agent
 
     question = q_row["question"]
     try:
@@ -244,7 +243,9 @@ def _stage_metrics(stages: list[dict], files_read: list[str]) -> dict | None:
     read_indices = [idx for idx in (_first_read_index(p) for p in plan_files) if idx is not None]
     coverage = len(read_indices) / len(plan_files)
     if len(read_indices) >= 2:
-        in_order = sum(1 for a, b in zip(read_indices, read_indices[1:]) if a <= b)
+        in_order = sum(
+            1 for a, b in zip(read_indices, read_indices[1:], strict=False) if a <= b
+        )
         order = in_order / (len(read_indices) - 1)
     else:
         order = 1.0 if read_indices else 0.0

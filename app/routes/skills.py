@@ -335,6 +335,7 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
             )
             raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
         payload = skill_dryrun.session_payload(run_id, session, _stage_metrics)
+        payload["cost_usd"] = await _dry_run_cost(req.model, payload)
         if payload["status"] == "completed":
             skill_dryrun.drop_session(run_id)
         return payload
@@ -372,7 +373,7 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
         for turn in reply.get("agent_turns", [])
     ]
     stage_scores = _stage_metrics(stages, reply.get("files_read", [])) if stages else None
-    return {
+    payload = {
         "run_id": None,
         "status": "completed",
         "question": None,
@@ -385,6 +386,22 @@ async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest)
         "tokens_out": reply.get("tokens_out", 0),
         "latency_ms": latency_ms,
     }
+    payload["cost_usd"] = await _dry_run_cost(req.model, payload)
+    return payload
+
+
+async def _dry_run_cost(model: str, payload: dict) -> float | None:
+    """Cost estimate for a dry run from the registry's per-token prices."""
+    try:
+        from app.services.judge_models import estimate_cost_usd, price_map
+
+        prices = await price_map()
+        return estimate_cost_usd(
+            payload.get("tokens_in", 0), payload.get("tokens_out", 0), prices.get(model)
+        )
+    except Exception:
+        logger.warning("Dry-run cost estimate failed", exc_info=True)
+        return None
 
 
 @router.post("/projects/{project_id}/skills/dry-run/{run_id}/continue")
@@ -405,6 +422,7 @@ async def continue_dry_run(project_id: int, run_id: str, req: SkillDryRunContinu
         logger.warning("Interactive dry-run continue failed (run=%s): %s", clean(run_id), clean(exc))
         raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
     payload = skill_dryrun.session_payload(run_id, session, _stage_metrics)
+    payload["cost_usd"] = await _dry_run_cost(session["model"], payload)
     if payload["status"] == "completed":
         skill_dryrun.drop_session(run_id)
     return payload
@@ -510,6 +528,18 @@ async def get_skill_trial(project_id: int, trial_id: int):
         raise HTTPException(status_code=404, detail="Trial not found")
     out = _format_trial(row)
     out["matrix"] = aggregate_trial_matrix(conn, trial_id)
+    # Cost estimates from the model registry's per-token prices (None for
+    # bots and models without a configured price).
+    try:
+        from app.services.judge_models import estimate_cost_usd, price_map
+
+        prices = await price_map()
+        for cell in out["matrix"]["cells"]:
+            cell["cost_usd"] = estimate_cost_usd(
+                cell["tokens_in"], cell["tokens_out"], prices.get(cell["model"])
+            )
+    except Exception:
+        logger.warning("Cost annotation failed for trial %d", trial_id, exc_info=True)
     if row["skill_id"]:
         skill = conn.execute("SELECT * FROM skills WHERE id = ?", (row["skill_id"],)).fetchone()
         out["skill"] = _format_skill(skill, conn=conn) if skill else None

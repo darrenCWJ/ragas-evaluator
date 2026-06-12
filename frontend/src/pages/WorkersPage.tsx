@@ -3,6 +3,7 @@ import {
   fetchWorkersStatus,
   clearWorkerPersonaTask,
   clearWorkerBuildTask,
+  type QueuedJob,
   type WorkerInfo,
   type WorkerTask,
 } from '../lib/api';
@@ -122,6 +123,7 @@ function CapacityCell({
 
 export default function WorkersPage() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  const [queuedJobs, setQueuedJobs] = useState<QueuedJob[]>([]);
   const [configured, setConfigured] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +133,7 @@ export default function WorkersPage() {
     try {
       const data = await fetchWorkersStatus();
       setWorkers(data.workers);
+      setQueuedJobs(data.queued_jobs ?? []);
       setConfigured(data.total_configured);
       setError(null);
     } catch (err) {
@@ -271,6 +274,34 @@ export default function WorkersPage() {
           </div>
         ))}
       </div>
+
+      {/* Queued jobs — waiting for a worker slot */}
+      {queuedJobs.length > 0 && (
+        <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3">
+          <h2 className="text-sm font-medium text-text-primary">
+            Queued
+            <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400/20 px-1.5 text-xs font-semibold text-amber-400">
+              {queuedJobs.length}
+            </span>
+            <span className="ml-2 text-xs font-normal text-text-muted">
+              all workers busy — retried automatically every ~20s
+            </span>
+          </h2>
+          <ul className="mt-2 space-y-1">
+            {queuedJobs.map((job, i) => (
+              <li key={i} className="flex items-center gap-3 text-xs text-text-secondary">
+                <span className="rounded-md bg-amber-400/10 px-2 py-0.5 font-medium text-amber-400">
+                  KG Build ({job.kg_source ?? 'chunks'})
+                </span>
+                <span className="truncate">{job.project_name}</span>
+                <span className="ml-auto shrink-0 text-text-muted">
+                  {job.attempts} retr{job.attempts === 1 ? 'y' : 'ies'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Active tasks table */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">

@@ -22,6 +22,10 @@ export interface JudgeModel {
   custom?: boolean;
   /** False when the model has been hidden via the registry; defaults to true. */
   enabled?: boolean;
+  /** USD per 1M input tokens — drives cost estimates; editable per model. */
+  price_in_per_mtok?: number | null;
+  /** USD per 1M output tokens. */
+  price_out_per_mtok?: number | null;
 }
 
 export interface JudgeModelsResponse {
@@ -1126,9 +1130,20 @@ export interface WorkerInfo {
   error?: string;
 }
 
+export interface QueuedJob {
+  kind: string;
+  project_id: number;
+  project_name: string;
+  kg_source?: string;
+  attempts: number;
+  created_at: string;
+}
+
 export interface WorkersStatusResponse {
   workers: WorkerInfo[];
   total_configured: number;
+  /** Jobs waiting for a worker slot — retried automatically every ~20s. */
+  queued_jobs?: QueuedJob[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1214,6 +1229,8 @@ export interface SkillDryRunResult {
   tokens_in: number;
   tokens_out: number;
   latency_ms: number;
+  /** Estimated $ cost from the model registry's per-token prices. */
+  cost_usd?: number | null;
 }
 
 export type SkillTrialModelSpec =
@@ -1248,6 +1265,8 @@ export interface SkillTrialCell {
   stage_coverage?: number | null;
   /** Avg fraction of stage-file reads that followed the plan order. */
   stage_order?: number | null;
+  /** Estimated $ cost from the model registry's per-token prices. */
+  cost_usd?: number | null;
   avg_latency_ms: number | null;
   tokens_in: number;
   tokens_out: number;

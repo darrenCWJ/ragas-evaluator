@@ -18,7 +18,7 @@ import time
 import pytest
 import requests
 
-MAX_WAIT = 300  # 5 minutes
+MAX_WAIT = 600  # 10 minutes — 16 real-API metrics on one question can exceed 5
 POLL_INTERVAL = 5
 
 # Representative metrics covering every scoring code path
@@ -180,10 +180,22 @@ class TestCSVExperiment:
             files={"file": ("t.csv", csv, "text/csv")},
             data={"question_col": "question", "answer_col": "answer", "context_col": "sources"},
         ).json()["bot_config_id"]
-        eid = requests.post(
+        exp = requests.post(
             f"{base_url}/api/projects/{pid}/experiments",
             json={"name": "csv-test", "bot_config_id": bcid},
-        ).json()["id"]
+        ).json()
+        eid = exp["id"]
+
+        # refusal_accuracy is capability-gated on question categories; CSV
+        # imports don't carry one, so tag the question or the explicit metric
+        # request is rejected with 422.
+        wconn = sqlite3.connect(db_path)
+        wconn.execute(
+            "UPDATE test_questions SET category = 'in_knowledge_base' WHERE test_set_id = ?",
+            (exp["test_set_id"],),
+        )
+        wconn.commit()
+        wconn.close()
 
         print(f"\nCSV experiment {eid}: {len(_TEST_METRICS)} metrics, 1 question")
         _fire_and_poll(base_url, db_path, pid, eid, _TEST_METRICS)

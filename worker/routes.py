@@ -48,34 +48,16 @@ def _run_kg_in_thread(
     overlap_max_nodes: int | None,
     fast_mode: bool,
 ) -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        logger.info("KG build starting: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import clear_progress, set_progress
+    """Thread-mode KG build (shared implementation in app.services.kg_builder)."""
+    from app.services.kg_builder import run_kg_build_in_thread
 
-        set_progress(project_id, {"stage": "building_knowledge_graph", "kg_building": True}, kg_source=kg_source)
-
-        if kg_source == "documents":
-            from evaluation.metrics.testgen import build_kg_standalone_from_documents
-            build_kg_standalone_from_documents(project_id=project_id, overlap_max_nodes=overlap_max_nodes)
-        else:
-            from evaluation.metrics.testgen import build_kg_standalone
-            build_kg_standalone(
-                chunk_config_id=chunk_config_id,
-                project_id=project_id,
-                overlap_max_nodes=overlap_max_nodes,
-                fast_mode=fast_mode,
-            )
-        logger.info("KG build completed: project=%d source=%s", project_id, kg_source)
-    except Exception as exc:
-        logger.exception("KG build failed: project=%d: %s", project_id, exc)
-    finally:
-        from evaluation.metrics.testgen import clear_progress
-        clear_progress(project_id, kg_source=kg_source)
-        loop.close()
+    def _release() -> None:
         with _kg_lock:
             _active_builds.pop((project_id, kg_source), None)
+
+    run_kg_build_in_thread(
+        project_id, kg_source, chunk_config_id, overlap_max_nodes, fast_mode, _release
+    )
 
 
 @router.get("/health")

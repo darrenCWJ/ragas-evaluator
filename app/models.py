@@ -84,6 +84,23 @@ class TestSetCreate(BaseModel):
         return v
 
 
+class DocumentReprocessRequest(BaseModel):
+    """Re-extract a document's text from its stored original with new options."""
+
+    extract_tables: bool = True
+    describe_images: bool = False
+
+
+class QuestionMetadataUpdate(BaseModel):
+    """Merge keys into a question's metadata without touching its status.
+
+    Used by the conversation builder (``turns``) and other metadata editors.
+    A key set to None is removed.
+    """
+
+    metadata: dict
+
+
 class QuestionAnnotation(BaseModel):
     status: str
     user_edited_answer: str | None = None
@@ -979,9 +996,11 @@ class JudgeModelCreate(BaseModel):
 
 
 class JudgeModelUpdate(BaseModel):
-    """Enable or disable a judge model (built-in or custom)."""
+    """Update a judge model: enabled flag and/or price overrides ($ / 1M tokens)."""
 
-    enabled: bool
+    enabled: bool | None = None
+    price_in_per_mtok: float | None = Field(default=None, ge=0, le=10_000)
+    price_out_per_mtok: float | None = Field(default=None, ge=0, le=10_000)
 
 
 class ApplyModelRequest(BaseModel):

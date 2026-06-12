@@ -104,9 +104,12 @@ async def lifespan(application: FastAPI):
     from app.services.schedule_service import schedule_loop
     schedule_task = asyncio.create_task(schedule_loop())
 
+    from app.services.job_queue import dispatch_loop
+    job_queue_task = asyncio.create_task(dispatch_loop())
+
     yield
 
-    for task in (monitor_task, schedule_task):
+    for task in (monitor_task, schedule_task, job_queue_task):
         task.cancel()
         try:
             await task

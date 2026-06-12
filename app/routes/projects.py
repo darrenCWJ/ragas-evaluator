@@ -158,9 +158,14 @@ async def add_judge_model(req: JudgeModelCreate):
 
 @router.patch("/judge-models/{model_id:path}")
 async def update_judge_model(model_id: str, req: JudgeModelUpdate):
-    """Enable or disable a judge model (built-in or custom)."""
+    """Update a judge model: enabled flag and/or price overrides."""
     from app.services import judge_models
-    if not await judge_models.set_model_enabled(model_id, req.enabled):
+    if not await judge_models.update_model(
+        model_id,
+        enabled=req.enabled,
+        price_in_per_mtok=req.price_in_per_mtok,
+        price_out_per_mtok=req.price_out_per_mtok,
+    ):
         raise HTTPException(status_code=404, detail="Model not found")
     return {"id": model_id, "enabled": req.enabled}
 

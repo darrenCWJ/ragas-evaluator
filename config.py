@@ -105,6 +105,10 @@ MAX_CONCURRENT_KG_BUILDS = int(os.environ.get("MAX_CONCURRENT_KG_BUILDS", "1"))
 MAX_CONCURRENT_PERSONA_BUILDS = int(os.environ.get("MAX_CONCURRENT_PERSONA_BUILDS", "2"))
 MAX_CONCURRENT_EXPERIMENTS = int(os.environ.get("MAX_CONCURRENT_EXPERIMENTS", "2"))
 MAX_CONCURRENT_TESTGENS = int(os.environ.get("MAX_CONCURRENT_TESTGENS", "1"))
+# Per-question cap on simultaneously-scoring metrics. Unbounded scoring of
+# very wide metric selections (15+) was observed to stall the provider/ragas
+# stack; 8 at a time keeps throughput without the burst.
+METRIC_SCORING_CONCURRENCY = int(os.environ.get("METRIC_SCORING_CONCURRENCY", "8"))
 
 # ---------------------------------------------------------------------------
 # Batch sizes

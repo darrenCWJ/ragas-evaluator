@@ -71,6 +71,20 @@ export async function setJudgeModelEnabled(modelId: string, enabled: boolean): P
   );
 }
 
+export async function setJudgeModelPrices(
+  modelId: string,
+  priceInPerMtok: number,
+  priceOutPerMtok: number,
+): Promise<void> {
+  await request<{ id: string }>(`/api/judge-models/${encodeURIComponent(modelId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      price_in_per_mtok: priceInPerMtok,
+      price_out_per_mtok: priceOutPerMtok,
+    }),
+  });
+}
+
 export async function deleteJudgeModel(modelId: string): Promise<void> {
   await request<{ detail: string }>(`/api/judge-models/${encodeURIComponent(modelId)}`, {
     method: 'DELETE',

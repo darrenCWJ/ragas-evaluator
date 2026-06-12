@@ -749,35 +749,13 @@ async def get_models():
 # --- Experiment Runner (SSE) ---
 
 
-@router.post("/projects/{project_id}/experiments/{experiment_id}/run")
-async def run_experiment(
-    project_id: int,
-    experiment_id: int,
-    req: ExperimentRunRequest,
-):
-    conn = db.init.get_db()
+def _resolve_experiment_metrics(conn, project_id: int, experiment, req) -> tuple[list[str], list]:
+    """Validate the metric selection against names and dataset capabilities.
 
-    # Pre-validation (non-authoritative -- atomic guard is inside generator)
-    project = conn.execute(
-        "SELECT id FROM projects WHERE id = ?", (project_id,)
-    ).fetchone()
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    experiment = conn.execute(
-        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
-        (experiment_id, project_id),
-    ).fetchone()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
-
-    if experiment["status"] not in ("pending", "failed"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Experiment already {experiment['status']}. Only pending or failed experiments can be run.",
-        )
-
-    # Build set of valid metric names (built-in + custom for this project)
+    Explicitly requested incompatible metrics are rejected (422 with the
+    missing capability); the default fallback set is silently filtered.
+    Returns (selected_metrics, custom_metric_rows).
+    """
     all_custom_rows = conn.execute(
         "SELECT * FROM custom_metrics WHERE project_id = ?", (project_id,)
     ).fetchall()
@@ -790,9 +768,6 @@ async def run_experiment(
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
-    # Dataset/metric compatibility — the UI grays these out, but the API must
-    # also guard. Explicitly requested metrics are rejected with the missing
-    # capability; the default fallback set is silently filtered instead.
     from evaluation.capabilities import dataset_capabilities, metric_availability
 
     if experiment["bot_config_id"] is None:
@@ -825,6 +800,79 @@ async def run_experiment(
                 status_code=422,
                 detail="No default metrics are compatible with this test set — select metrics explicitly",
             )
+    return selected_metrics, all_custom_rows
+
+
+async def _try_delegate_experiment(
+    experiment_id: int, project_id: int, selected_metrics: list[str], req
+) -> bool:
+    """Offer the experiment to each configured worker; True when one accepted."""
+    from config import KG_WORKER_URLS
+
+    if not KG_WORKER_URLS:
+        return False
+    import httpx
+
+    payload = {
+        "experiment_id": experiment_id,
+        "project_id": project_id,
+        "metrics": selected_metrics,
+        "rubrics": req.rubrics,
+        "concurrency": req.concurrency,
+        "multi_llm_judge_evaluators": req.multi_llm_judge_evaluators,
+        "judge_model_assignments": req.judge_model_assignments,
+        "judge_temperature_assignments": req.judge_temperature_assignments,
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        for worker_url in KG_WORKER_URLS:
+            try:
+                resp = await client.post(f"{worker_url}/run-experiment", json=payload)
+                if resp.status_code == 202:
+                    experiment_runs.set_worker(experiment_id, worker_url)
+                    logger.info("Experiment %d delegated to worker: %s", experiment_id, worker_url)
+                    return True
+                if resp.status_code == 409:
+                    logger.warning("Experiment %d conflict on worker %s", experiment_id, worker_url)
+                    return False
+                logger.debug("Worker %s at capacity for experiments, trying next", worker_url)
+            except httpx.HTTPError as e:
+                logger.warning("Worker %s unreachable for experiment: %s", worker_url, e)
+    return False
+
+
+@router.post("/projects/{project_id}/experiments/{experiment_id}/run")
+async def run_experiment(
+    project_id: int,
+    experiment_id: int,
+    req: ExperimentRunRequest,
+):
+    conn = db.init.get_db()
+
+    # Pre-validation (non-authoritative -- atomic guard is inside generator)
+    project = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if experiment["status"] not in ("pending", "failed"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Experiment already {experiment['status']}. Only pending or failed experiments can be run.",
+        )
+
+    # Metric validation + dataset/metric compatibility (UI grays these out,
+    # but the API must also guard).
+    selected_metrics, all_custom_rows = _resolve_experiment_metrics(
+        conn, project_id, experiment, req
+    )
 
     # Atomically claim the experiment — set status to 'running' now so any
     # concurrent page load or refresh immediately sees the correct state.
@@ -853,38 +901,8 @@ async def run_experiment(
         )
 
     # --- Try delegating to a worker (bot-connector experiments only) ---
-    from config import KG_WORKER_URLS
-    if KG_WORKER_URLS and experiment["bot_config_id"] is not None:
-        import httpx
-
-        payload = {
-            "experiment_id": experiment_id,
-            "project_id": project_id,
-            "metrics": selected_metrics,
-            "rubrics": req.rubrics,
-            "concurrency": req.concurrency,
-            "multi_llm_judge_evaluators": req.multi_llm_judge_evaluators,
-            "judge_model_assignments": req.judge_model_assignments,
-            "judge_temperature_assignments": req.judge_temperature_assignments,
-        }
-        delegated = False
-        async with httpx.AsyncClient(timeout=10) as client:
-            for worker_url in KG_WORKER_URLS:
-                try:
-                    resp = await client.post(f"{worker_url}/run-experiment", json=payload)
-                    if resp.status_code == 202:
-                        experiment_runs.set_worker(experiment_id, worker_url)
-                        logger.info("Experiment %d delegated to worker: %s", experiment_id, worker_url)
-                        delegated = True
-                        break
-                    if resp.status_code == 409:
-                        logger.warning("Experiment %d conflict on worker %s", experiment_id, worker_url)
-                        break
-                    logger.debug("Worker %s at capacity for experiments, trying next", worker_url)
-                except httpx.HTTPError as e:
-                    logger.warning("Worker %s unreachable for experiment: %s", worker_url, e)
-
-        if delegated:
+    if experiment["bot_config_id"] is not None:
+        if await _try_delegate_experiment(experiment_id, project_id, selected_metrics, req):
             experiment_runs.set_progress(experiment_id, {
                 "phase": "starting", "current": 0, "total": 0,
                 "question": "", "error": None, "result_count": 0,
@@ -896,7 +914,7 @@ async def run_experiment(
                 "metrics": selected_metrics,
                 "worker": True,
             }
-        logger.info("All workers busy/unreachable — running experiment %d locally", experiment_id)
+        logger.info("No worker accepted experiment %d — running locally", experiment_id)
 
     # --- Launch local background task ---
     cancel_event = asyncio.Event()

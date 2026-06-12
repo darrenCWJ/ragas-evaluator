@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import type { Document } from '../../lib/api';
-import { deleteDocument, deleteAllDocuments, updateDocumentContextLabel } from '../../lib/api';
+import {
+  deleteDocument,
+  deleteAllDocuments,
+  reprocessDocument,
+  updateDocumentContextLabel,
+} from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -20,6 +25,36 @@ export default function DocumentList({ projectId, documents, loading, error, onR
   const [editingLabelId, setEditingLabelId] = useState<number | null>(null);
   const [labelDraft, setLabelDraft] = useState('');
   const [savingLabel, setSavingLabel] = useState(false);
+
+  // Re-process (re-extract text from the stored original)
+  const [reprocessId, setReprocessId] = useState<number | null>(null);
+  const [reproTables, setReproTables] = useState(true);
+  const [reproImages, setReproImages] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
+  const [reproNote, setReproNote] = useState<string | null>(null);
+
+  async function handleReprocess(docId: number) {
+    setReprocessing(true);
+    setDeleteError(null);
+    setReproNote(null);
+    try {
+      const res = await reprocessDocument(projectId, docId, {
+        extractTables: reproTables,
+        describeImages: reproImages,
+      });
+      setReprocessId(null);
+      setReproNote(
+        `${res.filename} re-processed (${res.content_chars.toLocaleString()} chars` +
+          (res.images_described > 0 ? `, ${res.images_described} images described` : '') +
+          `). ${res.note}.`,
+      );
+      onRefresh();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Re-process failed');
+    } finally {
+      setReprocessing(false);
+    }
+  }
 
   async function handleSaveLabel(docId: number) {
     setSavingLabel(true);
@@ -139,6 +174,17 @@ export default function DocumentList({ projectId, documents, loading, error, onR
           </button>
         )}
       </div>
+      {reproNote && (
+        <div className="flex items-center justify-between rounded-lg bg-score-high/10 px-4 py-2 text-xs text-score-high">
+          <span>{reproNote}</span>
+          <button
+            onClick={() => setReproNote(null)}
+            className="ml-2 rounded bg-score-high/20 px-2 py-0.5 text-xs hover:bg-score-high/30"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {deleteError && (
         <div className="flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
           <span>{deleteError}</span>
@@ -171,6 +217,13 @@ export default function DocumentList({ projectId, documents, loading, error, onR
               </div>
 
               <div className="flex shrink-0 items-center gap-1">
+                <button
+                  onClick={() => setReprocessId(reprocessId === doc.id ? null : doc.id)}
+                  className="rounded px-2 py-1 text-xs text-text-secondary hover:bg-elevated hover:text-accent"
+                  title="Re-extract this document's text from the stored original with new processing options (tables, vision)"
+                >
+                  Re-process
+                </button>
                 <button
                   onClick={() => {
                     if (editingLabelId === doc.id) {
@@ -225,6 +278,43 @@ export default function DocumentList({ projectId, documents, loading, error, onR
                 )}
               </div>
             </div>
+
+            {/* Re-process options */}
+            {reprocessId === doc.id && (
+              <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-border pt-2">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-secondary">
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={reproTables}
+                    onChange={(e) => setReproTables(e.target.checked)}
+                  />
+                  Extract tables
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-text-secondary">
+                  <input
+                    type="checkbox"
+                    className="accent-accent"
+                    checked={reproImages}
+                    onChange={(e) => setReproImages(e.target.checked)}
+                  />
+                  Describe images (vision LLM)
+                </label>
+                <button
+                  onClick={() => handleReprocess(doc.id)}
+                  disabled={reprocessing}
+                  className="rounded bg-accent/15 px-3 py-1 text-xs font-medium text-accent hover:bg-accent/25 disabled:opacity-40"
+                >
+                  {reprocessing ? 'Re-processing…' : 'Go'}
+                </button>
+                <button
+                  onClick={() => setReprocessId(null)}
+                  className="rounded bg-elevated px-2 py-1 text-xs text-text-secondary hover:bg-border"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
 
             {/* Context label editor */}
             {editingLabelId === doc.id && (

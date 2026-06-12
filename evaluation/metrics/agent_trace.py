@@ -79,7 +79,7 @@ def tool_call_accuracy_score(trace_steps: list[dict], reference_tool_calls: list
         return 0.0
 
     matched = sum(
-        1 for ref, call in zip(references, calls) if _call_matches(ref, call)
+        1 for ref, call in zip(references, calls, strict=False) if _call_matches(ref, call)
     )
     return round(matched / max(len(references), len(calls)), 4)
 

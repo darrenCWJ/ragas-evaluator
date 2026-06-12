@@ -3,6 +3,7 @@ import { deleteSkill } from '../../api';
 import type { Skill } from '../../api';
 import { useConfirm } from '../../hooks/useConfirm';
 import { ConfirmButtons, EmptyState, ErrorAlert, Spinner } from '../ui';
+import SkillDiff from './SkillDiff';
 import SkillUpload from './SkillUpload';
 
 interface SkillLibraryProps {
@@ -24,6 +25,13 @@ export default function SkillLibrary({
   const confirm = useConfirm<number>();
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [diffForId, setDiffForId] = useState<number | null>(null);
+
+  /** Highest older version of the same skill name, if any. */
+  const previousVersionOf = (skill: Skill): Skill | undefined =>
+    skills
+      .filter((s) => s.name === skill.name && s.version < skill.version)
+      .sort((a, b) => b.version - a.version)[0];
 
   const handleDelete = async (skillId: number) => {
     setDeletingId(skillId);
@@ -55,10 +63,8 @@ export default function SkillLibrary({
       ) : (
         <ul className="space-y-2">
           {skills.map((skill) => (
-            <li
-              key={skill.id}
-              className="flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"
-            >
+            <li key={skill.id} className="rounded-xl border border-border bg-card px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-text-primary">
                   {skill.name}
@@ -90,7 +96,16 @@ export default function SkillLibrary({
                   </p>
                 )}
               </div>
-              <div className="shrink-0">
+              <div className="flex shrink-0 items-center gap-1">
+                {previousVersionOf(skill) && (
+                  <button
+                    onClick={() => setDiffForId(diffForId === skill.id ? null : skill.id)}
+                    className="rounded-lg px-2 py-1 text-xs text-text-muted transition hover:text-accent"
+                    title={`Compare against v${previousVersionOf(skill)?.version}`}
+                  >
+                    {diffForId === skill.id ? 'Hide diff' : 'Diff'}
+                  </button>
+                )}
                 {confirm.isConfirming(skill.id) ? (
                   deletingId === skill.id ? (
                     <Spinner size="sm" />
@@ -109,6 +124,16 @@ export default function SkillLibrary({
                   </button>
                 )}
               </div>
+              </div>
+              {diffForId === skill.id && previousVersionOf(skill) && (
+                <SkillDiff
+                  key={`${skill.id}-${previousVersionOf(skill)!.id}`}
+                  projectId={projectId}
+                  current={skill}
+                  previous={previousVersionOf(skill)!}
+                  onClose={() => setDiffForId(null)}
+                />
+              )}
             </li>
           ))}
         </ul>

@@ -62,6 +62,11 @@ function CellButton({
           {cell.avg_latency_ms != null ? `${(cell.avg_latency_ms / 1000).toFixed(1)}s avg` : '—'}
           {' · '}
           {cell.tokens_in + cell.tokens_out} tok
+          {cell.cost_usd != null && (
+            <span title="Estimated cost from the model registry's per-token prices">
+              {' · '}${cell.cost_usd.toFixed(4)}
+            </span>
+          )}
         </div>
         <div className={cell.errors > 0 ? 'text-score-low' : ''}>
           {cell.count} runs{cell.errors > 0 ? ` · ${cell.errors} errors` : ''}

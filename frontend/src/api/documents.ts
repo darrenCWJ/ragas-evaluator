@@ -30,6 +30,28 @@ export async function uploadDocument(
   return formRequest<Document>(`/api/projects/${projectId}/documents`, form);
 }
 
+export interface ReprocessResult {
+  id: number;
+  filename: string;
+  images_described: number;
+  content_chars: number;
+  note: string;
+}
+
+export async function reprocessDocument(
+  projectId: number,
+  docId: number,
+  options: DocumentProcessingOptions,
+): Promise<ReprocessResult> {
+  return request<ReprocessResult>(`/api/projects/${projectId}/documents/${docId}/reprocess`, {
+    method: 'POST',
+    body: JSON.stringify({
+      extract_tables: options.extractTables ?? true,
+      describe_images: options.describeImages ?? false,
+    }),
+  });
+}
+
 export async function deleteDocument(projectId: number, docId: number): Promise<void> {
   await request<{ detail: string }>(`/api/projects/${projectId}/documents/${docId}`, {
     method: 'DELETE',

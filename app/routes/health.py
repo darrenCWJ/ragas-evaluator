@@ -213,7 +213,34 @@ async def workers_status():
     except Exception:
         logger.exception("Failed to attach project names to worker tasks")
 
-    return {"workers": results, "total_configured": len(KG_WORKER_URLS) + 1}
+    queued_jobs: list[dict] = []
+    try:
+        import db.init
+        from app.services.job_queue import list_queued
+
+        conn = db.init.get_db()
+        names: dict[int, str] = {}
+        for job in list_queued(conn):
+            pid = job["project_id"]
+            if pid not in names:
+                row = conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()
+                names[pid] = row["name"] if row else f"#{pid}"
+            queued_jobs.append({
+                "kind": job["kind"],
+                "project_id": pid,
+                "project_name": names[pid],
+                "kg_source": job["payload"].get("kg_source", "chunks"),
+                "attempts": job["attempts"],
+                "created_at": job["created_at"],
+            })
+    except Exception:
+        logger.exception("Failed to list queued jobs")
+
+    return {
+        "workers": results,
+        "total_configured": len(KG_WORKER_URLS) + 1,
+        "queued_jobs": queued_jobs,
+    }
 
 
 @router.post("/workers/clear-personas/{project_id}")

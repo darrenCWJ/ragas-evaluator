@@ -131,6 +131,11 @@ export default function PlaygroundRunPanel({
             <span>
               {result.tokens_in}&rarr;{result.tokens_out} tok
             </span>
+            {result.cost_usd != null && (
+              <span title="Estimated cost from the model registry's per-token prices">
+                ${result.cost_usd.toFixed(4)}
+              </span>
+            )}
             {result.stage_scores && (
               <span
                 className="rounded-full bg-accent/10 px-1.5 py-0.5 text-accent"

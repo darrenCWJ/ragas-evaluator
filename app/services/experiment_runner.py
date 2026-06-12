@@ -81,6 +81,18 @@ def build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
 
 
 
+def _question_with_history(question: str, history: list[dict]) -> str:
+    """Prepend the conversation so far to a query for stateless RAG pipelines.
+
+    Both retrieval and generation see the established context, mirroring how
+    a chat UI would carry the conversation.
+    """
+    if not history:
+        return question
+    lines = [f"{m['role'].capitalize()}: {m['content']}" for m in history]
+    return "Conversation so far:\n" + "\n".join(lines) + f"\n\nCurrent question: {question}"
+
+
 def sanitize_nan(obj):
     """Replace NaN/Inf floats with None so JSON serialization produces valid output."""
     if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
@@ -603,18 +615,34 @@ async def run_experiment_background(
                         context_strings = citation_contexts
                     else:
                         response_mode = virtual_config["response_mode"]
-                        if response_mode == "multi_step":
-                            query_result = await multi_step_query(
-                                question_text, virtual_config, run_conn
+
+                        async def _rag_query(text: str) -> dict:
+                            if response_mode == "multi_step":
+                                return await multi_step_query(text, virtual_config, run_conn)
+                            return await single_shot_query(text, virtual_config, run_conn)
+
+                        # Multi-turn for internal RAG: the pipeline itself is
+                        # stateless, so each setup turn runs as a full RAG
+                        # round and the accumulated conversation is prepended
+                        # to subsequent queries (retrieval + generation both
+                        # see the history).
+                        rag_history: list[dict] = []
+                        for turn_text in conversation_turns:
+                            prior = await _rag_query(
+                                _question_with_history(turn_text, rag_history)
                             )
-                        else:
-                            query_result = await single_shot_query(
-                                question_text, virtual_config, run_conn
-                            )
+                            rag_history.append({"role": "user", "content": turn_text})
+                            rag_history.append({"role": "assistant", "content": prior["answer"]})
+
+                        query_result = await _rag_query(
+                            _question_with_history(question_text, rag_history)
+                        )
                         generated_answer = query_result["answer"]
                         full_context_dicts = query_result["contexts"]
                         usage_info = query_result.get("usage", {})
                         context_strings = [c["content"] for c in full_context_dicts]
+                        if rag_history:
+                            usage_info["transcript"] = rag_history
 
                     # Update phase to scoring
                     def _mark_scoring(prog: dict) -> None:
@@ -630,9 +658,9 @@ async def run_experiment_background(
                     )
                     q_metadata = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else None
                     # Make the runtime transcript available to conversation
-                    # metrics (conversation_retention). Internal RAG runs
-                    # don't simulate turns — only bot runs build history.
-                    if conversation_turns and use_bot and not is_csv:
+                    # metrics (conversation_retention). Bot, agent, AND
+                    # internal RAG runs all simulate turns and record one.
+                    if conversation_turns and not is_csv:
                         _transcript = usage_info.get("transcript")
                         if _transcript:
                             q_metadata = {**(q_metadata or {}), "_transcript": _transcript}

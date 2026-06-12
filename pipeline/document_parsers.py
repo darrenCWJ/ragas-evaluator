@@ -24,11 +24,44 @@ def _parse_text(data: bytes) -> str:
     return _decode(data)
 
 
-def _parse_pdf(data: bytes) -> str:
+def _parse_pdf(data: bytes, extract_tables: bool = True) -> str:
+    """PDF text, with structured tables when pdfplumber is available.
+
+    pdfplumber reconstructs row/column structure (rendered as markdown after
+    each page's text); plain pypdf text extraction is the fallback.
+    """
+    if extract_tables:
+        try:
+            return _parse_pdf_with_tables(data)
+        except ImportError:
+            pass  # pdfplumber not installed — plain text below
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "pdfplumber parse failed — falling back to pypdf", exc_info=True
+            )
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
     return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _parse_pdf_with_tables(data: bytes) -> str:
+    import pdfplumber
+
+    parts: list[str] = []
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            if text.strip():
+                parts.append(text)
+            for table in page.extract_tables():
+                rows = [["" if c is None else str(c) for c in row] for row in table]
+                md = _table_rows_to_markdown(rows)
+                if md:
+                    parts.append("\n" + md + "\n")
+    return "\n".join(parts)
 
 
 def _table_rows_to_markdown(rows: list[list[str]]) -> str:
@@ -261,6 +294,8 @@ def parse_document(filename: str, ext: str, data: bytes, *, extract_tables: bool
             text = _parse_docx(data, extract_tables)
         elif ext == ".pptx":
             text = _parse_pptx(data, extract_tables)
+        elif ext == ".pdf":
+            text = _parse_pdf(data, extract_tables)
         else:
             text = parser(data)
     except DocumentParseError:
