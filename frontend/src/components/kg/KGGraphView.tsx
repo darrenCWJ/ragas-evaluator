@@ -33,7 +33,7 @@ interface Filters {
 // ── Color palette for communities ──────────────────────────────────────────
 
 const COMMUNITY_COLORS = [
-  '#818cf8',
+  '#22d3ee',
   '#22c55e',
   '#f59e0b',
   '#ef4444',
@@ -78,7 +78,7 @@ function buildGraphStructure(data: KGGraphData): Graph {
         node.type === 'document'
           ? Math.max(6, Math.min(16, (node.keyphrases.length || 1) * 2.5))
           : Math.max(3, Math.min(8, (node.keyphrases.length || 1) * 1.5)),
-      color: node.type === 'document' ? '#22c55e' : '#818cf8',
+      color: node.type === 'document' ? '#34d399' : '#22d3ee',
       x: Math.cos(angle) * r,
       y: Math.sin(angle) * r,
     });
@@ -586,7 +586,7 @@ function GraphInner({
   // We create these once per settings update, not per node/edge
   const DIMMED = useMemo(() => ({ color: '#1a2236', label: '' }), []);
   const HIDDEN = useMemo(() => ({ hidden: true as const }), []);
-  const HIGHLIGHT_EDGE = useMemo(() => ({ color: '#818cf8', size: 1.5 }), []);
+  const HIGHLIGHT_EDGE = useMemo(() => ({ color: '#22d3ee', size: 1.5 }), []);
 
   // Apply filters via nodeReducer / edgeReducer
   useEffect(() => {

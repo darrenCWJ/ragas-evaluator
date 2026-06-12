@@ -47,7 +47,12 @@ function SidebarFooter() {
           </button>
         </div>
       )}
-      <div className="text-2xs text-text-muted">v{version}</div>
+      <div className="flex items-center gap-1.5 text-2xs text-text-muted">
+        <span className="rounded-full bg-accent/10 px-1.5 py-0.5 font-mono text-accent">
+          v{version}
+        </span>
+        <span>Tribunal</span>
+      </div>
     </div>
   );
 }
@@ -95,11 +100,13 @@ export default function WorkspaceLayout() {
       <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-base">
         {/* Logo area */}
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
-            <span className="text-sm font-bold text-accent">T</span>
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-teal-400 shadow-[0_0_14px_rgba(34,211,238,0.25)]">
+            <span className="font-display text-sm font-bold text-deep">T</span>
           </div>
           <div>
-            <div className="text-sm font-semibold text-text-primary leading-tight">Tribunal</div>
+            <div className="font-display text-sm font-semibold leading-tight text-text-primary">
+              Tribunal
+            </div>
             <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
               Platform
             </div>
@@ -134,11 +141,13 @@ export default function WorkspaceLayout() {
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
-              <span className="text-sm font-bold text-accent">T</span>
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-teal-400 shadow-[0_0_14px_rgba(34,211,238,0.25)]">
+              <span className="font-display text-sm font-bold text-deep">T</span>
             </div>
             <div>
-              <div className="text-sm font-semibold text-text-primary leading-tight">Tribunal</div>
+              <div className="font-display text-sm font-semibold leading-tight text-text-primary">
+                Tribunal
+              </div>
               <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
                 Platform
               </div>
@@ -167,7 +176,7 @@ export default function WorkspaceLayout() {
       {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Header */}
-        <header className="flex items-center justify-between border-b border-border bg-card px-4 py-3 md:px-6">
+        <header className="flex items-center justify-between border-b border-border bg-base/70 px-4 py-3 backdrop-blur-md md:px-6">
           <div className="flex items-center gap-3">
             {/* Mobile hamburger */}
             <button

@@ -149,7 +149,7 @@ export default function Stepper() {
                 transition-colors duration-200
                 ${
                   isActive
-                    ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                    ? 'bg-accent text-deep shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                     : isComplete
                       ? 'bg-emerald-500/15 text-emerald-400'
                       : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
@@ -182,7 +182,7 @@ export default function Stepper() {
 
             {/* Active indicator bar */}
             {isActive && (
-              <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+              <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
             )}
           </NavLink>
         );
@@ -211,7 +211,7 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isKgActive
-                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                 : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
@@ -237,7 +237,7 @@ export default function Stepper() {
           </span>
         </div>
         {isKgActive && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
         )}
       </NavLink>
 
@@ -261,7 +261,7 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isPersonasActive
-                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                 : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
@@ -285,7 +285,7 @@ export default function Stepper() {
           <span className="text-micro text-text-muted leading-tight truncate">Edit & manage</span>
         </div>
         {isPersonasActive && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
         )}
       </NavLink>
 
@@ -309,7 +309,7 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isSkillsActive
-                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                 : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
@@ -335,7 +335,7 @@ export default function Stepper() {
           </span>
         </div>
         {isSkillsActive && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
         )}
       </NavLink>
 
@@ -359,7 +359,7 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isWorkersActive
-                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                 : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
@@ -385,7 +385,7 @@ export default function Stepper() {
           </span>
         </div>
         {isWorkersActive && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
         )}
       </NavLink>
 
@@ -409,7 +409,7 @@ export default function Stepper() {
             transition-colors duration-200
             ${
               isGuideActive
-                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(129,140,248,0.3)]'
+                ? 'bg-accent text-deep shadow-[0_0_12px_rgba(34,211,238,0.3)]'
                 : 'bg-card text-text-muted group-hover:bg-elevated group-hover:text-text-secondary'
             }
           `}
@@ -435,7 +435,7 @@ export default function Stepper() {
           </span>
         </div>
         {isGuideActive && (
-          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-[3px] rounded-r-full bg-accent shadow-[0_0_8px_rgba(34,211,238,0.5)]" />
         )}
       </NavLink>
     </nav>

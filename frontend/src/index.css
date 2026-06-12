@@ -6,6 +6,26 @@
   body {
     @apply bg-deep text-text-primary font-sans antialiased;
     min-height: 100vh;
+    /* Quiet atmosphere: a cyan wash from the top-right and a teal hint from
+       the bottom-left so surfaces never feel like a flat void. */
+    background-image:
+      radial-gradient(1100px 700px at 88% -8%, rgba(34, 211, 238, 0.07), transparent 60%),
+      radial-gradient(900px 650px at -12% 108%, rgba(45, 212, 191, 0.05), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* Headings carry the display face — gives every page a consistent voice
+     without per-component changes. */
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+
+  /* Visible, consistent keyboard focus everywhere */
+  :focus-visible {
+    outline: 2px solid rgba(34, 211, 238, 0.6);
+    outline-offset: 2px;
   }
 
   /* Scrollbar theming */

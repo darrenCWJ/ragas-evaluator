@@ -138,7 +138,7 @@ export default function AgentToolsPanel({ projectId, selectedToolIds, onChange }
             type="checkbox"
             checked={selectedToolIds.has(t.id)}
             onChange={() => toggle(t.id)}
-            className="mt-0.5 accent-[var(--tw-color-accent,#818cf8)]"
+            className="mt-0.5 accent-accent"
           />
           <span className="min-w-0 flex-1">
             <span className="font-mono text-xs text-text-primary">{t.name}</span>

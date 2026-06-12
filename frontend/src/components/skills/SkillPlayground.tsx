@@ -197,7 +197,7 @@ export default function SkillPlayground({ projectId, skills, judgeModels }: Skil
           value={userBrief}
           onChange={(e) => setUserBrief(e.target.value)}
           placeholder={
-            "e.g. App name fraud-alert-daily, owned by the platform team, Python, runs daily at 02:00 SGT. Reads cdo_dev.landing.payments, writes cdo_dev.gold.payment_recon. Never backfill more than 30 days. No Claude context needed."
+            'e.g. App name fraud-alert-daily, owned by the platform team, Python, runs daily at 02:00 SGT. Reads cdo_dev.landing.payments, writes cdo_dev.gold.payment_recon. Never backfill more than 30 days. No Claude context needed.'
           }
         />
       </FormField>
