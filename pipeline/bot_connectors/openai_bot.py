@@ -36,8 +36,8 @@ class OpenAIBotConnector:
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources
 
-    async def query(self, question: str) -> BotResponse:
-        system = self._system_prompt
+    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+        system = f"{system_context}\n\n{self._system_prompt}" if system_context else self._system_prompt
         if self._prompt_for_sources:
             system += SOURCE_PROMPT_SUFFIX
 

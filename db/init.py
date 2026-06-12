@@ -379,6 +379,48 @@ CREATE TABLE IF NOT EXISTS evaluator_claim_annotations (
     annotated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
     UNIQUE(evaluation_id, claim_index)
 );
+
+CREATE TABLE IF NOT EXISTS skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    content TEXT NOT NULL,
+    parsed_directives_json TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(project_id, name, version)
+);
+
+CREATE TABLE IF NOT EXISTS skill_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    skill_id INTEGER REFERENCES skills(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    test_set_id INTEGER NOT NULL REFERENCES test_sets(id),
+    models_json TEXT NOT NULL,
+    include_baseline INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    completed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS skill_trial_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trial_id INTEGER NOT NULL REFERENCES skill_trials(id) ON DELETE CASCADE,
+    skill_id INTEGER REFERENCES skills(id),
+    model TEXT NOT NULL,
+    test_question_id INTEGER NOT NULL REFERENCES test_questions(id),
+    response TEXT,
+    scores_json TEXT,
+    directive_results_json TEXT,
+    trace_json TEXT,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    latency_ms INTEGER,
+    error TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 # ---------------------------------------------------------------------------
@@ -491,6 +533,7 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN judge_model_assignments_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
     _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN few_shot_examples_json TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN preferred_model TEXT")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:

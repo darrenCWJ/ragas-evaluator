@@ -106,7 +106,11 @@ class CustomBotConnector:
         )
         self._timeout = timeout
 
-    async def query(self, question: str) -> BotResponse:
+    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+        # Custom HTTP bots have no system channel — prepend the context to the
+        # question so skill trials still work against arbitrary endpoints.
+        if system_context:
+            question = f"{system_context}\n\n---\n\n{question}"
         body_str = _PLACEHOLDER_RE.sub(_escape_json_value(question), self._body_template)
         body = json.loads(body_str)
 

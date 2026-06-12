@@ -31,7 +31,10 @@ class CsvBotConnector:
         ]
         return self._rows
 
-    async def query(self, question: str) -> BotResponse:
+    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+        if system_context:
+            from pipeline.bot_connectors.base import SystemContextUnsupported
+            raise SystemContextUnsupported("csv")
         rows = self._load()
         if not rows:
             return BotResponse(answer="[No CSV data found for this bot config]")

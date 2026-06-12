@@ -31,7 +31,7 @@ async def create_project(req: ProjectCreate):
         )
         conn.commit()
         row = conn.execute(
-            "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
+            "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects WHERE id = ?",
             (cursor.lastrowid,),
         ).fetchone()
         return _format_project(row)
@@ -52,7 +52,7 @@ def _format_project(row) -> dict:
 async def list_projects():
     conn = db.init.get_db()
     rows = conn.execute(
-        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects"
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects"
     ).fetchall()
     return [_format_project(r) for r in rows]
 
@@ -61,7 +61,7 @@ async def list_projects():
 async def get_project(project_id: int):
     conn = db.init.get_db()
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects WHERE id = ?",
         (project_id,),
     ).fetchone()
     if row is None:
@@ -103,7 +103,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
             raise HTTPException(status_code=409, detail="Project name already exists") from e
         raise
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json FROM projects WHERE id = ?",
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects WHERE id = ?",
         (project_id,),
     ).fetchone()
     return _format_project(row)

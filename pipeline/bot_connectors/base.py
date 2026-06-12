@@ -31,9 +31,25 @@ class BotResponse:
 
 
 class BotConnector(Protocol):
-    """Interface every bot connector must satisfy."""
+    """Interface every bot connector must satisfy.
 
-    async def query(self, question: str) -> BotResponse: ...
+    ``system_context`` carries per-call system instructions (e.g. a skill
+    file under test) and is prepended to any connector-configured system
+    prompt. Connectors without a system channel (CSV, Glean) raise
+    ``SystemContextUnsupported`` when it is provided.
+    """
+
+    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse: ...
+
+
+class SystemContextUnsupported(RuntimeError):
+    """Raised when a connector cannot carry per-call system instructions."""
+
+    def __init__(self, connector_type: str) -> None:
+        super().__init__(
+            f"The '{connector_type}' connector does not support system context "
+            "(skill injection requires a chat-style connector)."
+        )
 
 
 # Instruction appended to the system prompt when the user opts in to

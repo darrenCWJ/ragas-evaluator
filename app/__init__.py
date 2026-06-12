@@ -27,6 +27,7 @@ from app.routes import (
     projects,
     rag,
     reports,
+    skills,
     system,
     testsets,
 )
@@ -163,6 +164,7 @@ def create_app() -> FastAPI:
     application.include_router(custom_metrics.router)
     application.include_router(personas.router)
     application.include_router(multi_llm_judge.router)
+    application.include_router(skills.router)
     application.include_router(system.router)
 
     # SPA catch-all

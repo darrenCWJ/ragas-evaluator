@@ -39,7 +39,10 @@ class GleanBotConnector:
         self._agent_id = agent_id
         self._timeout = timeout
 
-    async def query(self, question: str) -> BotResponse:
+    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+        if system_context:
+            from pipeline.bot_connectors.base import SystemContextUnsupported
+            raise SystemContextUnsupported("glean")
         body: dict[str, Any] = {
             "messages": [
                 {"fragments": [{"text": question}]}

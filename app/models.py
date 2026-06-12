@@ -621,3 +621,59 @@ class BotConfigUpdate(BaseModel):
                 f"connector_type must be one of: {', '.join(sorted(VALID_CONNECTOR_TYPES))}"
             )
         return v
+
+
+# --- Skill Arena ---
+
+
+class SkillCreate(BaseModel):
+    """Upload/paste a skill file (SKILL.md-style instruction document)."""
+
+    content: str = Field(min_length=20, max_length=200_000)
+    name: str | None = Field(default=None, max_length=120)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must not be empty")
+        return v
+
+
+class SkillTrialCreate(BaseModel):
+    """Run a skill across selected AI models against an approved test set."""
+
+    name: str = Field(min_length=1, max_length=200)
+    skill_id: int
+    test_set_id: int
+    models: list[dict] = Field(min_length=1, max_length=10)
+    include_baseline: bool = True
+
+    @field_validator("models")
+    @classmethod
+    def validate_models(cls, specs: list[dict]) -> list[dict]:
+        for spec in specs:
+            kind = spec.get("kind")
+            if kind == "llm":
+                model = spec.get("model", "")
+                if not isinstance(model, str) or not _LLM_MODEL_RE.match(model):
+                    raise ValueError(f"invalid llm model id: {model!r}")
+            elif kind == "bot":
+                if not isinstance(spec.get("bot_config_id"), int):
+                    raise ValueError("bot entries require an integer bot_config_id")
+            else:
+                raise ValueError("each model entry needs kind 'llm' or 'bot'")
+        return specs
+
+
+class ApplyModelRequest(BaseModel):
+    """Set a trial-winning model as the project's preferred model."""
+
+    model: str = Field(min_length=1, max_length=128)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError("invalid model id")
+        return v
