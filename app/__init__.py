@@ -22,6 +22,7 @@ from app.routes import (
     embeddings,
     experiments,
     health,
+    insights,
     multi_llm_judge,
     personas,
     projects,
@@ -165,6 +166,7 @@ def create_app() -> FastAPI:
     application.include_router(personas.router)
     application.include_router(multi_llm_judge.router)
     application.include_router(skills.router)
+    application.include_router(insights.router)
     application.include_router(system.router)
 
     # SPA catch-all

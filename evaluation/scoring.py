@@ -34,6 +34,7 @@ from evaluation.metrics import (
     instance_rubrics,
     noise_sensitivity,
     non_llm_string_similarity,
+    refusal_accuracy,
     response_groundedness,
     rouge_score,
     rubrics_score,
@@ -69,6 +70,7 @@ ALL_METRICS = [
     "context_relevance",
     "instance_rubrics",
     "response_groundedness",
+    "refusal_accuracy",
     "sql_semantic_equivalence",
     "datacompy_score",
     # multi_llm_judge is listed here for UI discovery but executed separately
@@ -99,6 +101,7 @@ _METRIC_MODULES = {
     "context_relevance": context_relevance,
     "instance_rubrics": instance_rubrics,
     "response_groundedness": response_groundedness,
+    "refusal_accuracy": refusal_accuracy,
     "sql_semantic_equivalence": sql_semantic_equivalence,
     "datacompy_score": datacompy_score,
 }
@@ -109,7 +112,7 @@ _LLM_ONLY = {
     "context_entities_recall", "noise_sensitivity", "factual_correctness",
     "summarization_score", "aspect_critic", "rubrics_score", "instance_rubrics",
     "answer_accuracy", "context_relevance", "response_groundedness",
-    "sql_semantic_equivalence",
+    "sql_semantic_equivalence", "refusal_accuracy",
 }
 # Metrics that need LLM + embeddings
 _LLM_AND_EMBED = {"answer_relevancy"}
@@ -208,6 +211,8 @@ _SCORE_SIGNATURES = {
     # Domain-specific: uses metadata fields instead of standard question/answer
     "metadata_sql": {"sql_semantic_equivalence"},
     "metadata_data": {"datacompy_score"},
+    # (scorer, question, answer, metadata) — scores only refusal-tagged questions
+    "metadata_refusal": {"refusal_accuracy"},
 }
 
 # Metrics that require non-empty contexts to run
@@ -276,6 +281,8 @@ async def _score_builtin(
             meta = metadata or {}
             ref_data = meta.get("reference_data", reference_answer)
             factory = partial(mod.score, scorer, generated_answer, ref_data)
+        elif name in _SCORE_SIGNATURES["metadata_refusal"]:
+            factory = partial(mod.score, scorer, question, generated_answer, metadata)
         else:
             factory = None
 

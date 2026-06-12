@@ -43,6 +43,11 @@ _gen_lock = threading.Lock()
 # --- Helpers ---
 
 
+def _normalize_for_hash(text: str) -> str:
+    """Whitespace-insensitive key for matching reference contexts to chunks."""
+    return " ".join((text or "").split())
+
+
 def _parse_test_question_row(row) -> dict:
     d = dict(row)
     rc = d.get("reference_contexts")
@@ -321,15 +326,41 @@ def _run_generation(
     conn = db.init.get_thread_db()
     saved_count = 0
 
+    # Provenance lookup: normalized chunk content hash → (chunk_id, document_id).
+    # Lets every generated question record WHICH chunks its reference contexts
+    # came from, so failed experiment results can point at the exact source.
+    chunk_lookup: dict[str, tuple[int, int]] = {}
+    if req.chunk_config_id:
+        for row in conn.execute(
+            "SELECT id, document_id, content FROM chunks WHERE chunk_config_id = ?",
+            (req.chunk_config_id,),
+        ).fetchall():
+            chunk_lookup[_normalize_for_hash(row["content"])] = (row["id"], row["document_id"])
+
     def _save_batch(batch: list[dict]) -> None:
         nonlocal saved_count
         for q in batch:
             persona_name = q.get("persona") or q.get("synthesizer_name") or ""
             category = q.get("category", "")
+
+            metadata = dict(q.get("metadata") or {})
+            if chunk_lookup:
+                source_chunks: list[int] = []
+                source_docs: set[int] = set()
+                for ctx in q.get("reference_contexts", []) or []:
+                    text = ctx if isinstance(ctx, str) else ctx.get("content", "")
+                    hit = chunk_lookup.get(_normalize_for_hash(text))
+                    if hit:
+                        source_chunks.append(hit[0])
+                        source_docs.add(hit[1])
+                if source_chunks:
+                    metadata["source_chunk_ids"] = source_chunks
+                    metadata["source_document_ids"] = sorted(source_docs)
+
             conn.execute(
                 """INSERT INTO test_questions
-                   (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                   (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, status, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
                 (
                     test_set_id,
                     q.get("user_input", ""),
@@ -338,6 +369,7 @@ def _run_generation(
                     q.get("synthesizer_name", ""),
                     persona_name,
                     category,
+                    json.dumps(metadata) if metadata else None,
                 ),
             )
         conn.commit()

@@ -11,6 +11,7 @@ export * from './testsets';
 export * from './personas';
 export * from './kg';
 export * from './experiments';
+export * from './insights';
 export * from './annotations';
 export * from './metrics';
 export * from './workers';

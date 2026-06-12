@@ -419,6 +419,62 @@ export interface CreateTestSetResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Insights — test set quality audit, corpus coverage, category breakdown
+// ---------------------------------------------------------------------------
+
+/** Per-question audit result stored at `TestQuestion.metadata.quality`. */
+export interface QuestionQuality {
+  score: number;
+  flags: string[];
+  reasoning: string;
+}
+
+export interface QualityAuditSummary {
+  audited: number;
+  avg_score: number | null;
+  flag_counts: Record<string, number>;
+  flagged_question_ids: number[];
+  use_llm: boolean;
+}
+
+export interface CoverageDocument {
+  document_id: number;
+  filename: string;
+  question_count: number;
+  covered: boolean;
+}
+
+export interface CoverageReport {
+  total_questions: number;
+  questions_with_provenance: number;
+  total_documents: number;
+  covered_documents: number;
+  uncovered_documents: string[];
+  total_chunks: number;
+  covered_chunks: number;
+  chunk_coverage: number | null;
+  documents: CoverageDocument[];
+}
+
+export interface WeakestQuestion {
+  question_id: number;
+  question: string;
+  mean_score: number | null;
+}
+
+export interface CategoryBreakdown {
+  category: string;
+  question_count: number;
+  overall: number | null;
+  metrics: Record<string, number>;
+  weakest_questions: WeakestQuestion[];
+}
+
+export interface ExperimentBreakdown {
+  categories: CategoryBreakdown[];
+}
+
+// ---------------------------------------------------------------------------
 // Personas
 // ---------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ import {
 import type { Experiment, ExperimentResult } from '../../lib/api';
 import QuestionResultRow from './QuestionResultRow';
 import MultiLLMJudgeDashboard from './MultiLLMJudgeDashboard';
+import CategoryBreakdown from './CategoryBreakdown';
 import { humanizeMetric, scoreBarColor, scoreBgColor, scoreTextColor } from './scoreUtils';
 
 interface Props {
@@ -279,6 +280,11 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
 
       {activeTab === 'results' && (
         <>
+          {/* ── Per-category breakdown (lazy, collapsible) ── */}
+          {results.length > 0 && (
+            <CategoryBreakdown projectId={projectId} experimentId={experimentId} />
+          )}
+
           {/* ── Empty results ── */}
           {results.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">

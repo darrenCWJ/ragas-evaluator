@@ -342,3 +342,16 @@ Each matrix cell also records tokens in/out and latency, so "follows the skill b
 - KG transforms run batched with per-batch checkpoint persistence — a hard kill (OOM, timeout) loses one batch, not the step; resumed builds skip already-processed nodes.
 - Per-batch `gc` + `malloc_trim` returns freed memory to the OS; RSS is logged each step.
 - `POST /api/system/maintenance` reclaims space on demand: WAL checkpoint, optional `VACUUM`, stale progress eviction, and release of cached reranker/sentence-transformer models.
+
+---
+
+## Test Set Transparency
+
+**What it does:** Makes the test set itself auditable, so a bad verdict about the user's agent can't hide behind bad test questions.
+
+- **Quality audit** (`POST .../test-sets/{id}/quality-audit`) — every question (generated or uploaded) is checked deterministically (too short, empty reference, verbatim leakage from source text, missing contexts) and optionally by LLM (reference answer not grounded in sources, not self-contained, trivial). Results persist on each question (`metadata.quality`) and surface as warning chips in the question list.
+- **Coverage report** (`GET .../test-sets/{id}/coverage`) — which documents and chunks the test set actually exercises, with the untested documents listed by name. Generated questions now store provenance (`source_chunk_ids` / `source_document_ids`) linking each question to the exact chunks its reference answer came from.
+- **Refusal testing** — `out_of_knowledge_base` generated questions are tagged `expected_behavior: refusal`, and the `refusal_accuracy` metric judges whether the agent correctly declined (1.0), hedged (0.5), or fabricated an answer (0.0). It returns None on all other questions so aggregates stay clean.
+- **Category breakdown** (`GET .../experiments/{id}/breakdown`) — experiment scores grouped by question category with per-metric averages and the weakest questions per group, sorted worst-first. "Your agent fails multi-hop and refusal questions" instead of one averaged number.
+
+**Why:** The platform's promise is transparency into what went wrong with the user's agent. That requires trustworthy questions (audit), knowing what was never tested (coverage), testing the most common real failure (fabricating answers to out-of-scope questions), and attributing failures to categories rather than averaging them away.

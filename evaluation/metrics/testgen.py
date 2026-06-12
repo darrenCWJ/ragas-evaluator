@@ -2173,12 +2173,17 @@ def _generate_category_questions_via_llm(
 
         results = []
         for item in items[:count]:
-            results.append({
+            entry = {
                 "user_input": item.get("question", ""),
                 "reference": item.get("reference_answer", ""),
                 "reference_contexts": [],
                 "synthesizer_name": category,
-            })
+            }
+            if category == "out_of_knowledge_base":
+                # Tag so refusal_accuracy scores these and reference-based
+                # metrics can be interpreted per-category in breakdowns.
+                entry["metadata"] = {"expected_behavior": "refusal"}
+            results.append(entry)
         return results
     except Exception:
         logger.exception("Failed to generate %s questions via LLM", category)

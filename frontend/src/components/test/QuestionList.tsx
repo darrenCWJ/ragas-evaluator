@@ -3,6 +3,7 @@ import type { TestQuestion, TestSetSummary, TestSet } from '../../lib/api';
 import { fetchTestQuestions, fetchTestSetSummary } from '../../lib/api';
 import QuestionCard from './QuestionCard';
 import BulkActions from './BulkActions';
+import TestSetInsights from './TestSetInsights';
 
 function escapeCsvField(value: string): string {
   if (value.includes(',') || value.includes('"') || value.includes('\n')) {
@@ -180,6 +181,9 @@ export default function QuestionList({ projectId, testSet, onBack }: Props) {
           </span>
         </div>
       )}
+
+      {/* Quality audit + corpus coverage */}
+      <TestSetInsights projectId={projectId} testSetId={testSet.id} onAudited={refresh} />
 
       {/* Bulk actions bar */}
       <BulkActions

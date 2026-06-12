@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { TestQuestion } from '../../lib/api';
+import type { QuestionQuality, TestQuestion } from '../../lib/api';
 import { annotateQuestion } from '../../lib/api';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -79,6 +79,15 @@ export default function QuestionCard({
 
   const refAnswer = q.reference_answer || '';
   const needsTruncate = refAnswer.length > 150;
+
+  // Quality audit result — read from the prop (fresh after parent refetch)
+  const rawQuality = question.metadata?.quality;
+  const quality =
+    rawQuality && typeof rawQuality === 'object' && !Array.isArray(rawQuality)
+      ? (rawQuality as Partial<QuestionQuality>)
+      : undefined;
+  const qualityFlags = quality && Array.isArray(quality.flags) ? quality.flags : [];
+  const qualityReasoning = typeof quality?.reasoning === 'string' ? quality.reasoning : '';
 
   const doAnnotate = async (status: 'approved' | 'rejected') => {
     setSaving(true);
@@ -531,6 +540,17 @@ export default function QuestionCard({
 
             {/* Persona badge */}
             {q.persona && <span className="text-text-muted italic">{q.persona}</span>}
+
+            {/* Quality audit flags */}
+            {qualityFlags.map((flag) => (
+              <span
+                key={flag}
+                title={qualityReasoning}
+                className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-0.5 text-yellow-300"
+              >
+                {String(flag).replace(/_/g, ' ')}
+              </span>
+            ))}
 
             {/* Spacer */}
             <span className="flex-1" />
