@@ -457,6 +457,73 @@ class ExperimentCreate(BaseModel):
             raise ValueError("Provide rag_config_id or bot_config_id, not both")
 
 
+SWEEPABLE_FIELDS = {
+    "top_k",
+    "alpha",
+    "score_threshold",
+    "mmr_lambda",
+    "query_expansion",
+    "num_expansions",
+    "reranker_model",
+    "reranker_top_k",
+    "kg_expansion",
+    "llm_model",
+}
+
+MAX_SWEEP_COMBINATIONS = 36
+
+
+class SweepCreate(BaseModel):
+    """Parameter sweep: a grid of retrieval-parameter values, one experiment
+    per combination, run sequentially with (by default) judge-free metrics."""
+
+    name: str
+    test_set_id: int
+    rag_config_id: int
+    grid: dict[str, list]
+    metrics: list[str] | None = None
+    concurrency: int = 3
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+    @field_validator("grid")
+    @classmethod
+    def validate_grid(cls, v: dict[str, list]) -> dict[str, list]:
+        if not v:
+            raise ValueError("grid must contain at least one parameter")
+        unknown = set(v.keys()) - SWEEPABLE_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Unsweepable fields: {', '.join(sorted(unknown))}. "
+                f"Sweepable: {', '.join(sorted(SWEEPABLE_FIELDS))}"
+            )
+        combos = 1
+        for key, values in v.items():
+            if not isinstance(values, list) or not values:
+                raise ValueError(f"grid['{key}'] must be a non-empty list of values")
+            combos *= len(values)
+        if combos > MAX_SWEEP_COMBINATIONS:
+            raise ValueError(
+                f"Grid expands to {combos} combinations — the limit is {MAX_SWEEP_COMBINATIONS}"
+            )
+        return v
+
+    @field_validator("concurrency")
+    @classmethod
+    def validate_sweep_concurrency(cls, v: int) -> int:
+        if v < 1 or v > 10:
+            raise ValueError("concurrency must be between 1 and 10")
+        return v
+
+
 class ExperimentRunRequest(BaseModel):
     metrics: list[str] | None = None
     rubrics: dict[str, str] | None = None

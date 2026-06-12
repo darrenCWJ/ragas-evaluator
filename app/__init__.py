@@ -31,6 +31,7 @@ from app.routes import (
     rag,
     reports,
     skills,
+    sweeps,
     system,
     testsets,
 )
@@ -222,6 +223,7 @@ def create_app() -> FastAPI:
     application.include_router(personas.router)
     application.include_router(multi_llm_judge.router)
     application.include_router(skills.router)
+    application.include_router(sweeps.router)
     application.include_router(insights.router)
     application.include_router(system.router)
 

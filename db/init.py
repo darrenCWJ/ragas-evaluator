@@ -347,6 +347,28 @@ CREATE TABLE IF NOT EXISTS custom_metrics (
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS sweeps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    test_set_id INTEGER NOT NULL REFERENCES test_sets(id),
+    base_rag_config_id INTEGER NOT NULL REFERENCES rag_configs(id),
+    grid_json TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS sweep_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sweep_id INTEGER NOT NULL REFERENCES sweeps(id) ON DELETE CASCADE,
+    experiment_id INTEGER REFERENCES experiments(id),
+    params_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_graphs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
