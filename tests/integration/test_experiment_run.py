@@ -38,6 +38,7 @@ _TEST_METRICS = [
     "context_entities_recall",   # ref_ctx
     "answer_accuracy",           # q_a_ref
     "instance_rubrics",          # q_a_rubrics_ctx
+    "refusal_accuracy",          # metadata_refusal
 ]
 
 _DETERMINISTIC = ["bleu_score", "rouge_score", "exact_match", "non_llm_string_similarity", "string_presence"]
