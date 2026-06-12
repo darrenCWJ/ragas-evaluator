@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react';
+﻿import type { Dispatch, SetStateAction } from 'react';
 import type { CustomMetric } from '../../../lib/api';
 
 export const LLM_METRICS = [
@@ -17,7 +17,7 @@ export const LLM_METRICS = [
   'conversation_retention',
 ];
 
-/** One-click selection presets — the guided "options kinds" for metric choice. */
+/** One-click selection presets â€” the guided "options kinds" for metric choice. */
 export const PRESET_RECOMMENDED = [
   'faithfulness',
   'answer_relevancy',
@@ -78,7 +78,7 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
   answer_relevancy:
     "Measures how relevant the response is to the user's question. Penalises incomplete or redundant answers.",
   context_precision:
-    'Measures how well retrieved contexts are ranked — whether relevant chunks appear before irrelevant ones.',
+    'Measures how well retrieved contexts are ranked â€” whether relevant chunks appear before irrelevant ones.',
   context_recall:
     'Measures how much of the reference answer can be attributed to the retrieved context. Catches missing retrieval.',
   context_entities_recall:
@@ -128,7 +128,7 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
     'Compares structured/tabular data between response and reference using row-level or column-level matching.',
   // Judge Metrics
   multi_llm_judge:
-    'Runs multiple LLMs independently as judges and aggregates their verdicts. Each evaluator produces a reasoning, verdict (positive/mixed/critical), score (1–10), and claim-level quotes linking the response to source chunks. The final score is the mean verdict across all evaluators.',
+    'Runs multiple LLMs independently as judges and aggregates their verdicts. Each evaluator produces a reasoning, verdict (positive/mixed/critical), score (1â€“10), and claim-level quotes linking the response to source chunks. The final score is the mean verdict across all evaluators.',
 };
 
 interface MetricGroupProps {
@@ -172,7 +172,7 @@ function MetricGroup({
               onClick={() => !disabled && onToggle(metric)}
               title={
                 disabled
-                  ? `${metric.replace(/_/g, ' ')} — ${disabledReason}`
+                  ? `${metric.replace(/_/g, ' ')} â€” ${disabledReason}`
                   : METRIC_DESCRIPTIONS[metric]
               }
               disabled={disabled}
@@ -198,6 +198,7 @@ interface MetricSelectionProps {
   selectedMetrics: Set<string>;
   setSelectedMetrics: Dispatch<SetStateAction<Set<string>>>;
   disabledMetrics: Set<string>;
+  disabledReasons?: Record<string, string>;
   hasContexts: boolean;
 }
 
@@ -207,6 +208,7 @@ export default function MetricSelection({
   selectedMetrics,
   setSelectedMetrics,
   disabledMetrics,
+  disabledReasons,
   hasContexts,
 }: MetricSelectionProps) {
   const toggleMetric = (metric: string) => {
@@ -224,7 +226,7 @@ export default function MetricSelection({
 
   return (
     <>
-      {/* Quick presets — guided selection before the full option groups */}
+      {/* Quick presets â€” guided selection before the full option groups */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-text-secondary">Quick select:</span>
         <button
@@ -240,7 +242,7 @@ export default function MetricSelection({
         <button
           type="button"
           onClick={() => setSelectedMetrics(new Set(STRING_METRICS))}
-          title="Deterministic reference-comparison metrics — instant, no LLM cost"
+          title="Deterministic reference-comparison metrics â€” instant, no LLM cost"
           className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-400 hover:bg-amber-500/20"
         >
           Free only
@@ -260,7 +262,7 @@ export default function MetricSelection({
               ),
             )
           }
-          title="Every applicable metric — slowest and highest LLM cost"
+          title="Every applicable metric â€” slowest and highest LLM cost"
           className="rounded-lg border border-border bg-card px-3 py-1 text-xs font-medium text-text-secondary hover:text-text-primary"
         >
           Everything
@@ -278,7 +280,7 @@ export default function MetricSelection({
       <div className="space-y-3">
         {/* LLM Metrics */}
         <MetricGroup
-          label="LLM Metrics (uses judge LLM — costs API calls)"
+          label="LLM Metrics (uses judge LLM â€” costs API calls)"
           labelClass="text-text-secondary"
           metrics={LLM_METRICS}
           selected={selectedMetrics}
@@ -286,6 +288,7 @@ export default function MetricSelection({
           activeClass="border-accent/50 bg-accent/15 text-accent"
           inactiveClass="border-border bg-card text-text-muted hover:border-border-focus hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* NVIDIA Metrics */}
@@ -298,6 +301,7 @@ export default function MetricSelection({
           activeClass="border-green-500/50 bg-green-500/15 text-green-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-green-500/30 hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* Embedding Metrics */}
@@ -310,11 +314,12 @@ export default function MetricSelection({
           activeClass="border-sky-500/50 bg-sky-500/15 text-sky-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-sky-500/30 hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* String Metrics */}
         <MetricGroup
-          label="String Metrics (free — instant, no LLM)"
+          label="String Metrics (free â€” instant, no LLM)"
           labelClass="text-amber-400"
           metrics={STRING_METRICS}
           selected={selectedMetrics}
@@ -322,6 +327,7 @@ export default function MetricSelection({
           activeClass="border-amber-500/50 bg-amber-500/15 text-amber-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-amber-500/30 hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* Domain-Specific Metrics */}
@@ -337,6 +343,7 @@ export default function MetricSelection({
           disabledReasons={{
             sql_semantic_equivalence: 'no questions in this test set have reference_sql metadata',
             datacompy_score: 'no questions in this test set have reference_data metadata',
+            ...disabledReasons,
           }}
         />
 
@@ -351,7 +358,7 @@ export default function MetricSelection({
           inactiveClass="border-border bg-card text-text-muted hover:border-violet-500/30 hover:text-text-secondary"
         />
 
-        {/* Coming Soon — specialized metrics */}
+        {/* Coming Soon â€” specialized metrics */}
         <div>
           <label className="mb-2 block text-xs font-medium text-text-muted">
             Specialized Metrics <span className="font-normal">(coming soon)</span>
@@ -396,8 +403,8 @@ export default function MetricSelection({
                     }`}
                     title={
                       disabled
-                        ? `${cm.name.replace(/_/g, ' ')} — requires retrieved contexts (not available for this connector)`
-                        : `${cm.metric_type.replace(/_/g, ' ')} (${cm.min_score}–${cm.max_score})`
+                        ? `${cm.name.replace(/_/g, ' ')} â€” requires retrieved contexts (not available for this connector)`
+                        : `${cm.metric_type.replace(/_/g, ' ')} (${cm.min_score}â€“${cm.max_score})`
                     }
                   >
                     {cm.name.replace(/_/g, ' ')}

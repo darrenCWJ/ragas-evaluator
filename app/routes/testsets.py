@@ -981,6 +981,36 @@ async def list_test_sets(project_id: int):
     return {"test_sets": result}
 
 
+@router.get("/projects/{project_id}/test-sets/{test_set_id}/capabilities")
+async def test_set_capabilities(
+    project_id: int,
+    test_set_id: int,
+    runtime_contexts: bool = False,
+):
+    """Dataset capabilities + per-metric availability for this test set.
+
+    ``runtime_contexts=true`` marks the contexts requirement as satisfied by
+    the pipeline (internal RAG, or a bot connector that returns contexts).
+    """
+    from evaluation.capabilities import dataset_capabilities, metric_availability
+
+    conn = db.init.get_db()
+    row = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    caps = dataset_capabilities(conn, test_set_id)
+    return {
+        "test_set_id": test_set_id,
+        "capabilities": sorted(caps),
+        "runtime_contexts": runtime_contexts,
+        "metrics": metric_availability(caps, runtime_contexts=runtime_contexts),
+    }
+
+
 @router.get("/projects/{project_id}/test-sets/{test_set_id}/questions")
 async def list_test_questions(
     project_id: int, test_set_id: int, status: str | None = None

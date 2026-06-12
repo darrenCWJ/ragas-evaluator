@@ -1,6 +1,17 @@
 import { useState, useEffect } from 'react';
-import { fetchCustomMetrics, fetchJudgeModels, fetchProject } from '../../lib/api';
-import type { Experiment, CustomMetric, JudgeModel, JudgeModelsResponse } from '../../lib/api';
+import {
+  fetchCustomMetrics,
+  fetchJudgeModels,
+  fetchProject,
+  fetchTestSetCapabilities,
+} from '../../lib/api';
+import type {
+  Experiment,
+  CustomMetric,
+  JudgeModel,
+  JudgeModelsResponse,
+  TestSetCapabilities,
+} from '../../lib/api';
 import { useExperimentStream } from '../../hooks/useExperimentStream';
 import MetricSelection, { CONTEXT_REQUIRED_METRICS } from './runner/MetricSelection';
 import RubricsForm, { DEFAULT_RUBRICS } from './runner/RubricsForm';
@@ -22,11 +33,35 @@ export default function ExperimentRunner({ projectId, experiment, onComplete }: 
   const hasRefSql = experiment.has_reference_sql ?? false;
   const hasRefData = experiment.has_reference_data ?? false;
 
-  const disabledMetrics = (() => {
+  // Capability-driven availability from the backend (single source of truth);
+  // the local heuristic below covers the gap until the fetch resolves.
+  const [capabilities, setCapabilities] = useState<TestSetCapabilities | null>(null);
+
+  useEffect(() => {
+    if (!experiment.test_set_id) return;
+    const runtimeContexts = !isBotExperiment || botReturnsContexts;
+    fetchTestSetCapabilities(projectId, experiment.test_set_id, runtimeContexts)
+      .then(setCapabilities)
+      .catch(() => setCapabilities(null));
+  }, [projectId, experiment.test_set_id, isBotExperiment, botReturnsContexts]);
+
+  const { disabledMetrics, disabledReasons } = (() => {
+    if (capabilities) {
+      const disabled = new Set<string>();
+      const reasons: Record<string, string> = {};
+      for (const [metric, avail] of Object.entries(capabilities.metrics)) {
+        if (!avail.available) {
+          disabled.add(metric);
+          reasons[metric] = `requires ${avail.missing.join(', ')} (not available for this test set)`;
+        }
+      }
+      return { disabledMetrics: disabled, disabledReasons: reasons };
+    }
+    // Fallback heuristic while capabilities load
     const disabled = hasContexts ? new Set<string>() : new Set(CONTEXT_REQUIRED_METRICS);
     if (!hasRefSql) disabled.add('sql_semantic_equivalence');
     if (!hasRefData) disabled.add('datacompy_score');
-    return disabled;
+    return { disabledMetrics: disabled, disabledReasons: {} as Record<string, string> };
   })();
 
   const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
@@ -156,6 +191,7 @@ export default function ExperimentRunner({ projectId, experiment, onComplete }: 
             selectedMetrics={selectedMetrics}
             setSelectedMetrics={setSelectedMetrics}
             disabledMetrics={disabledMetrics}
+            disabledReasons={disabledReasons}
             hasContexts={hasContexts}
           />
 

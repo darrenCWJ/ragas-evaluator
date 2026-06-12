@@ -766,6 +766,34 @@ async def run_experiment(
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
 
+    # Enforce dataset/metric compatibility — the UI grays these out, but the
+    # API must also reject metrics the test set cannot support.
+    from evaluation.capabilities import dataset_capabilities, metric_availability
+
+    if experiment["bot_config_id"] is None:
+        runtime_contexts = True  # internal RAG always retrieves contexts
+    else:
+        bc = conn.execute(
+            "SELECT connector_type, config_json FROM bot_configs WHERE id = ?",
+            (experiment["bot_config_id"],),
+        ).fetchone()
+        bc_config = json.loads(bc["config_json"]) if bc and bc["config_json"] else {}
+        runtime_contexts = bool(bc) and bot_config_returns_contexts(bc["connector_type"], bc_config)
+
+    caps = dataset_capabilities(conn, experiment["test_set_id"])
+    availability = metric_availability(caps, runtime_contexts=runtime_contexts)
+    unavailable = {
+        m: availability[m]["missing"]
+        for m in selected_metrics
+        if m in availability and not availability[m]["available"]
+    }
+    if unavailable:
+        details = "; ".join(f"{m} requires {', '.join(missing)}" for m, missing in unavailable.items())
+        raise HTTPException(
+            status_code=422,
+            detail=f"Metrics incompatible with this test set: {details}",
+        )
+
     # Atomically claim the experiment — set status to 'running' now so any
     # concurrent page load or refresh immediately sees the correct state.
     cursor = conn.execute(

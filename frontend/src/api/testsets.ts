@@ -66,6 +66,28 @@ export async function fetchGenerationProgress(projectId: number): Promise<Genera
   return request<GenerationProgress>(`/api/projects/${projectId}/test-sets/generation-progress`);
 }
 
+export interface MetricAvailability {
+  available: boolean;
+  missing: string[];
+}
+
+export interface TestSetCapabilities {
+  test_set_id: number;
+  capabilities: string[];
+  runtime_contexts: boolean;
+  metrics: Record<string, MetricAvailability>;
+}
+
+export async function fetchTestSetCapabilities(
+  projectId: number,
+  testSetId: number,
+  runtimeContexts: boolean,
+): Promise<TestSetCapabilities> {
+  return request<TestSetCapabilities>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/capabilities?runtime_contexts=${runtimeContexts}`,
+  );
+}
+
 export async function cancelTestSetGeneration(
   projectId: number,
   testSetId: number,
