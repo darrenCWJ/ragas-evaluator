@@ -65,9 +65,11 @@ class TestParseSkill:
 
     async def test_rejects_empty_directives(self):
         llm_reply = {"content": json.dumps({"name": "x", "directives": []}), "usage": {}}
-        with patch("evaluation.skills.parser.chat_completion", new=AsyncMock(return_value=llm_reply)):
-            with pytest.raises(ValueError, match="No testable directives"):
-                await parse_skill(SKILL_MD)
+        with (
+            patch("evaluation.skills.parser.chat_completion", new=AsyncMock(return_value=llm_reply)),
+            pytest.raises(ValueError, match="No testable directives"),
+        ):
+            await parse_skill(SKILL_MD)
 
     async def test_invalid_kind_defaults_to_behavior(self):
         llm_reply = {

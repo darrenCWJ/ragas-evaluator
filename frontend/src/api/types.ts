@@ -10,6 +10,7 @@ export interface Project {
   description: string;
   created_at: string;
   judge_model_assignments: string[] | null;
+  preferred_model?: string | null;
 }
 
 export interface JudgeModel {
@@ -999,4 +1000,137 @@ export interface WorkerInfo {
 export interface WorkersStatusResponse {
   workers: WorkerInfo[];
   total_configured: number;
+}
+
+// ---------------------------------------------------------------------------
+// Skill Arena — skills, trials, matrix, results, traces
+// ---------------------------------------------------------------------------
+
+export type SkillDirectiveKind = 'behavior' | 'format' | 'prohibition' | 'tone';
+
+export interface SkillDirective {
+  id: string;
+  text: string;
+  kind: SkillDirectiveKind;
+  machine_checkable: boolean;
+}
+
+export interface Skill {
+  id: number;
+  project_id: number;
+  name: string;
+  version: number;
+  summary: string;
+  directive_count: number;
+  directives: SkillDirective[];
+  created_at: string;
+  /** Present on POST/GET-by-id responses; absent from list responses. */
+  content?: string;
+}
+
+export type SkillTrialModelSpec =
+  | { kind: 'llm'; model: string }
+  | { kind: 'bot'; bot_config_id: number; label?: string };
+
+export type SkillTrialStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface SkillTrial {
+  id: number;
+  project_id: number;
+  skill_id: number;
+  name: string;
+  test_set_id: number;
+  models: SkillTrialModelSpec[];
+  include_baseline: boolean;
+  status: SkillTrialStatus;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export type SkillTrialVariant = 'skill' | 'baseline';
+
+export interface SkillTrialCell {
+  model: string;
+  variant: SkillTrialVariant;
+  adherence: number | null;
+  format_compliance: number | null;
+  avg_latency_ms: number | null;
+  tokens_in: number;
+  tokens_out: number;
+  errors: number;
+  count: number;
+}
+
+export interface SkillTrialMatrix {
+  cells: SkillTrialCell[];
+  /** Per-model skill-minus-baseline adherence delta. */
+  lift: Record<string, number>;
+}
+
+export interface SkillTrialDetail extends SkillTrial {
+  matrix: SkillTrialMatrix;
+  skill?: Skill | null;
+}
+
+export interface SkillTrialCreatePayload {
+  name: string;
+  skill_id: number;
+  test_set_id: number;
+  models: SkillTrialModelSpec[];
+  include_baseline: boolean;
+}
+
+export interface SkillTrialCreateResponse {
+  trial_id: number;
+  status: string;
+  total_cells: number;
+}
+
+export interface SkillTrialProgress {
+  phase: string;
+  current?: number;
+  total?: number;
+  error?: string | null;
+}
+
+export type DirectiveVerdict = 'pass' | 'fail' | 'not_applicable';
+
+export interface DirectiveResult {
+  id: string;
+  verdict: DirectiveVerdict;
+  reasoning: string;
+  deterministic: boolean;
+}
+
+export interface TraceSpan {
+  name: string;
+  offset_ms: number;
+  duration_ms: number;
+  status: 'ok' | 'error';
+  error?: string;
+}
+
+export interface SkillTrialResult {
+  id: number;
+  model: string;
+  variant: SkillTrialVariant;
+  question_id: number;
+  question: string;
+  response: string | null;
+  scores: {
+    skill_adherence?: number | null;
+    format_compliance?: number | null;
+  };
+  directive_results: DirectiveResult[];
+  trace: TraceSpan[];
+  tokens_in: number | null;
+  tokens_out: number | null;
+  latency_ms: number | null;
+  error: string | null;
+}
+
+export interface ApplyModelResponse {
+  detail: string;
+  preferred_model: string;
 }

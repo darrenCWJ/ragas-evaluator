@@ -9,6 +9,7 @@ import ExperimentPage from './pages/ExperimentPage';
 import AnalyzePage from './pages/AnalyzePage';
 import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import PersonasPage from './pages/PersonasPage';
+import SkillsPage from './pages/SkillsPage';
 import WorkersPage from './pages/WorkersPage';
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="analyze" element={<AnalyzePage />} />
             <Route path="knowledge-graph" element={<KnowledgeGraphPage />} />
             <Route path="personas" element={<PersonasPage />} />
+            <Route path="skills" element={<SkillsPage />} />
             <Route path="workers" element={<WorkersPage />} />
           </Route>
           <Route path="*" element={<Navigate to="setup" replace />} />

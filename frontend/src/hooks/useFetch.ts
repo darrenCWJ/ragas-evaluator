@@ -31,7 +31,8 @@ export function useFetch<T>(fn: () => Promise<T>, deps: unknown[]) {
         });
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Caller-supplied deps array — intentionally dynamic, like useEffect's deps param.
+    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   }, deps);
 
   useEffect(() => {
