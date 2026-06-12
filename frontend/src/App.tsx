@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { ProjectProvider } from './contexts/ProjectContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import WorkspaceLayout from './layouts/WorkspaceLayout';
+import StartPage from './pages/StartPage';
 import SetupPage from './pages/SetupPage';
 import BuildPage from './pages/BuildPage';
 import TestPage from './pages/TestPage';
@@ -18,7 +19,8 @@ export default function App() {
       <ProjectProvider>
         <Routes>
           <Route element={<WorkspaceLayout />}>
-            <Route index element={<Navigate to="setup" replace />} />
+            <Route index element={<Navigate to="start" replace />} />
+            <Route path="start" element={<StartPage />} />
             <Route path="setup" element={<SetupPage />} />
             <Route path="build" element={<BuildPage />} />
             <Route path="test" element={<TestPage />} />
@@ -29,7 +31,7 @@ export default function App() {
             <Route path="skills" element={<SkillsPage />} />
             <Route path="workers" element={<WorkersPage />} />
           </Route>
-          <Route path="*" element={<Navigate to="setup" replace />} />
+          <Route path="*" element={<Navigate to="start" replace />} />
         </Routes>
       </ProjectProvider>
     </ErrorBoundary>

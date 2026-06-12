@@ -40,6 +40,18 @@ const LLM_METRICS = [
   'aspect_critic',
   'rubrics_score',
   'instance_rubrics',
+  'refusal_accuracy',
+];
+
+/** One-click selection presets — the guided "options kinds" for metric choice. */
+const PRESET_RECOMMENDED = [
+  'faithfulness',
+  'answer_relevancy',
+  'context_precision',
+  'context_recall',
+  'factual_correctness',
+  'semantic_similarity',
+  'refusal_accuracy',
 ];
 
 const NVIDIA_METRICS = ['answer_accuracy', 'context_relevance', 'response_groundedness'];
@@ -109,6 +121,8 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
     'LLM judge that scores the response against user-defined rubric criteria with detailed reasoning.',
   instance_rubrics:
     'Per-instance rubric evaluation using SingleTurnSample. Scores response against rubric criteria on a 1-5 scale, normalised to 0-1.',
+  refusal_accuracy:
+    'For out-of-scope questions (refusal-tagged): did the agent correctly decline instead of fabricating an answer? Scores refused=1, hedged=0.5, fabricated=0. Other questions are skipped.',
   // NVIDIA Metrics
   answer_accuracy:
     'Dual LLM-as-a-Judge that measures agreement between the response and a reference answer. Scores from two perspectives then averages.',
@@ -620,10 +634,63 @@ export default function ExperimentRunner({ projectId, experiment, onComplete }: 
             </div>
           )}
 
+          {/* Quick presets — guided selection before the full option groups */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-text-secondary">Quick select:</span>
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedMetrics(
+                  new Set(PRESET_RECOMMENDED.filter((m) => !disabledMetrics.has(m))),
+                )
+              }
+              title="The core quality metrics most teams start with"
+              className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1 text-xs font-medium text-accent hover:bg-accent/20"
+            >
+              Recommended
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedMetrics(new Set(STRING_METRICS))}
+              title="Deterministic reference-comparison metrics — instant, no LLM cost"
+              className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-400 hover:bg-amber-500/20"
+            >
+              Free only
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedMetrics(
+                  new Set(
+                    [
+                      ...LLM_METRICS,
+                      ...NVIDIA_METRICS,
+                      ...EMBEDDING_METRICS,
+                      ...STRING_METRICS,
+                      ...DOMAIN_METRICS,
+                    ].filter((m) => !disabledMetrics.has(m)),
+                  ),
+                )
+              }
+              title="Every applicable metric — slowest and highest LLM cost"
+              className="rounded-lg border border-border bg-card px-3 py-1 text-xs font-medium text-text-secondary hover:text-text-primary"
+            >
+              Everything
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedMetrics(new Set())}
+              className="rounded-lg px-2 py-1 text-xs text-text-muted hover:text-text-secondary"
+            >
+              Clear
+            </button>
+            <span className="ml-auto text-xs text-text-muted">{selectedMetrics.size} selected</span>
+          </div>
+
           <div className="space-y-3">
             {/* LLM Metrics */}
             <MetricGroup
-              label="LLM Metrics"
+              label="LLM Metrics (uses judge LLM — costs API calls)"
               labelClass="text-text-secondary"
               metrics={LLM_METRICS}
               selected={selectedMetrics}
@@ -659,7 +726,7 @@ export default function ExperimentRunner({ projectId, experiment, onComplete }: 
 
             {/* String Metrics */}
             <MetricGroup
-              label="String Metrics"
+              label="String Metrics (free — instant, no LLM)"
               labelClass="text-amber-400"
               metrics={STRING_METRICS}
               selected={selectedMetrics}

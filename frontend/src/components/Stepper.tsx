@@ -12,6 +12,12 @@ import {
 
 const stages = [
   {
+    path: 'start',
+    label: 'Start',
+    desc: 'Guide & progress',
+    icon: '→',
+  },
+  {
     path: 'setup',
     label: 'Setup',
     desc: 'Project & documents',
@@ -109,7 +115,7 @@ export default function Stepper() {
     <nav role="navigation" aria-label="Pipeline stages" className="flex flex-col gap-1 px-3 py-4">
       {stages.map((stage) => {
         const isActive = currentPath === stage.path;
-        const isLocked = !project && stage.path !== 'setup';
+        const isLocked = !project && stage.path !== 'setup' && stage.path !== 'start';
         const isComplete = !!completed[stage.path] && !isActive;
 
         return (
