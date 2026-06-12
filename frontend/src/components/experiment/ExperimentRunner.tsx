@@ -52,7 +52,8 @@ export default function ExperimentRunner({ projectId, experiment, onComplete }: 
       for (const [metric, avail] of Object.entries(capabilities.metrics)) {
         if (!avail.available) {
           disabled.add(metric);
-          reasons[metric] = `requires ${avail.missing.join(', ')} (not available for this test set)`;
+          reasons[metric] =
+            `requires ${avail.missing.join(', ')} (not available for this test set)`;
         }
       }
       return { disabledMetrics: disabled, disabledReasons: reasons };

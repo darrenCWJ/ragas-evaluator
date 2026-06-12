@@ -539,8 +539,8 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
                 </select>
                 <p className="mt-0.5 text-xs text-text-muted">
                   JSON array of expected tool calls, e.g.{' '}
-                  {`[{"name": "search", "arguments": {"query": "..."}}]`} — enables the
-                  tool_call_f1 metric for agent experiments
+                  {`[{"name": "search", "arguments": {"query": "..."}}]`} — enables the tool_call_f1
+                  metric for agent experiments
                 </p>
               </div>
             </div>

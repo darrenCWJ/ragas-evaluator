@@ -183,7 +183,9 @@ export default function WorkersPage() {
       {remoteCount === 0 && (
         <div className="rounded-lg border border-border bg-card px-4 py-2 text-xs text-text-muted">
           No remote workers configured — all work runs on the main app. Set{' '}
-          <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-accent">KG_WORKER_URLS</code>{' '}
+          <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-accent">
+            KG_WORKER_URLS
+          </code>{' '}
           to offload heavy jobs.
         </div>
       )}
@@ -221,10 +223,30 @@ export default function WorkersPage() {
             ) : (
               <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-3 text-xs text-text-muted">
-                  <CapacityCell label="KG builds" active={w.active_kg_builds} max={w.max_concurrent_kg} barClass="bg-accent" />
-                  <CapacityCell label="Personas" active={w.active_persona_builds} max={w.max_concurrent_personas} barClass="bg-purple-400" />
-                  <CapacityCell label="Experiments" active={w.active_experiments} max={w.max_concurrent_experiments} barClass="bg-emerald-400" />
-                  <CapacityCell label="Test gen" active={w.active_testgens} max={w.max_concurrent_testgens} barClass="bg-amber-400" />
+                  <CapacityCell
+                    label="KG builds"
+                    active={w.active_kg_builds}
+                    max={w.max_concurrent_kg}
+                    barClass="bg-accent"
+                  />
+                  <CapacityCell
+                    label="Personas"
+                    active={w.active_persona_builds}
+                    max={w.max_concurrent_personas}
+                    barClass="bg-purple-400"
+                  />
+                  <CapacityCell
+                    label="Experiments"
+                    active={w.active_experiments}
+                    max={w.max_concurrent_experiments}
+                    barClass="bg-emerald-400"
+                  />
+                  <CapacityCell
+                    label="Test gen"
+                    active={w.active_testgens}
+                    max={w.max_concurrent_testgens}
+                    barClass="bg-amber-400"
+                  />
                 </div>
               </div>
             )}

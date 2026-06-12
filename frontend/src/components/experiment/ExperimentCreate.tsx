@@ -101,7 +101,8 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
         test_set_id: isCsvBot ? undefined : (testSetId as number),
         rag_config_id: mode === 'rag' ? (ragConfigId as number) : undefined,
         bot_config_id: mode === 'bot' ? (botConfigId as number) : undefined,
-        tool_ids: agentCapable && selectedToolIds.size > 0 ? Array.from(selectedToolIds) : undefined,
+        tool_ids:
+          agentCapable && selectedToolIds.size > 0 ? Array.from(selectedToolIds) : undefined,
       });
       setName('');
       setTestSetId('');
@@ -230,13 +231,15 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
           )}
 
           {/* Agent tools — only LLM connectors can run the tool-calling loop */}
-          {mode === 'bot' && selectedBot && AGENT_CAPABLE_CONNECTORS.has(selectedBot.connector_type) && (
-            <AgentToolsPanel
-              projectId={projectId}
-              selectedToolIds={selectedToolIds}
-              onChange={setSelectedToolIds}
-            />
-          )}
+          {mode === 'bot' &&
+            selectedBot &&
+            AGENT_CAPABLE_CONNECTORS.has(selectedBot.connector_type) && (
+              <AgentToolsPanel
+                projectId={projectId}
+                selectedToolIds={selectedToolIds}
+                onChange={setSelectedToolIds}
+              />
+            )}
 
           {/* Test Set — hidden for CSV bot connectors (auto-created from CSV data) */}
           {!isCsvBot && (

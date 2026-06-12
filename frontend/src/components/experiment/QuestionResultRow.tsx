@@ -168,7 +168,9 @@ export default function QuestionResultRow({
 
             {/* Agent tool-call trace */}
             {agentTrace.length > 0 && (
-              <DetailBlock label={`Agent Trace (${agentTrace.length} tool call${agentTrace.length !== 1 ? 's' : ''})`}>
+              <DetailBlock
+                label={`Agent Trace (${agentTrace.length} tool call${agentTrace.length !== 1 ? 's' : ''})`}
+              >
                 <div className="space-y-2">
                   {agentTrace.map((step, i) => (
                     <div
@@ -183,7 +185,9 @@ export default function QuestionResultRow({
                         <span className="flex h-4 w-4 items-center justify-center rounded-full bg-accent/15 text-2xs font-bold text-accent">
                           {i + 1}
                         </span>
-                        <span className="font-mono font-semibold text-text-primary">{step.tool}</span>
+                        <span className="font-mono font-semibold text-text-primary">
+                          {step.tool}
+                        </span>
                         {step.latency_ms != null && (
                           <span className="text-2xs text-text-muted">{step.latency_ms} ms</span>
                         )}

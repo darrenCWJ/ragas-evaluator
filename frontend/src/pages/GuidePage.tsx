@@ -200,10 +200,10 @@ export default function GuidePage() {
 
         <Section id="overview" title="What is Tribunal?">
           <p className="text-sm text-text-secondary leading-relaxed">
-            Tribunal tests AI systems the way QA tests software. You give it a set of questions
-            with known-good answers, point it at an AI (yours or an external one), and it scores
-            every response with a battery of metrics — then helps you understand{' '}
-            <em>why</em> answers failed and whether your fixes actually worked.
+            Tribunal tests AI systems the way QA tests software. You give it a set of questions with
+            known-good answers, point it at an AI (yours or an external one), and it scores every
+            response with a battery of metrics — then helps you understand <em>why</em> answers
+            failed and whether your fixes actually worked.
           </p>
           <p className="text-sm text-text-secondary leading-relaxed">
             There are two ways to use it. If you already have an AI agent or chatbot running
@@ -222,8 +222,8 @@ export default function GuidePage() {
         <Section id="path-external" title="Path A — Test an external AI agent">
           <ol className="space-y-4">
             <Step n={1} title="Create a project (Setup)">
-              Projects keep your test sets, experiments, and results together. Name it after the
-              bot you are testing.
+              Projects keep your test sets, experiments, and results together. Name it after the bot
+              you are testing.
             </Step>
             <Step n={2} title="Connect your bot (Experiment → Bot connectors)">
               Add a bot connector: OpenAI/Claude/Gemini/DeepSeek with your prompt, a custom HTTP
@@ -242,9 +242,9 @@ export default function GuidePage() {
               watch live progress.
             </Step>
             <Step n={5} title="Read the results (Analyze)">
-              Every question gets per-metric scores with explanations. Use the suggestions panel
-              for fixes, annotate a sample to calibrate the judges, and re-run to compare against
-              your baseline.
+              Every question gets per-metric scores with explanations. Use the suggestions panel for
+              fixes, annotate a sample to calibrate the judges, and re-run to compare against your
+              baseline.
             </Step>
           </ol>
         </Section>
@@ -256,21 +256,21 @@ export default function GuidePage() {
             </Step>
             <Step n={2} title="Chunk and embed (Build)">
               Split documents into chunks (six strategies available) and embed them. Different
-              chunking choices materially change retrieval quality — that&apos;s what you&apos;ll
-              be tuning.
+              chunking choices materially change retrieval quality — that&apos;s what you&apos;ll be
+              tuning.
             </Step>
             <Step n={3} title="Create a RAG config (Build)">
               Combine a chunk config + embedding + retrieval settings (top-k, thresholds, query
               expansion) + an answering model into a named configuration.
             </Step>
             <Step n={4} title="Generate a test set (Test)">
-              Tribunal generates questions from your own documents — optionally with personas and
-              a knowledge graph for harder multi-hop questions. Review and approve them.
+              Tribunal generates questions from your own documents — optionally with personas and a
+              knowledge graph for harder multi-hop questions. Review and approve them.
             </Step>
             <Step n={5} title="Run experiments and iterate (Experiment → Analyze)">
               Run the test set against your RAG config. Context metrics (faithfulness, context
-              recall…) tell you whether retrieval or generation is the weak link. Change one
-              thing, re-run, compare deltas.
+              recall…) tell you whether retrieval or generation is the weak link. Change one thing,
+              re-run, compare deltas.
             </Step>
           </ol>
         </Section>
@@ -311,8 +311,8 @@ export default function GuidePage() {
           <p className="text-xs text-text-muted">
             Example CSV row:{' '}
             <code className="rounded bg-elevated px-1.5 py-0.5 font-mono">
-              &quot;What is the refund window?&quot;,&quot;30 days from delivery&quot;,&quot;[Refunds
-              are accepted within 30 days…]&quot;
+              &quot;What is the refund window?&quot;,&quot;30 days from
+              delivery&quot;,&quot;[Refunds are accepted within 30 days…]&quot;
             </code>
           </p>
         </Section>
@@ -367,8 +367,8 @@ export default function GuidePage() {
             answers: <em>does the model actually follow it?</em>
           </p>
           <p className="text-sm text-text-secondary leading-relaxed">
-            Upload a skill and Tribunal extracts its testable directives. Run a trial across
-            several models (plus a no-skill baseline) on a test set: each cell gets an{' '}
+            Upload a skill and Tribunal extracts its testable directives. Run a trial across several
+            models (plus a no-skill baseline) on a test set: each cell gets an{' '}
             <strong>adherence</strong> score (which directives were followed),{' '}
             <strong>format compliance</strong> (deterministic checks), and <strong>lift</strong>{' '}
             (improvement over the baseline). The matrix shows which model follows your skill best.
@@ -377,19 +377,19 @@ export default function GuidePage() {
             Multi-file skills (SKILL.md + references/ + scripts/) upload as a <strong>.zip</strong>.
             Run those with <strong>agentic mode</strong>: the model gets a <code>read_file</code>{' '}
             tool and pulls reference files on demand — exactly how progressive-disclosure skills
-            work in a real harness. Skills that ask the user questions get an{' '}
-            <code>ask_user</code> tool answered by a simulated user; add a{' '}
-            <code>user_inputs</code> list to a question&apos;s metadata to script exact replies.
+            work in a real harness. Skills that ask the user questions get an <code>ask_user</code>{' '}
+            tool answered by a simulated user; add a <code>user_inputs</code> list to a
+            question&apos;s metadata to script exact replies.
           </p>
         </Section>
 
         <Section id="feedback" title="Human feedback & judge calibration">
           <p className="text-sm text-text-secondary leading-relaxed">
             Automated judges are not perfect — so Tribunal asks you to spot-check them. On a
-            completed experiment, the <strong>Human Annotation</strong> panel samples 20% of
-            results for you to rate. The <strong>judge dashboard</strong> lets you mark individual
-            evaluator claims as accurate or wrong; evaluators that fall below the reliability
-            threshold are excluded and scores recalculate automatically. Annotations also feed{' '}
+            completed experiment, the <strong>Human Annotation</strong> panel samples 20% of results
+            for you to rate. The <strong>judge dashboard</strong> lets you mark individual evaluator
+            claims as accurate or wrong; evaluators that fall below the reliability threshold are
+            excluded and scores recalculate automatically. Annotations also feed{' '}
             <strong>judge calibration</strong>, which ranks judge models by agreement with you.
           </p>
         </Section>
@@ -398,8 +398,8 @@ export default function GuidePage() {
           <div className="space-y-4">
             <Faq q="Why are some metrics grayed out?">
               The selected test set lacks a column they need (contexts, categories, turns, SQL, or
-              reference data). Hover the metric for the exact reason, or re-upload your dataset
-              with the missing column mapped.
+              reference data). Hover the metric for the exact reason, or re-upload your dataset with
+              the missing column mapped.
             </Faq>
             <Faq q="Judge model says 'missing API key'">
               Each judge model needs its provider key (OPENAI_API_KEY, ANTHROPIC_API_KEY,
@@ -411,14 +411,14 @@ export default function GuidePage() {
               memory usage. A stuck task can be cleared there; the experiment can then be re-run.
             </Faq>
             <Faq q="Generation is slow or the worker is offline">
-              Heavy jobs (knowledge graphs, test generation, experiments) can run on remote
-              workers via KG_WORKER_URLS. With no workers configured everything runs on the main
-              app — fine for small projects, slower for big ones.
+              Heavy jobs (knowledge graphs, test generation, experiments) can run on remote workers
+              via KG_WORKER_URLS. With no workers configured everything runs on the main app — fine
+              for small projects, slower for big ones.
             </Faq>
             <Faq q="What do I do with the results?">
-              Start in Analyze: read the suggestions panel, apply a suggested fix (e.g. a
-              guardrail snippet), re-run, and check the delta view — it tells you whether the fix
-              improved, regressed, or did nothing, with confidence intervals.
+              Start in Analyze: read the suggestions panel, apply a suggested fix (e.g. a guardrail
+              snippet), re-run, and check the delta view — it tells you whether the fix improved,
+              regressed, or did nothing, with confidence intervals.
             </Faq>
           </div>
           <p className="text-xs text-text-muted">

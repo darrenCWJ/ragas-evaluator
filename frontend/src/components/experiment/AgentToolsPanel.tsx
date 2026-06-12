@@ -37,12 +37,16 @@ export default function AgentToolsPanel({ projectId, selectedToolIds, onChange }
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(() => {
-    fetchTools(projectId).then(setTools).catch(() => setTools([]));
+    fetchTools(projectId)
+      .then(setTools)
+      .catch(() => setTools([]));
   }, [projectId]);
 
   useEffect(() => {
     load();
-    fetchBuiltinTools().then(setBuiltins).catch(() => setBuiltins([]));
+    fetchBuiltinTools()
+      .then(setBuiltins)
+      .catch(() => setBuiltins([]));
   }, [load]);
 
   const toggle = (id: number) => {
@@ -81,7 +85,9 @@ export default function AgentToolsPanel({ projectId, selectedToolIds, onChange }
       load();
       onChange(new Set([...selectedToolIds, tool.id]));
     } catch (err) {
-      setError(err instanceof SyntaxError ? `Invalid JSON: ${err.message}` : (err as Error).message);
+      setError(
+        err instanceof SyntaxError ? `Invalid JSON: ${err.message}` : (err as Error).message,
+      );
     } finally {
       setCreating(false);
     }

@@ -167,8 +167,8 @@ export default function SkillUpload({ projectId, onUploaded }: SkillUploadProps)
           {(uploaded.files?.length ?? 0) > 0 && (
             <p className="mb-1 text-xs text-text-secondary">
               📄 {uploaded.files!.length} reference file{uploaded.files!.length !== 1 ? 's' : ''}{' '}
-              stored — run an <span className="text-accent">agentic</span> trial so models can
-              read them on demand.
+              stored — run an <span className="text-accent">agentic</span> trial so models can read
+              them on demand.
             </p>
           )}
           {(uploaded.missing_references?.length ?? 0) > 0 && (
