@@ -130,24 +130,35 @@ _AUTH_EXEMPT_PREFIXES = ("/app/", "/health", "/api/auth/")
 # /api/projects/{id}/...  → per-project access enforcement
 _PROJECT_PATH_RE = re.compile(r"^/api/projects/(\d+)(?:/|$)")
 
-# Login enforcement activates once any user exists. The check flips exactly
-# once (users are never all deleted in normal operation), so cache the True.
-_auth_active_cache = False
+# Login enforcement = the login_enforcement app setting ('auto'|'on'|'off')
+# combined with whether any user exists. Cached briefly so the middleware
+# doesn't hit the DB on every request; the settings endpoint invalidates it
+# so toggling takes effect immediately.
+_AUTH_CACHE_TTL_SECONDS = 5.0
+_auth_cache: dict = {"value": False, "at": 0.0}
+
+
+def invalidate_auth_cache() -> None:
+    _auth_cache["at"] = 0.0
 
 
 def _auth_is_active() -> bool:
-    global _auth_active_cache
-    if _auth_active_cache:
-        return True
+    import time as _time
+
+    now = _time.monotonic()
+    if now - _auth_cache["at"] < _AUTH_CACHE_TTL_SECONDS:
+        return _auth_cache["value"]
     try:
         import db.init as _db
-        from app.services.auth import any_users_exist
+        from app.services.auth import login_enforced
 
-        if any_users_exist(_db.get_db()):
-            _auth_active_cache = True
+        _auth_cache["value"] = login_enforced(_db.get_db())
+        _auth_cache["at"] = now
     except Exception:
         logger.warning("Auth-active check failed — treating as inactive", exc_info=True)
-    return _auth_active_cache
+        _auth_cache["value"] = False
+        _auth_cache["at"] = now
+    return _auth_cache["value"]
 
 
 class _AuthMiddleware(BaseHTTPMiddleware):

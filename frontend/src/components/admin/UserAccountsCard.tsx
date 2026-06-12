@@ -1,8 +1,81 @@
 import { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useFetch } from '../../hooks/useFetch';
-import { fetchUsers, updateUserRole, type UserRole } from '../../lib/api';
+import {
+  fetchAuthStatus,
+  fetchUsers,
+  updateLoginEnforcement,
+  updateUserRole,
+  type LoginEnforcement,
+  type UserRole,
+} from '../../lib/api';
 import { Card, Select, Spinner, ErrorAlert } from '../ui';
+
+/**
+ * Login enforcement toggle — decide whether the app requires sign-in,
+ * independent of whether accounts exist. Visible in open mode too, so
+ * enforcement can be switched back on after being disabled.
+ */
+function LoginEnforcementControl() {
+  const status = useFetch(fetchAuthStatus, []);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mode: LoginEnforcement = status.data?.login_enforcement ?? 'auto';
+  const enforced = status.data?.auth_enabled ?? false;
+  const usersExist = status.data?.users_exist ?? false;
+
+  const handleChange = async (next: LoginEnforcement) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateLoginEnforcement(next);
+      await status.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update login enforcement');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <ErrorAlert message={error} onDismiss={() => setError(null)} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm text-text-primary">Require sign-in</p>
+          <p className="text-xs text-text-muted">
+            {mode === 'off'
+              ? 'Open access — anyone can use the app without an account.'
+              : usersExist
+                ? 'Sign-in is required for everyone.'
+                : 'Will activate once the first account is registered.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className={`rounded-full px-2 py-0.5 text-2xs ${
+              enforced ? 'bg-score-high/10 text-score-high' : 'bg-elevated text-text-muted'
+            }`}
+          >
+            {enforced ? 'enforced' : 'open'}
+          </span>
+          <Select
+            value={mode}
+            disabled={saving || status.loading}
+            onChange={(e) => handleChange(e.target.value as LoginEnforcement)}
+            className="w-44"
+            aria-label="Login enforcement mode"
+          >
+            <option value="auto">Auto (on once accounts exist)</option>
+            <option value="on">On — always require</option>
+            <option value="off">Off — open access</option>
+          </Select>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Body is mounted only while expanded, so the admin list loads on demand. */
 function UserAccountsBody() {
@@ -78,28 +151,39 @@ function UserAccountsBody() {
 }
 
 /**
- * Collapsible admin-only account management: list all users and change roles.
- * Renders nothing unless the signed-in user is an admin.
+ * Access control: login-enforcement toggle plus (when enforced and the
+ * caller is an admin) the collapsible account-management table.
+ *
+ * The toggle stays visible in open mode — otherwise enforcement could never
+ * be switched back on after being disabled. Non-admin signed-in users see
+ * nothing.
  */
 export default function UserAccountsCard() {
   const { user, authEnabled } = useAuth();
   const [open, setOpen] = useState(false);
 
-  if (!authEnabled || user?.role !== 'admin') return null;
+  // Enforced mode: admins only. Open mode: visible (same trust level under
+  // which the first admin registers).
+  if (authEnabled && user?.role !== 'admin') return null;
 
   return (
-    <Card padding="lg">
-      <button
-        onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center justify-between text-left"
-        aria-expanded={open}
-      >
-        <span className="text-sm font-medium text-text-primary">User accounts (admin)</span>
-        <span className="text-xs text-text-muted">{open ? 'Hide' : 'Show'}</span>
-      </button>
-      {open && (
-        <div className="mt-4">
-          <UserAccountsBody />
+    <Card padding="lg" className="space-y-4">
+      <LoginEnforcementControl />
+      {authEnabled && user?.role === 'admin' && (
+        <div className="border-t border-border pt-3">
+          <button
+            onClick={() => setOpen((prev) => !prev)}
+            className="flex w-full items-center justify-between text-left"
+            aria-expanded={open}
+          >
+            <span className="text-sm font-medium text-text-primary">User accounts (admin)</span>
+            <span className="text-xs text-text-muted">{open ? 'Hide' : 'Show'}</span>
+          </button>
+          {open && (
+            <div className="mt-4">
+              <UserAccountsBody />
+            </div>
+          )}
         </div>
       )}
     </Card>

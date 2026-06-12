@@ -27,8 +27,9 @@ def clean_auth_state():
         # deleting accounts (owner_id is nullable by design for legacy rows).
         conn.execute("UPDATE projects SET owner_id = NULL WHERE owner_id IS NOT NULL")
         conn.execute("DELETE FROM users")
+        conn.execute("DELETE FROM app_settings")
         conn.commit()
-        app_module._auth_active_cache = False
+        app_module.invalidate_auth_cache()
         with auth_service._attempts_lock:
             auth_service._attempts.clear()
 
@@ -124,6 +125,67 @@ class TestBootstrapAndSessions:
                 headers={"Authorization": "Bearer machine-secret"},
             )
             assert r.status_code == 200
+
+
+class TestLoginEnforcementToggle:
+    def test_status_reports_mode(self):
+        with _client() as c:
+            status = c.get("/api/auth/status").json()
+            assert status["login_enforcement"] == "auto"
+            assert status["users_exist"] is False
+            assert status["auth_enabled"] is False
+
+    def test_off_mode_keeps_app_open_after_first_account(self):
+        with _client() as c:
+            # Choose open access BEFORE registering — registration must not
+            # flip enforcement on.
+            r = c.put("/api/auth/settings", json={"login_enforcement": "off"})
+            assert r.status_code == 200, r.text
+            _register(c, "admin@example.com")
+            status = c.get("/api/auth/status").json()
+            assert status["users_exist"] is True
+            assert status["auth_enabled"] is False
+        # Anonymous client still has full access
+        with _client() as anon:
+            assert anon.get("/api/projects").status_code == 200
+
+    def test_admin_can_toggle_off_and_back_on(self):
+        with _client() as c:
+            _register(c, "admin@example.com")
+            assert c.get("/api/auth/status").json()["auth_enabled"] is True
+
+            # Admin disables enforcement → app opens up
+            r = c.put("/api/auth/settings", json={"login_enforcement": "off"})
+            assert r.status_code == 200, r.text
+            assert r.json()["auth_enabled"] is False
+            with _client() as anon:
+                assert anon.get("/api/projects").status_code == 200
+
+                # Open mode: turning it back on works without a session
+                r2 = anon.put("/api/auth/settings", json={"login_enforcement": "auto"})
+                assert r2.status_code == 200
+                assert r2.json()["auth_enabled"] is True
+            with _client() as locked_out:
+                assert locked_out.get("/api/projects").status_code == 401
+
+    def test_non_admin_cannot_toggle_while_enforced(self):
+        with _client() as admin:
+            _register(admin, "admin@example.com")
+        with _client() as user:
+            _register(user, "user@example.com")
+            r = user.put("/api/auth/settings", json={"login_enforcement": "off"})
+            assert r.status_code == 403
+
+    def test_on_with_no_accounts_rejected(self):
+        with _client() as c:
+            r = c.put("/api/auth/settings", json={"login_enforcement": "on"})
+            assert r.status_code == 409
+            assert "lock" in r.json()["detail"].lower()
+
+    def test_invalid_mode_rejected(self):
+        with _client() as c:
+            r = c.put("/api/auth/settings", json={"login_enforcement": "sometimes"})
+            assert r.status_code == 422
 
 
 class TestProjectIsolation:

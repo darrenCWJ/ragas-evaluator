@@ -100,6 +100,41 @@ def any_users_exist(conn) -> bool:
     return conn.execute("SELECT id FROM users LIMIT 1").fetchone() is not None
 
 
+# --- Login enforcement mode -------------------------------------------------------
+
+# 'auto' — legacy behavior: enforced once any user exists.
+# 'on'   — enforced (requires at least one user, else treated as not enforced
+#          so a fresh install can never lock itself out).
+# 'off'  — never enforced: the app runs open even when accounts exist.
+LOGIN_ENFORCEMENT_SETTING = "login_enforcement"
+LOGIN_ENFORCEMENT_MODES = ("auto", "on", "off")
+
+
+def get_login_enforcement(conn) -> str:
+    from app.services.app_settings import get_setting
+
+    value = get_setting(conn, LOGIN_ENFORCEMENT_SETTING, "auto")
+    return value if value in LOGIN_ENFORCEMENT_MODES else "auto"
+
+
+def set_login_enforcement(conn, mode: str) -> None:
+    from app.services.app_settings import set_setting
+
+    if mode not in LOGIN_ENFORCEMENT_MODES:
+        raise ValueError(f"mode must be one of: {', '.join(LOGIN_ENFORCEMENT_MODES)}")
+    set_setting(conn, LOGIN_ENFORCEMENT_SETTING, mode)
+
+
+def login_enforced(conn) -> bool:
+    """Whether sign-in is currently required to use the app."""
+    mode = get_login_enforcement(conn)
+    if mode == "off":
+        return False
+    # 'on' and 'auto' both need at least one account to exist — enforcing
+    # with zero users would lock everyone out before bootstrap.
+    return any_users_exist(conn)
+
+
 def get_user(conn, user_id: int) -> CurrentUser | None:
     row = conn.execute(
         "SELECT id, email, name, role FROM users WHERE id = ?", (user_id,)

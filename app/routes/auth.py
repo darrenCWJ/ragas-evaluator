@@ -14,12 +14,16 @@ from pydantic import BaseModel, Field
 
 import db.init
 from app.services.auth import (
+    LOGIN_ENFORCEMENT_MODES,
     SESSION_COOKIE,
     any_users_exist,
     create_session_token,
+    get_login_enforcement,
     hash_password,
+    login_enforced,
     login_throttled,
     resolve_request_user,
+    set_login_enforcement,
     verify_password,
 )
 from config import SESSION_COOKIE_SECURE, SESSION_TTL_SECONDS
@@ -63,11 +67,51 @@ def _user_payload(row) -> dict:
 
 @router.get("/status")
 async def auth_status():
-    """Whether login is enforced (any user exists) and registration is open."""
+    """Whether login is currently enforced, the enforcement mode, and
+    whether registration is open."""
     conn = db.init.get_db()
     return {
-        "auth_enabled": any_users_exist(conn),
+        "auth_enabled": login_enforced(conn),
+        "login_enforcement": get_login_enforcement(conn),
+        "users_exist": any_users_exist(conn),
         "registration_open": os.environ.get("ALLOW_REGISTRATION", "true").lower() != "false",
+    }
+
+
+class LoginEnforcementUpdate(BaseModel):
+    login_enforcement: str = Field(pattern="^(auto|on|off)$")
+
+
+@router.put("/settings")
+async def update_auth_settings(req: LoginEnforcementUpdate, request: Request):
+    """Toggle login enforcement.
+
+    'auto' — require sign-in once any account exists (legacy default).
+    'on'   — require sign-in (needs at least one account, else rejected).
+    'off'  — open access even when accounts exist; sign-in stays possible
+             but is never required.
+
+    Admin-only while enforcement is active; in open mode anyone can set it
+    (the same trust level under which the first admin registers).
+    """
+    conn = db.init.get_db()
+    if login_enforced(conn):
+        _require_admin(request)
+    if req.login_enforcement == "on" and not any_users_exist(conn):
+        raise HTTPException(
+            status_code=409,
+            detail="Create an account first — enforcing login with no accounts would lock everyone out",
+        )
+    set_login_enforcement(conn, req.login_enforcement)
+
+    from app import invalidate_auth_cache
+
+    invalidate_auth_cache()
+    logger.info("Login enforcement set to '%s'", req.login_enforcement)
+    return {
+        "login_enforcement": get_login_enforcement(conn),
+        "auth_enabled": login_enforced(conn),
+        "users_exist": any_users_exist(conn),
     }
 
 
@@ -94,7 +138,21 @@ async def register(req: RegisterRequest, response: Response):
     user_id = cursor.lastrowid
     _set_session(response, user_id)
     if first_user:
-        logger.info("First user registered — login enforcement is now ACTIVE (admin: %s)", clean(req.email))
+        # Enforcement may flip the moment the first account exists — drop the
+        # middleware's short-lived cache so it takes effect immediately.
+        from app import invalidate_auth_cache
+
+        invalidate_auth_cache()
+        if get_login_enforcement(conn) == "off":
+            logger.info(
+                "First user registered (admin: %s) — login enforcement stays OFF per settings",
+                clean(req.email),
+            )
+        else:
+            logger.info(
+                "First user registered — login enforcement is now ACTIVE (admin: %s)",
+                clean(req.email),
+            )
     row = conn.execute("SELECT id, email, name, role FROM users WHERE id = ?", (user_id,)).fetchone()
     return _user_payload(row)
 

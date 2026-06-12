@@ -3,7 +3,7 @@ import type { QuestionQuality, TestQuestion } from '../../lib/api';
 import { annotateQuestion } from '../../lib/api';
 
 const CATEGORY_COLORS: Record<string, string> = {
-  typical: 'bg-indigo-500/15 text-indigo-300',
+  typical: 'bg-blue-500/15 text-blue-300',
   in_knowledge_base: 'bg-teal-500/15 text-teal-300',
   edge: 'bg-orange-500/15 text-orange-300',
   out_of_knowledge_base: 'bg-purple-500/15 text-purple-300',

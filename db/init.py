@@ -516,6 +516,12 @@ CREATE TABLE IF NOT EXISTS tool_definitions (
     UNIQUE(project_id, name)
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    name TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS judge_model_overrides (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_id TEXT NOT NULL UNIQUE,

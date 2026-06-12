@@ -1349,8 +1349,14 @@ export interface ApplyModelResponse {
 
 export type UserRole = 'admin' | 'user';
 
+export type LoginEnforcement = 'auto' | 'on' | 'off';
+
 export interface AuthStatus {
+  /** Whether sign-in is currently REQUIRED (enforcement mode × users exist). */
   auth_enabled: boolean;
+  /** The configured enforcement mode — toggleable at runtime by an admin. */
+  login_enforcement?: LoginEnforcement;
+  users_exist?: boolean;
   registration_open: boolean;
 }
 

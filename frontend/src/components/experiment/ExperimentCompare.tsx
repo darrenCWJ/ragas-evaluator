@@ -16,7 +16,7 @@ type LoadState =
 
 /** Experiment color palette for distinguishing bars */
 const EXP_COLORS = [
-  { bar: 'bg-indigo-400', text: 'text-indigo-300', dot: 'bg-indigo-400' },
+  { bar: 'bg-blue-400', text: 'text-blue-300', dot: 'bg-blue-400' },
   { bar: 'bg-emerald-400', text: 'text-emerald-300', dot: 'bg-emerald-400' },
   { bar: 'bg-amber-400', text: 'text-amber-300', dot: 'bg-amber-400' },
   { bar: 'bg-rose-400', text: 'text-rose-300', dot: 'bg-rose-400' },
