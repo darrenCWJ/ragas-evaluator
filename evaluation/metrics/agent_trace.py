@@ -61,6 +61,29 @@ def tool_call_f1_score(trace_steps: list[dict], reference_tool_calls: list) -> f
     return round(2 * precision * recall / (precision + recall), 4)
 
 
+def tool_call_accuracy_score(trace_steps: list[dict], reference_tool_calls: list) -> float:
+    """Strict, order-aware accuracy of the agent's tool calls.
+
+    Unlike ``tool_call_f1`` (greedy, order-agnostic), this aligns the trace
+    against the reference sequence position by position — call i must match
+    reference i (same tool name, reference arguments ⊆ call arguments).
+    Score = matched positions / max(len(reference), len(trace)).
+    """
+    references = [_normalize_reference(r) for r in reference_tool_calls]
+    references = [r for r in references if r["name"]]
+    calls = list(trace_steps or [])
+
+    if not references and not calls:
+        return 1.0
+    if not references or not calls:
+        return 0.0
+
+    matched = sum(
+        1 for ref, call in zip(references, calls) if _call_matches(ref, call)
+    )
+    return round(matched / max(len(references), len(calls)), 4)
+
+
 def trace_stats(trace_steps: list[dict]) -> dict:
     """Cheap descriptive stats stored alongside the trace."""
     steps = list(trace_steps or [])

@@ -78,9 +78,14 @@ ALL_METRICS = [
     # multi_llm_judge is listed here for UI discovery but executed separately
     # in experiments.py — it is NOT wired into _METRIC_MODULES or setup_scorers.
     "multi_llm_judge",
-    # tool_call_f1 is computed deterministically from the agent trace by the
-    # experiment runner (no scorer) — listed here for selection/validation.
+    # tool_call_f1 / tool_call_accuracy are computed deterministically from
+    # the agent trace by the experiment runner (no scorer); agent_goal_accuracy
+    # and topic_adherence are runner-side LLM judges. Listed here for
+    # selection/validation.
     "tool_call_f1",
+    "tool_call_accuracy",
+    "agent_goal_accuracy",
+    "topic_adherence",
 ]
 
 # Maps metric name → module for dynamic dispatch

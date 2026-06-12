@@ -25,6 +25,7 @@ TURNS = "turns"
 REF_SQL = "ref_sql"
 REF_DATA = "ref_data"
 REF_TOOL_CALLS = "ref_tool_calls"
+TOPICS = "topics"
 
 # Human-readable labels for missing-capability messages.
 CAPABILITY_LABELS = {
@@ -34,6 +35,7 @@ CAPABILITY_LABELS = {
     REF_SQL: "reference SQL",
     REF_DATA: "reference data",
     REF_TOOL_CALLS: "reference tool calls",
+    TOPICS: "allowed-topics lists",
 }
 
 # Dataset requirements per built-in metric. Metrics not listed here (and all
@@ -56,6 +58,11 @@ METRIC_REQUIREMENTS: dict[str, frozenset[str]] = {
     "sql_semantic_equivalence": frozenset({REF_SQL}),
     "datacompy_score": frozenset({REF_DATA}),
     "tool_call_f1": frozenset({REF_TOOL_CALLS}),
+    "tool_call_accuracy": frozenset({REF_TOOL_CALLS}),
+    "topic_adherence": frozenset({TOPICS}),
+    # agent_goal_accuracy needs only question + reference answer (always
+    # present); like tool_call_f1 it is computed only when an agent trace
+    # exists at runtime.
 }
 
 
@@ -78,7 +85,9 @@ def dataset_capabilities(conn, test_set_id: int) -> set[str]:
             MAX(CASE WHEN metadata_json IS NOT NULL
                           AND metadata_json LIKE '%reference_data%' THEN 1 ELSE 0 END) AS has_ref_data,
             MAX(CASE WHEN metadata_json IS NOT NULL
-                          AND metadata_json LIKE '%reference_tool_calls%' THEN 1 ELSE 0 END) AS has_ref_tool_calls
+                          AND metadata_json LIKE '%reference_tool_calls%' THEN 1 ELSE 0 END) AS has_ref_tool_calls,
+            MAX(CASE WHEN metadata_json IS NOT NULL
+                          AND metadata_json LIKE '%"topics"%' THEN 1 ELSE 0 END) AS has_topics
         FROM test_questions
         WHERE test_set_id = ? AND status IN ('approved', 'edited')
         """,
@@ -100,6 +109,8 @@ def dataset_capabilities(conn, test_set_id: int) -> set[str]:
         caps.add(REF_DATA)
     if row["has_ref_tool_calls"]:
         caps.add(REF_TOOL_CALLS)
+    if row["has_topics"]:
+        caps.add(TOPICS)
     return caps
 
 

@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 import db.init
 from app.models import DocumentContextUpdate
@@ -48,7 +48,16 @@ def _save_original_image(project_id: int, filename: str, data: bytes) -> str:
 
 
 @router.post("/projects/{project_id}/documents", status_code=201)
-async def upload_project_document(project_id: int, file: UploadFile = File(...)):
+async def upload_project_document(
+    project_id: int,
+    file: UploadFile = File(...),
+    # Processing options — how the document becomes retrievable text:
+    # extract_tables: DOCX/PPTX tables rendered as markdown rows (default on).
+    # describe_images: embedded images (PPTX/DOCX/PDF) described by the vision
+    # LLM and appended to the text (default off — costs LLM calls).
+    extract_tables: bool = Form(True),
+    describe_images: bool = Form(False),
+):
     conn = db.init.get_db()
 
     project = conn.execute(
@@ -86,12 +95,43 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
             stored_path = None
         metadata = {"source_kind": "image", "original_path": stored_path}
     else:
-        from pipeline.document_parsers import DocumentParseError, parse_document
+        from pipeline.document_parsers import (
+            DocumentParseError,
+            extract_embedded_images,
+            parse_document,
+        )
 
         try:
-            text = parse_document(filename, ext, content_bytes)
+            text = parse_document(filename, ext, content_bytes, extract_tables=extract_tables)
         except DocumentParseError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+
+        images_described = 0
+        if describe_images:
+            from pipeline.vision import extract_image_text, pick_vision_model
+
+            pick_vision_model()  # fail fast (422) when no vision provider is configured
+            sections: list[str] = []
+            for img in extract_embedded_images(ext, content_bytes):
+                try:
+                    described = await extract_image_text(img["data"], img["mime"])
+                except HTTPException as e:
+                    logger.warning(
+                        "Vision description failed for an image in %s: %s", filename, e.detail
+                    )
+                    continue
+                sections.append(f"[Embedded image — {img['label']}]\n{described}")
+                images_described += 1
+            if sections:
+                text = text + "\n\n" + "\n\n".join(sections)
+
+        metadata = {
+            "processing": {
+                "extract_tables": extract_tables,
+                "describe_images": describe_images,
+                "images_described": images_described,
+            }
+        }
 
     cursor = conn.execute(
         "INSERT INTO documents (project_id, filename, file_type, content, metadata_json) VALUES (?, ?, ?, ?, ?)",
@@ -103,7 +143,7 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
         (cursor.lastrowid,),
     ).fetchone()
     result = dict(row)
-    result["source_kind"] = metadata["source_kind"] if metadata else "text"
+    result["source_kind"] = (metadata or {}).get("source_kind", "text")
     return result
 
 

@@ -15,6 +15,7 @@ export const LLM_METRICS = [
   'instance_rubrics',
   'refusal_accuracy',
   'conversation_retention',
+  'topic_adherence',
 ];
 
 /** One-click selection presets — the guided "options kinds" for metric choice. */
@@ -60,17 +61,7 @@ export const DOMAIN_METRICS = ['sql_semantic_equivalence', 'datacompy_score'];
 
 export const JUDGE_METRICS = ['multi_llm_judge'];
 
-export const AGENT_METRICS = ['tool_call_f1'];
-
-/** Specialized metrics that need infrastructure not yet available (tool calls, etc.) */
-export const COMING_SOON_METRICS = [
-  { name: 'agent_goal_accuracy', reason: 'Requires agentic goal/outcome annotations' },
-  { name: 'topic_adherence', reason: 'Requires a predefined topic list per conversation' },
-  {
-    name: 'tool_call_accuracy',
-    reason: 'Requires tool/function call data from agent interactions',
-  },
-];
+export const AGENT_METRICS = ['tool_call_f1', 'tool_call_accuracy', 'agent_goal_accuracy'];
 
 export const METRIC_DESCRIPTIONS: Record<string, string> = {
   // LLM Metrics
@@ -133,6 +124,12 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
   // Agent Metrics
   tool_call_f1:
     'Deterministic F1 between the tool calls the agent actually made and the reference_tool_calls expected for the question. Free — computed from the recorded agent trace, no LLM. Requires an agent experiment (tools attached) and a reference_tool_calls column.',
+  tool_call_accuracy:
+    'Strict, order-aware version of tool_call_f1: call #1 must match reference #1, and so on. Free — computed from the recorded agent trace. Requires an agent experiment and a reference_tool_calls column.',
+  agent_goal_accuracy:
+    "LLM judge decides whether the agent actually achieved the user's goal, looking at the final answer AND the tool actions taken, against the reference answer as the desired outcome. Requires an agent experiment (tools attached).",
+  topic_adherence:
+    'LLM judge checks the answer stays within the question\'s allowed topics ("topics" list in question metadata): 1.0 adherent, 0.5 partially off-topic, 0.0 off-topic.',
 };
 
 interface MetricGroupProps {
@@ -374,26 +371,6 @@ export default function MetricSelection({
           disabledMetrics={disabledMetrics}
           disabledReasons={disabledReasons}
         />
-
-        {/* Coming Soon — specialized metrics */}
-        <div>
-          <label className="mb-2 block text-xs font-medium text-text-muted">
-            Specialized Metrics <span className="font-normal">(coming soon)</span>
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {COMING_SOON_METRICS.map((m) => (
-              <button
-                key={m.name}
-                type="button"
-                disabled
-                title={m.reason}
-                className="cursor-not-allowed rounded-lg border border-border/30 bg-card/20 px-3 py-1.5 text-xs font-medium text-text-muted/40 line-through"
-              >
-                {m.name.replace(/_/g, ' ')}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {/* Custom metrics */}
         {customMetrics.length > 0 && (
