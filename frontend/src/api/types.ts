@@ -1264,6 +1264,12 @@ export interface TraceSpan {
   duration_ms: number;
   status: 'ok' | 'error';
   error?: string;
+  /** thinking:* spans — the model's narrated reasoning for that round. */
+  text?: string;
+  llm_ms?: number;
+  /** tool:* spans — call arguments and result excerpts. */
+  arguments?: string;
+  result?: string;
 }
 
 export interface SkillTrialResult {

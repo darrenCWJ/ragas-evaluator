@@ -43,17 +43,24 @@ async def run_agent(
         params: Extra completion params (temperature, max_tokens…).
 
     Returns:
-        ``{"answer": str, "steps": [...], "usage": {...}, "stop_reason": str}``
-        where each step is ``{"tool", "arguments", "result", "latency_ms", "error"}``.
+        ``{"answer": str, "steps": [...], "turns": [...], "usage": {...},
+        "stop_reason": str}`` where each step is ``{"tool", "arguments",
+        "result", "latency_ms", "error", "turn"}`` and each turn is one LLM
+        round that requested tools: ``{"thought": <assistant text narrated
+        alongside the tool calls>, "tool_calls": [names], "latency_ms",
+        "steps": [...]}`` — the model's visible reasoning between actions.
     """
     conversation = list(messages)
     steps: list[dict] = []
+    turns: list[dict] = []
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     stop_reason = "max_steps"
     answer = ""
 
     for _ in range(max_steps):
+        llm_started = time.monotonic()
         response = await chat_completion(model, conversation, params, tools=tools)
+        llm_latency_ms = int((time.monotonic() - llm_started) * 1000)
         usage = response.get("usage") or {}
         total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
         total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
@@ -63,6 +70,14 @@ async def run_agent(
             answer = response.get("content", "")
             stop_reason = "answer"
             break
+
+        turn = {
+            "thought": (response.get("content") or "").strip(),
+            "tool_calls": [tc["name"] for tc in tool_calls],
+            "latency_ms": llm_latency_ms,
+            "steps": [],
+        }
+        turns.append(turn)
 
         conversation.append({
             "role": "assistant",
@@ -80,13 +95,16 @@ async def run_agent(
                 error = str(exc)
                 result = f"Error: {exc}"
             latency_ms = int((time.monotonic() - started) * 1000)
-            steps.append({
+            step = {
                 "tool": tc["name"],
                 "arguments": tc["arguments"],
                 "result": result[:4000],
                 "latency_ms": latency_ms,
                 "error": error,
-            })
+                "turn": len(turns),
+            }
+            steps.append(step)
+            turn["steps"].append(step)
             conversation.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
@@ -108,6 +126,7 @@ async def run_agent(
     return {
         "answer": answer,
         "steps": steps,
+        "turns": turns,
         "usage": total_usage,
         "stop_reason": stop_reason,
     }

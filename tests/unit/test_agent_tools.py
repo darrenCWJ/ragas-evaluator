@@ -74,6 +74,44 @@ class TestAgentLoop:
         assert len(result["steps"]) == 2
 
     @pytest.mark.asyncio
+    async def test_turns_capture_narrated_thinking(self, monkeypatch):
+        responses = iter([
+            {
+                "content": "I should check the bronze tier first.",
+                "tool_calls": [{"id": "c1", "name": "read_file", "arguments": {"path": "tiers/bronze.md"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+            {
+                "content": "Bronze done — moving to silver.",
+                "tool_calls": [{"id": "c2", "name": "read_file", "arguments": {"path": "tiers/silver.md"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+            {"content": "All tiers designed.", "tool_calls": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ])
+
+        async def fake_completion(model, messages, params=None, tools=None):
+            return next(responses)
+
+        monkeypatch.setattr("pipeline.agent_loop.chat_completion", fake_completion)
+        from pipeline.agent_loop import run_agent
+
+        async def executor(name, args):
+            return "file contents"
+
+        result = await run_agent("m", [{"role": "user", "content": "build it"}], [CALC_SPEC], executor)
+
+        assert result["answer"] == "All tiers designed."
+        # One turn per tool-calling round, with the model's narrated reasoning
+        assert [t["thought"] for t in result["turns"]] == [
+            "I should check the bronze tier first.",
+            "Bronze done — moving to silver.",
+        ]
+        assert result["turns"][0]["tool_calls"] == ["read_file"]
+        # Steps stay flat for tool_call_f1 but link back to their turn
+        assert [s["turn"] for s in result["steps"]] == [1, 2]
+        assert result["turns"][1]["steps"][0]["arguments"]["path"] == "tiers/silver.md"
+
+    @pytest.mark.asyncio
     async def test_tool_error_is_fed_back_not_raised(self, monkeypatch):
         responses = iter([
             {

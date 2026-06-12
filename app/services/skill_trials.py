@@ -175,8 +175,10 @@ async def _query_model_agentic(
         messages.append({"role": "system", "content": system_context})
     messages.append({"role": "user", "content": question})
 
+    # Process-flow skills walk many stages (read tier file → ask → act), so
+    # give the loop more round-trips than the general default.
     result = await run_agent(
-        spec["model"], messages, tools, executor, params={"max_tokens": 4096}
+        spec["model"], messages, tools, executor, params={"max_tokens": 4096}, max_steps=16
     )
     files_read = [
         str(s["arguments"].get("path", "")) for s in result["steps"] if s["tool"] == "read_file"
@@ -186,6 +188,7 @@ async def _query_model_agentic(
         "tokens_in": result["usage"]["prompt_tokens"],
         "tokens_out": result["usage"]["completion_tokens"],
         "agent_steps": result["steps"],
+        "agent_turns": result.get("turns", []),
         "files_read": files_read,
         "user_exchanges": exchanges["n"],
     }
@@ -284,14 +287,36 @@ async def _run_cell(
             row["response"] = reply["answer"]
             row["tokens_in"] = int(reply["tokens_in"] or 0)
             row["tokens_out"] = int(reply["tokens_out"] or 0)
-            for step in reply.get("agent_steps", []):
-                with trace.span(
-                    f"tool:{step['tool']}",
-                    arguments=json.dumps(step["arguments"])[:500],
-                    result=str(step["result"])[:500],
-                    error=step.get("error"),
-                ):
-                    pass
+            # The model's visible process: per LLM round, the narrated thought
+            # plus the tool calls it made — interleaved so the drilldown reads
+            # like a transcript of how the model worked through the skill.
+            turns = reply.get("agent_turns") or []
+            if turns:
+                for i, turn in enumerate(turns, 1):
+                    if turn.get("thought"):
+                        with trace.span(
+                            f"thinking:{i}",
+                            text=turn["thought"][:2000],
+                            llm_ms=turn.get("latency_ms"),
+                        ):
+                            pass
+                    for step in turn.get("steps", []):
+                        with trace.span(
+                            f"tool:{step['tool']}",
+                            arguments=json.dumps(step["arguments"])[:500],
+                            result=str(step["result"])[:500],
+                            error=step.get("error"),
+                        ):
+                            pass
+            else:
+                for step in reply.get("agent_steps", []):
+                    with trace.span(
+                        f"tool:{step['tool']}",
+                        arguments=json.dumps(step["arguments"])[:500],
+                        result=str(step["result"])[:500],
+                        error=step.get("error"),
+                    ):
+                        pass
 
             with trace.span("judge", directives=len(directives)):
                 verdicts = await judge_adherence(
