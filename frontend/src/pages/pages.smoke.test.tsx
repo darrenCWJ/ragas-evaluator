@@ -18,6 +18,7 @@ vi.mock('../components/kg/KGGraphView', () => ({
 import AnalyzePage from './AnalyzePage';
 import BuildPage from './BuildPage';
 import ExperimentPage from './ExperimentPage';
+import GuidePage from './GuidePage';
 import KnowledgeGraphPage from './KnowledgeGraphPage';
 import LoginPage from './LoginPage';
 import PersonasPage from './PersonasPage';
@@ -31,6 +32,7 @@ const PAGES: ReadonlyArray<[string, ComponentType]> = [
   ['AnalyzePage', AnalyzePage],
   ['BuildPage', BuildPage],
   ['ExperimentPage', ExperimentPage],
+  ['GuidePage', GuidePage],
   ['KnowledgeGraphPage', KnowledgeGraphPage],
   ['LoginPage', LoginPage],
   ['PersonasPage', PersonasPage],

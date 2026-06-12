@@ -14,6 +14,7 @@ import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import PersonasPage from './pages/PersonasPage';
 import SkillsPage from './pages/SkillsPage';
 import WorkersPage from './pages/WorkersPage';
+import GuidePage from './pages/GuidePage';
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="personas" element={<PersonasPage />} />
               <Route path="skills" element={<SkillsPage />} />
               <Route path="workers" element={<WorkersPage />} />
+              <Route path="guide" element={<GuidePage />} />
             </Route>
             <Route path="*" element={<Navigate to="start" replace />} />
           </Routes>
