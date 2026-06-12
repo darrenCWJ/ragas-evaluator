@@ -8,6 +8,7 @@ from config import (
     VALID_CHUNK_METHODS,
     VALID_CONNECTOR_TYPES,
     VALID_EMBEDDING_TYPES,
+    VALID_QUERY_EXPANSION,
     VALID_RESPONSE_MODES,
     VALID_SEARCH_TYPES,
 )
@@ -249,6 +250,34 @@ class RagConfigCreate(BaseModel):
     max_steps: int = 3
     reranker_model: str | None = None
     reranker_top_k: int | None = None
+    query_expansion: str | None = None
+    num_expansions: int | None = None
+    score_threshold: float | None = None
+    mmr_lambda: float | None = None
+    kg_expansion: bool = False
+
+    @field_validator("query_expansion")
+    @classmethod
+    def validate_query_expansion(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_QUERY_EXPANSION:
+            raise ValueError(
+                f"query_expansion must be one of: {', '.join(sorted(VALID_QUERY_EXPANSION))}"
+            )
+        return v
+
+    @field_validator("num_expansions")
+    @classmethod
+    def validate_num_expansions(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > 8):
+            raise ValueError("num_expansions must be between 1 and 8")
+        return v
+
+    @field_validator("mmr_lambda")
+    @classmethod
+    def validate_mmr_lambda(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0.0 or v > 1.0):
+            raise ValueError("mmr_lambda must be between 0.0 and 1.0")
+        return v
 
     @field_validator("llm_model")
     @classmethod
@@ -324,6 +353,11 @@ class RagConfigUpdate(BaseModel):
     max_steps: int | None = None
     reranker_model: str | None = None
     reranker_top_k: int | None = None
+    query_expansion: str | None = None
+    num_expansions: int | None = None
+    score_threshold: float | None = None
+    mmr_lambda: float | None = None
+    kg_expansion: bool | None = None
 
     @field_validator("search_type")
     @classmethod
@@ -332,6 +366,29 @@ class RagConfigUpdate(BaseModel):
             raise ValueError(
                 f"search_type must be one of: {', '.join(sorted(VALID_SEARCH_TYPES))}"
             )
+        return v
+
+    @field_validator("query_expansion")
+    @classmethod
+    def validate_query_expansion(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_QUERY_EXPANSION:
+            raise ValueError(
+                f"query_expansion must be one of: {', '.join(sorted(VALID_QUERY_EXPANSION))}"
+            )
+        return v
+
+    @field_validator("num_expansions")
+    @classmethod
+    def validate_num_expansions(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > 8):
+            raise ValueError("num_expansions must be between 1 and 8")
+        return v
+
+    @field_validator("mmr_lambda")
+    @classmethod
+    def validate_mmr_lambda(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0.0 or v > 1.0):
+            raise ValueError("mmr_lambda must be between 0.0 and 1.0")
         return v
 
     @field_validator("response_mode")

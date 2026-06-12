@@ -71,6 +71,11 @@ def build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
         "max_steps": retrieval_config.get("max_steps", 3),
         "reranker_model": retrieval_config.get("reranker_model"),
         "reranker_top_k": retrieval_config.get("reranker_top_k"),
+        "query_expansion": retrieval_config.get("query_expansion"),
+        "num_expansions": retrieval_config.get("num_expansions"),
+        "score_threshold": retrieval_config.get("score_threshold"),
+        "mmr_lambda": retrieval_config.get("mmr_lambda"),
+        "kg_expansion": retrieval_config.get("kg_expansion", 0),
     }
 
 

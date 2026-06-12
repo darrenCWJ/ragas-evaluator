@@ -234,6 +234,13 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
         "system_prompt": rag_config["system_prompt"],
         "response_mode": rag_config["response_mode"],
         "max_steps": rag_config["max_steps"],
+        "reranker_model": rag_config["reranker_model"],
+        "reranker_top_k": rag_config["reranker_top_k"],
+        "query_expansion": rag_config["query_expansion"],
+        "num_expansions": rag_config["num_expansions"],
+        "score_threshold": rag_config["score_threshold"],
+        "mmr_lambda": rag_config["mmr_lambda"],
+        "kg_expansion": rag_config["kg_expansion"],
     })
 
     cursor = conn.execute(

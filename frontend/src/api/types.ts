@@ -288,6 +288,11 @@ export interface RagConfig {
   max_steps: number | null;
   reranker_model: string | null;
   reranker_top_k: number | null;
+  query_expansion: string | null;
+  num_expansions: number | null;
+  score_threshold: number | null;
+  mmr_lambda: number | null;
+  kg_expansion: number;
   created_at: string;
 }
 
@@ -306,6 +311,11 @@ export interface RagConfigCreate {
   max_steps?: number | null;
   reranker_model?: string | null;
   reranker_top_k?: number | null;
+  query_expansion?: string | null;
+  num_expansions?: number | null;
+  score_threshold?: number | null;
+  mmr_lambda?: number | null;
+  kg_expansion?: boolean;
 }
 
 export interface RagConfigExpanded extends RagConfig {

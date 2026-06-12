@@ -156,6 +156,7 @@ VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap",
 VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sparse"}
 VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
 VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
+VALID_QUERY_EXPANSION = {"multi_query", "hyde"}
 MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", "0"))
 
 # ---------------------------------------------------------------------------

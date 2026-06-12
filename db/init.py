@@ -194,6 +194,11 @@ CREATE TABLE IF NOT EXISTS rag_configs (
     max_steps INTEGER NOT NULL DEFAULT 3,
     reranker_model TEXT,
     reranker_top_k INTEGER,
+    query_expansion TEXT,
+    num_expansions INTEGER,
+    score_threshold REAL,
+    mmr_lambda REAL,
+    kg_expansion INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -555,6 +560,11 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN applied_experiment_id INTEGER REFERENCES experiments(id)")
     _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN outcome_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN owner_id INTEGER REFERENCES users(id)")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN query_expansion TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN num_expansions INTEGER")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN score_threshold REAL")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN mmr_lambda REAL")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN kg_expansion INTEGER NOT NULL DEFAULT 0")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:

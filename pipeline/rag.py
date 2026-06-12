@@ -24,6 +24,32 @@ DEFAULT_SYSTEM_PROMPT = (
     "provided context. If the context doesn't contain enough information, say so."
 )
 
+MULTI_QUERY_SYSTEM_PROMPT = (
+    "You generate alternative phrasings of a search query for a retrieval system. "
+    "Rewrite the user's query from different angles (synonyms, sub-questions, "
+    "more specific or more general forms) while preserving its intent. "
+    "Return ONLY the rewritten queries, one per line, no numbering or commentary."
+)
+
+HYDE_SYSTEM_PROMPT = (
+    "You write a short hypothetical document that would perfectly answer the "
+    "user's question. Write 3-6 sentences of plausible, factual-sounding prose "
+    "as if excerpted from a reference document. Return ONLY the passage."
+)
+
+# Over-fetch multiplier when MMR diversity selection is enabled
+_MMR_FETCH_MULTIPLIER = 3
+_MAX_FETCH_K = 50
+
+
+def _cfg(config_row, key: str, default=None):
+    """Read an optional field from a rag-config row (sqlite Row or dict)."""
+    try:
+        value = config_row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if value is None else value
+
 
 def _build_context_text(contexts: list[dict]) -> str:
     """Format retrieved contexts into a numbered list for the LLM prompt."""
@@ -215,22 +241,218 @@ async def _retrieve_hybrid(query: str, config_row, conn) -> list[dict]:
     return merged
 
 
+async def _dispatch_retrieve(query: str, config_row, conn) -> list[dict]:
+    """Route one retrieval call by search_type."""
+    search_type = config_row["search_type"]
+    if search_type == "dense":
+        return await _retrieve_dense(query, config_row, conn)
+    if search_type == "sparse":
+        return await _retrieve_sparse(query, config_row, conn)
+    if search_type == "hybrid":
+        return await _retrieve_hybrid(query, config_row, conn)
+    raise HTTPException(status_code=400, detail=f"Unknown search type: {search_type}")
+
+
+async def _expand_queries(query: str, config_row) -> tuple[list[str], dict]:
+    """Apply the configured query-expansion strategy.
+
+    multi_query — LLM rewrites the query N ways; all variants (plus the
+    original) are retrieved and rank-fused.
+    hyde — LLM drafts a hypothetical answer passage; retrieval runs on that
+    passage instead of the raw query (embedding-space match against answers).
+
+    Returns (queries, token_usage). Expansion failures fall back to the
+    original query — retrieval must never die because a rewrite call failed.
+    """
+    mode = _cfg(config_row, "query_expansion")
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    if not mode:
+        return [query], usage
+
+    llm_params = {}
+    raw_params = _cfg(config_row, "llm_params_json")
+    if raw_params:
+        llm_params = json.loads(raw_params) if isinstance(raw_params, str) else raw_params
+
+    try:
+        if mode == "hyde":
+            result = await chat_completion(
+                model=config_row["llm_model"],
+                messages=[
+                    {"role": "system", "content": HYDE_SYSTEM_PROMPT},
+                    {"role": "user", "content": query},
+                ],
+                params=llm_params,
+            )
+            usage["prompt_tokens"] += result["usage"]["prompt_tokens"]
+            usage["completion_tokens"] += result["usage"]["completion_tokens"]
+            hypothetical = result["content"].strip()
+            return ([hypothetical] if hypothetical else [query]), usage
+
+        if mode == "multi_query":
+            n = int(_cfg(config_row, "num_expansions", 3))
+            result = await chat_completion(
+                model=config_row["llm_model"],
+                messages=[
+                    {"role": "system", "content": MULTI_QUERY_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Query: {query}\n\nGenerate {n} alternatives."},
+                ],
+                params=llm_params,
+            )
+            usage["prompt_tokens"] += result["usage"]["prompt_tokens"]
+            usage["completion_tokens"] += result["usage"]["completion_tokens"]
+            alternatives = [
+                line.strip().lstrip("-•0123456789. ").strip()
+                for line in result["content"].splitlines()
+                if line.strip()
+            ]
+            alternatives = [a for a in alternatives if a and a.lower() != query.lower()][:n]
+            return [query, *alternatives], usage
+    except Exception:
+        logger.warning("Query expansion (%s) failed — using the original query", mode, exc_info=True)
+    return [query], usage
+
+
+def _rrf_fuse(result_lists: list[list[dict]], top_k: int) -> list[dict]:
+    """Reciprocal-rank-fusion across per-query result lists (multi-query)."""
+    rrf_k = 60
+    fused: dict = {}
+    for results in result_lists:
+        for rank, ctx in enumerate(results):
+            key = ctx.get("chunk_id")
+            if key is None:
+                key = "content:" + ctx["content"][:200]
+            entry = fused.setdefault(key, {"ctx": ctx, "score": 0.0})
+            entry["score"] += 1.0 / (rrf_k + rank + 1)
+    ranked = sorted(fused.values(), key=lambda e: e["score"], reverse=True)[:top_k]
+    return [{**e["ctx"], "score": round(e["score"], 6)} for e in ranked]
+
+
+def _apply_score_threshold(contexts: list[dict], threshold) -> list[dict]:
+    """Drop weakly-scored hits instead of blindly keeping top_k. Unscored
+    contexts pass through (their relevance is unknown, not low)."""
+    if threshold is None:
+        return contexts
+    kept = [c for c in contexts if c.get("score") is None or c["score"] >= threshold]
+    if len(kept) < len(contexts):
+        logger.info(
+            "Score threshold %.4f dropped %d of %d retrieved contexts",
+            threshold, len(contexts) - len(kept), len(contexts),
+        )
+    return kept
+
+
+def _mmr_select(contexts: list[dict], top_k: int, lam: float) -> list[dict]:
+    """Maximal-marginal-relevance selection over an over-fetched candidate set.
+
+    Relevance is the min-max-normalised retrieval score; redundancy is token-set
+    Jaccard similarity against already-selected contexts (deterministic, no
+    extra embedding calls). lam=1.0 → pure relevance, lam=0.0 → pure diversity.
+    """
+    if len(contexts) <= top_k:
+        return contexts
+
+    scores = [c.get("score") or 0.0 for c in contexts]
+    lo, hi = min(scores), max(scores)
+    if lo >= 0.0 and hi <= 1.0:
+        # Already on the same [0,1] scale as Jaccard redundancy (dense/RRF).
+        # Min-max here would zero the weakest hit and distort clustered scores.
+        relevance = scores
+    else:
+        span = (hi - lo) or 1.0
+        relevance = [(s - lo) / span for s in scores]
+    token_sets = [set(c["content"].lower().split()) for c in contexts]
+
+    def jaccard(a: set, b: set) -> float:
+        if not a or not b:
+            return 0.0
+        return len(a & b) / len(a | b)
+
+    remaining = list(range(len(contexts)))
+    selected: list[int] = []
+    while remaining and len(selected) < top_k:
+        best_idx, best_value = remaining[0], float("-inf")
+        for idx in remaining:
+            redundancy = max(
+                (jaccard(token_sets[idx], token_sets[s]) for s in selected), default=0.0
+            )
+            value = lam * relevance[idx] - (1.0 - lam) * redundancy
+            if value > best_value:
+                best_idx, best_value = idx, value
+        selected.append(best_idx)
+        remaining.remove(best_idx)
+    return [contexts[i] for i in selected]
+
+
+async def _kg_expand(contexts: list[dict], config_row, conn, max_extra: int) -> list[dict]:
+    """Append 1-hop KG neighbours of the retrieved chunks as extra candidates.
+
+    Best paired with a reranker (extras carry no retrieval score). No-op when
+    the project has no complete chunks-KG. Never fails the query.
+    """
+    from pipeline import kg_retrieval
+
+    try:
+        row = kg_retrieval.fetch_kg_row(
+            conn, _cfg(config_row, "project_id"), _cfg(config_row, "chunk_config_id")
+        )
+        if row is None:
+            return contexts
+        index = kg_retrieval.get_cached_index(row["id"])
+        if index is None:
+            # Parsing a tens-of-MB graph is CPU-bound — keep it off the event loop.
+            index = await asyncio.to_thread(kg_retrieval.build_index, row["id"], row["kg_json"])
+            kg_retrieval.cache_index(index)
+        extras = kg_retrieval.select_neighbours(index, contexts, max_extra)
+        if not extras:
+            return contexts
+        kg_retrieval.attach_chunk_ids(conn, extras, _cfg(config_row, "chunk_config_id"))
+        logger.info("KG expansion added %d neighbour contexts", len(extras))
+        return contexts + extras
+    except Exception:
+        logger.warning("KG expansion failed — continuing with vector hits only", exc_info=True)
+        return contexts
+
+
+async def _retrieve_enhanced(
+    query: str, config_row, conn, seen_parent_keys: set | None = None
+) -> tuple[list[dict], dict]:
+    """Full retrieval pass: query expansion → search → score threshold →
+    MMR/top_k cut → KG neighbour expansion → small-to-big parent swap.
+
+    Returns (contexts, llm_token_usage_from_expansion).
+    """
+    top_k = config_row["top_k"]
+    mmr_lambda = _cfg(config_row, "mmr_lambda")
+    fetch_k = (
+        min(top_k * _MMR_FETCH_MULTIPLIER, _MAX_FETCH_K) if mmr_lambda is not None else top_k
+    )
+    fetch_cfg = {**dict(config_row), "top_k": fetch_k}
+
+    queries, usage = await _expand_queries(query, config_row)
+    if len(queries) == 1:
+        contexts = await _dispatch_retrieve(queries[0], fetch_cfg, conn)
+    else:
+        result_lists = [await _dispatch_retrieve(q, fetch_cfg, conn) for q in queries]
+        contexts = _rrf_fuse(result_lists, fetch_k)
+
+    contexts = _apply_score_threshold(contexts, _cfg(config_row, "score_threshold"))
+
+    if mmr_lambda is not None:
+        contexts = _mmr_select(contexts, top_k, float(mmr_lambda))
+    else:
+        contexts = contexts[:top_k]
+
+    if _cfg(config_row, "kg_expansion", 0):
+        contexts = await _kg_expand(contexts, config_row, conn, max_extra=top_k)
+
+    contexts = _expand_to_parents(contexts, conn, seen_parent_keys)
+    return contexts, usage
+
+
 async def single_shot_query(query: str, rag_config_row, conn) -> dict:
     """Execute a single-shot RAG query: retrieve contexts, call LLM, return answer."""
-    search_type = rag_config_row["search_type"]
-
-    # Retrieve contexts based on search type
-    if search_type == "dense":
-        contexts = await _retrieve_dense(query, rag_config_row, conn)
-    elif search_type == "sparse":
-        contexts = await _retrieve_sparse(query, rag_config_row, conn)
-    elif search_type == "hybrid":
-        contexts = await _retrieve_hybrid(query, rag_config_row, conn)
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown search type: {search_type}")
-
-    # Small-to-big: children matched, parents go to the LLM
-    contexts = _expand_to_parents(contexts, conn)
+    contexts, expansion_usage = await _retrieve_enhanced(query, rag_config_row, conn)
 
     # No contexts found
     if not contexts:
@@ -238,7 +460,7 @@ async def single_shot_query(query: str, rag_config_row, conn) -> dict:
             "answer": "No relevant contexts found for your query.",
             "contexts": [],
             "model": rag_config_row["llm_model"],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+            "usage": expansion_usage,
         }
 
     # Rerank if configured
@@ -275,7 +497,12 @@ async def single_shot_query(query: str, rag_config_row, conn) -> dict:
         "answer": result["content"],
         "contexts": contexts,
         "model": rag_config_row["llm_model"],
-        "usage": result["usage"],
+        "usage": {
+            "prompt_tokens": result["usage"]["prompt_tokens"] + expansion_usage["prompt_tokens"],
+            "completion_tokens": (
+                result["usage"]["completion_tokens"] + expansion_usage["completion_tokens"]
+            ),
+        },
     }
 
 
@@ -297,7 +524,6 @@ GAP_ANALYSIS_USER_TEMPLATE = (
 
 async def multi_step_query(query: str, rag_config_row, conn) -> dict:
     """Execute a multi-step RAG query: iteratively retrieve, reason about gaps, and synthesize."""
-    search_type = rag_config_row["search_type"]
     max_steps = rag_config_row["max_steps"]
 
     steps = []
@@ -314,15 +540,12 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
         llm_params = json.loads(rag_config_row["llm_params_json"])
 
     for step_num in range(1, max_steps + 1):
-        # Retrieve contexts based on search type
-        if search_type == "dense":
-            raw_contexts = await _retrieve_dense(current_query, rag_config_row, conn)
-        elif search_type == "sparse":
-            raw_contexts = await _retrieve_sparse(current_query, rag_config_row, conn)
-        elif search_type == "hybrid":
-            raw_contexts = await _retrieve_hybrid(current_query, rag_config_row, conn)
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown search type: {search_type}")
+        # Retrieve (expansion + threshold + MMR + KG + parent swap inside)
+        raw_contexts, expansion_usage = await _retrieve_enhanced(
+            current_query, rag_config_row, conn, seen_parent_keys
+        )
+        total_prompt_tokens += expansion_usage["prompt_tokens"]
+        total_completion_tokens += expansion_usage["completion_tokens"]
 
         # Deduplicate: only keep contexts with chunk_ids not yet seen
         new_contexts = []
@@ -333,9 +556,6 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
             if cid is not None:
                 seen_chunk_ids.add(cid)
             new_contexts.append(ctx)
-
-        # Small-to-big: expand child hits, deduping parents across steps
-        new_contexts = _expand_to_parents(new_contexts, conn, seen_parent_keys)
 
         # No new contexts found — break early
         if not new_contexts:

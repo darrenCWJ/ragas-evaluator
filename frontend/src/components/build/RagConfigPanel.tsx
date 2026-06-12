@@ -69,6 +69,13 @@ export default function RagConfigPanel({
   // Reranker fields
   const [rerankerModel, setRerankerModel] = useState('');
   const [rerankerTopK, setRerankerTopK] = useState(5);
+  // Retrieval quality fields
+  const [queryExpansion, setQueryExpansion] = useState('');
+  const [numExpansions, setNumExpansions] = useState(3);
+  const [scoreThreshold, setScoreThreshold] = useState('');
+  const [mmrEnabled, setMmrEnabled] = useState(false);
+  const [mmrLambda, setMmrLambda] = useState(0.7);
+  const [kgExpansion, setKgExpansion] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -152,6 +159,13 @@ export default function RagConfigPanel({
         payload.reranker_model = rerankerModel.trim();
         payload.reranker_top_k = rerankerTopK;
       }
+      if (queryExpansion) {
+        payload.query_expansion = queryExpansion;
+        if (queryExpansion === 'multi_query') payload.num_expansions = numExpansions;
+      }
+      if (scoreThreshold.trim() !== '') payload.score_threshold = parseFloat(scoreThreshold);
+      if (mmrEnabled) payload.mmr_lambda = mmrLambda;
+      if (kgExpansion) payload.kg_expansion = true;
       await createRagConfig(projectId, payload);
       setName('');
       setSearchType('dense');
@@ -163,6 +177,12 @@ export default function RagConfigPanel({
       setShowAdvanced(false);
       setRerankerModel('');
       setRerankerTopK(5);
+      setQueryExpansion('');
+      setNumExpansions(3);
+      setScoreThreshold('');
+      setMmrEnabled(false);
+      setMmrLambda(0.7);
+      setKgExpansion(false);
       loadConfigs();
       onConfigsChanged?.();
     } catch (err) {
@@ -400,6 +420,24 @@ export default function RagConfigPanel({
                               <span className="text-text-secondary">Reranker:</span>{' '}
                               {cfg.reranker_model}
                               {cfg.reranker_top_k ? `, top_k=${cfg.reranker_top_k}` : ''}
+                            </p>
+                          )}
+                          {(cfg.query_expansion ||
+                            cfg.score_threshold != null ||
+                            cfg.mmr_lambda != null ||
+                            cfg.kg_expansion) && (
+                            <p>
+                              <span className="text-text-secondary">Retrieval extras:</span>{' '}
+                              {[
+                                cfg.query_expansion ? `expansion=${cfg.query_expansion}` : null,
+                                cfg.score_threshold != null
+                                  ? `threshold=${cfg.score_threshold}`
+                                  : null,
+                                cfg.mmr_lambda != null ? `mmr λ=${cfg.mmr_lambda}` : null,
+                                cfg.kg_expansion ? 'kg-expansion' : null,
+                              ]
+                                .filter(Boolean)
+                                .join(', ')}
                             </p>
                           )}
                           {cfg.system_prompt && (
@@ -686,7 +724,9 @@ export default function RagConfigPanel({
                     </code>{' '}
                     (slower, better quality) |{' '}
                     <code className="rounded bg-elevated px-1">BAAI/bge-reranker-base</code> |{' '}
-                    <code className="rounded bg-elevated px-1">BAAI/bge-reranker-large</code>
+                    <code className="rounded bg-elevated px-1">BAAI/bge-reranker-large</code> |{' '}
+                    <code className="rounded bg-elevated px-1">BAAI/bge-reranker-v2-m3</code>{' '}
+                    (multilingual, strongest)
                   </p>
                   <input
                     type="text"
@@ -713,6 +753,111 @@ export default function RagConfigPanel({
                     />
                   </label>
                 )}
+              </div>
+
+              {/* Retrieval quality */}
+              <div className="rounded-lg border border-border/50 bg-card/30 p-3">
+                <p className="mb-2 text-xs font-medium text-text-secondary">
+                  Retrieval Quality (optional)
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-text-secondary">Query Expansion</span>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      multi_query: LLM rewrites the query N ways, results are rank-fused | hyde: LLM
+                      drafts a hypothetical answer and retrieval matches against it. Adds one LLM
+                      call per retrieval.
+                    </p>
+                    <select
+                      value={queryExpansion}
+                      onChange={(e) => setQueryExpansion(e.target.value)}
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                    >
+                      <option value="">None</option>
+                      <option value="multi_query">Multi-Query</option>
+                      <option value="hyde">HyDE</option>
+                    </select>
+                  </label>
+
+                  {queryExpansion === 'multi_query' && (
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-text-secondary">Rewrites</span>
+                      <p className="mt-0.5 text-xs text-text-muted">
+                        Number of alternative phrasings (1-8)
+                      </p>
+                      <input
+                        type="number"
+                        value={numExpansions}
+                        min={1}
+                        max={8}
+                        onChange={(e) => setNumExpansions(parseInt(e.target.value) || 3)}
+                        className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-text-secondary">Score Threshold</span>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Drop retrieved chunks scoring below this instead of blindly keeping Top K
+                      (dense scores are 0-1; leave empty to disable)
+                    </p>
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={scoreThreshold}
+                      onChange={(e) => setScoreThreshold(e.target.value)}
+                      placeholder="e.g. 0.35"
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                    />
+                  </label>
+
+                  <div className="block">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={mmrEnabled}
+                        onChange={(e) => setMmrEnabled(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-accent"
+                      />
+                      <span className="text-xs text-text-secondary">
+                        MMR Diversity {mmrEnabled ? `(λ=${mmrLambda.toFixed(2)})` : ''}
+                      </span>
+                    </label>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Over-fetch 3× then pick a diverse Top K — avoids near-duplicate chunks. λ=1
+                      pure relevance, λ=0 pure diversity.
+                    </p>
+                    {mmrEnabled && (
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={mmrLambda}
+                        onChange={(e) => setMmrLambda(parseFloat(e.target.value))}
+                        className="mt-1 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border accent-accent"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <label className="mt-3 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={kgExpansion}
+                    onChange={(e) => setKgExpansion(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-accent"
+                  />
+                  <span className="text-xs text-text-secondary">Knowledge-Graph Expansion</span>
+                </label>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  Adds 1-hop KG neighbours of the retrieved chunks as extra candidates (needs a
+                  built knowledge graph; pair with a reranker so the extras get scored).
+                </p>
               </div>
             </div>
           )}
