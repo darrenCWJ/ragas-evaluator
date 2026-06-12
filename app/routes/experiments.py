@@ -884,7 +884,7 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
         import httpx
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{worker_url}/experiment-progress/{experiment_id}")
+                resp = await client.get(f"{worker_url}/experiment-progress/{int(experiment_id)}")
                 if resp.status_code == 200:
                     data = resp.json()
                     return {
@@ -900,8 +900,8 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
                     }
         except Exception:
             logger.warning(
-                "Experiment %d: worker %s progress-snapshot fetch failed, falling back to local state",
-                experiment_id, worker_url, exc_info=True,
+                "Experiment %d: worker progress-snapshot fetch failed, falling back to local state",
+                experiment_id, exc_info=True,
             )
 
     progress = experiment_runs.snapshot_progress(experiment_id)
@@ -975,15 +975,15 @@ async def experiment_progress(project_id: int, experiment_id: int):
                             last_beat = time.monotonic()
 
                         try:
-                            resp = await client.get(f"{worker_url}/experiment-progress/{experiment_id}")
+                            resp = await client.get(f"{worker_url}/experiment-progress/{int(experiment_id)}")
                             if resp.status_code != 200:
                                 yield f"event: error\ndata: {json.dumps({'message': 'Worker unreachable'})}\n\n"
                                 break
                             prog = resp.json()
                         except Exception:
                             logger.warning(
-                                "Experiment %d: lost connection to worker %s while streaming progress",
-                                experiment_id, worker_url, exc_info=True,
+                                "Experiment %d: lost connection to the worker while streaming progress",
+                                experiment_id, exc_info=True,
                             )
                             yield f"event: error\ndata: {json.dumps({'message': 'Worker connection lost'})}\n\n"
                             break
@@ -1201,13 +1201,13 @@ async def cancel_experiment(project_id: int, experiment_id: int):
         import httpx
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(f"{worker_url}/cancel-experiment/{experiment_id}")
+                resp = await client.post(f"{worker_url}/cancel-experiment/{int(experiment_id)}")
                 if resp.status_code == 200:
                     return {"status": "cancelling", "experiment_id": experiment_id}
         except Exception:
             logger.warning(
-                "Experiment %d: cancel request to worker %s failed — marking failed locally",
-                experiment_id, worker_url, exc_info=True,
+                "Experiment %d: cancel request to the worker failed — marking failed locally",
+                experiment_id, exc_info=True,
             )
         conn.execute(
             "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
