@@ -405,6 +405,24 @@ CREATE TABLE IF NOT EXISTS skill_trials (
     completed_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS project_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(project_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS skill_trial_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trial_id INTEGER NOT NULL REFERENCES skill_trials(id) ON DELETE CASCADE,
@@ -536,6 +554,7 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN preferred_model TEXT")
     _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN applied_experiment_id INTEGER REFERENCES experiments(id)")
     _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN outcome_json TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN owner_id INTEGER REFERENCES users(id)")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:

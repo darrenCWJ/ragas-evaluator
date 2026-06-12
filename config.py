@@ -137,6 +137,19 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
 # ---------------------------------------------------------------------------
+# User authentication (sessions)
+# ---------------------------------------------------------------------------
+# Secret for signing session cookies. REQUIRED for stable logins across
+# restarts — when unset, a random per-process secret is generated and all
+# sessions are invalidated on restart (a warning is logged).
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", str(14 * 24 * 3600)))  # 14 days
+# Set true when serving over HTTPS so session cookies are marked Secure.
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+# Login attempts per IP per minute before throttling.
+LOGIN_RATE_LIMIT = int(os.environ.get("LOGIN_RATE_LIMIT", "5"))
+
+# ---------------------------------------------------------------------------
 # Validation sets (shared across routes and models)
 # ---------------------------------------------------------------------------
 VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"}

@@ -1,12 +1,60 @@
 import { useState, useCallback, useEffect } from 'react';
 import { version } from '../../package.json';
-import { Outlet, Navigate, useLocation } from 'react-router-dom';
+import { Outlet, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useProject } from '../contexts/ProjectContext';
+import { useAuth } from '../contexts/AuthContext';
 import Stepper from '../components/Stepper';
 import ProjectSelector from '../components/ProjectSelector';
+import { Spinner } from '../components/ui';
+
+/** Sidebar footer: signed-in identity + sign out (auth mode) and app version. */
+function SidebarFooter() {
+  const { user, authEnabled, logout } = useAuth();
+  const navigate = useNavigate();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await logout();
+      navigate('/login');
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-border px-4 py-3">
+      {authEnabled && user && (
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-xs font-medium text-text-primary">{user.name}</span>
+              {user.role === 'admin' && (
+                <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wider text-accent">
+                  Admin
+                </span>
+              )}
+            </div>
+            <div className="truncate text-2xs text-text-muted">{user.email}</div>
+          </div>
+          <button
+            onClick={handleSignOut}
+            disabled={signingOut}
+            className="shrink-0 rounded-md px-2 py-1 text-2xs font-medium text-text-secondary transition hover:bg-elevated hover:text-text-primary disabled:opacity-50"
+          >
+            {signingOut ? '…' : 'Sign out'}
+          </button>
+        </div>
+      )}
+      <div className="text-2xs text-text-muted">v{version}</div>
+    </div>
+  );
+}
 
 export default function WorkspaceLayout() {
   const { project } = useProject();
+  const { user, loading: authLoading, authEnabled } = useAuth();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -18,6 +66,19 @@ export default function WorkspaceLayout() {
   const toggleMobileNav = useCallback(() => {
     setMobileNavOpen((prev) => !prev);
   }, []);
+
+  // Auth guard: wait for the session check, then require sign-in when auth
+  // is active. Open mode (authEnabled=false) never redirects.
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
+  if (authEnabled && !user) {
+    return <Navigate to="/login" replace />;
+  }
 
   // Route guard: redirect to setup if no project (except setup itself)
   const isSetup =
@@ -51,9 +112,7 @@ export default function WorkspaceLayout() {
         </div>
 
         {/* Sidebar footer */}
-        <div className="border-t border-border px-4 py-3">
-          <div className="text-2xs text-text-muted">v{version}</div>
-        </div>
+        <SidebarFooter />
       </aside>
 
       {/* Mobile drawer overlay */}
@@ -102,9 +161,7 @@ export default function WorkspaceLayout() {
         <div className="flex-1 overflow-y-auto">
           <Stepper />
         </div>
-        <div className="border-t border-border px-4 py-3">
-          <div className="text-2xs text-text-muted">v{version}</div>
-        </div>
+        <SidebarFooter />
       </aside>
 
       {/* Main area */}

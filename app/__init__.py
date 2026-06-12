@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.routes import (
     analyze,
     annotations,
+    auth,
     bot_configs,
     chunks,
     custom_metrics,
@@ -114,32 +116,80 @@ async def lifespan(application: FastAPI):
 
 _RAGAS_API_KEY = os.environ.get("RAGAS_API_KEY", "")
 
-_AUTH_EXEMPT_PREFIXES = ("/app/", "/health")
+_AUTH_EXEMPT_PREFIXES = ("/app/", "/health", "/api/auth/")
+
+# /api/projects/{id}/...  → per-project access enforcement
+_PROJECT_PATH_RE = re.compile(r"^/api/projects/(\d+)(?:/|$)")
+
+# Login enforcement activates once any user exists. The check flips exactly
+# once (users are never all deleted in normal operation), so cache the True.
+_auth_active_cache = False
 
 
-class _ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Enforce Bearer token auth when RAGAS_API_KEY is set in the environment.
+def _auth_is_active() -> bool:
+    global _auth_active_cache
+    if _auth_active_cache:
+        return True
+    try:
+        import db.init as _db
+        from app.services.auth import any_users_exist
 
-    Absent key = dev/open mode (all requests pass through).
-    Present key = all non-exempt paths require `Authorization: Bearer <key>`.
+        if any_users_exist(_db.get_db()):
+            _auth_active_cache = True
+    except Exception:
+        logger.warning("Auth-active check failed — treating as inactive", exc_info=True)
+    return _auth_active_cache
+
+
+class _AuthMiddleware(BaseHTTPMiddleware):
+    """Two-layer auth.
+
+    Open mode (no registered users): legacy behavior — everything passes,
+    unless RAGAS_API_KEY is set, in which case it is required as a Bearer
+    token (the original deployment story).
+
+    User mode (≥1 registered user): every non-exempt request needs a valid
+    session cookie or the machine Bearer token. Project-scoped paths
+    additionally require ownership/membership — admins (and the machine
+    token) can access every project.
     """
 
     async def dispatch(self, request: Request, call_next):
-        if not _RAGAS_API_KEY:
-            return await call_next(request)
         path = request.url.path
         if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES) or path == "/":
             return await call_next(request)
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[len("Bearer "):] != _RAGAS_API_KEY:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+        if not _auth_is_active():
+            # Legacy open mode (optionally gated by the shared machine key)
+            if _RAGAS_API_KEY:
+                auth = request.headers.get("Authorization", "")
+                if not auth.startswith("Bearer ") or auth[len("Bearer "):] != _RAGAS_API_KEY:
+                    return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            return await call_next(request)
+
+        import db.init as _db
+        from app.services.auth import resolve_request_user, user_can_access_project
+
+        conn = _db.get_db()
+        user = resolve_request_user(conn, request)
+        if user is None:
+            return JSONResponse(status_code=401, content={"detail": "Not signed in"})
+
+        match = _PROJECT_PATH_RE.match(path)
+        if match and not user_can_access_project(conn, user, int(match.group(1))):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "You don't have access to this project"},
+            )
+
+        request.state.user = user
         return await call_next(request)
 
 
 def create_app() -> FastAPI:
     application = FastAPI(title="Tribunal — RAG Evaluator", version="0.4.1-alpha", lifespan=lifespan)
 
-    application.add_middleware(_ApiKeyMiddleware)
+    application.add_middleware(_AuthMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=os.environ.get(
@@ -151,6 +201,7 @@ def create_app() -> FastAPI:
 
     # Register routers
     application.include_router(health.router)
+    application.include_router(auth.router)
     application.include_router(projects.router)
     application.include_router(documents.router)
     application.include_router(chunks.router)

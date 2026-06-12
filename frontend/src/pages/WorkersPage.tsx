@@ -6,6 +6,7 @@ import {
   type WorkerInfo,
   type WorkerTask,
 } from '../lib/api';
+import UserAccountsCard from '../components/admin/UserAccountsCard';
 
 function elapsed(startedAt: number | undefined): string {
   if (!startedAt) return '—';
@@ -159,6 +160,7 @@ export default function WorkersPage() {
             in your environment to enable worker offloading.
           </p>
         </div>
+        <UserAccountsCard />
       </div>
     );
   }
@@ -358,6 +360,8 @@ export default function WorkersPage() {
           </table>
         )}
       </div>
+
+      <UserAccountsCard />
     </div>
   );
 }

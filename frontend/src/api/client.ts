@@ -10,6 +10,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Window event fired whenever any API call returns 401 (session expired/missing). */
+export const UNAUTHORIZED_EVENT = 'tribunal:unauthorized';
+
+/**
+ * Notify listeners (AuthContext) that the session is gone so the route guard
+ * can redirect. Skipped for /api/auth/* calls — a failed login or an anonymous
+ * `/me` probe is expected and must not trigger a global sign-out.
+ */
+function notifyUnauthorized(path: string, status: number): void {
+  if (status === 401 && !path.startsWith('/api/auth/')) {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+}
+
 /**
  * Extract a human-readable error detail from a failed response body.
  * Handles FastAPI-style `detail` payloads (string or validation-error array),
@@ -37,6 +51,7 @@ async function extractError(res: Response): Promise<string> {
 export async function formRequest<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(path, { method: 'POST', body: form });
   if (!res.ok) {
+    notifyUnauthorized(path, res.status);
     throw new ApiError(res.status, await extractError(res));
   }
   return res.json() as Promise<T>;
@@ -52,6 +67,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
+    notifyUnauthorized(path, res.status);
     throw new ApiError(res.status, await extractError(res));
   }
 

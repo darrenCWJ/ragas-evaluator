@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { useProject } from '../contexts/ProjectContext';
+import { useAuth } from '../contexts/AuthContext';
 import ProjectSelector from '../components/ProjectSelector';
 import ExternalBaselineUpload from '../components/setup/ExternalBaselineUpload';
 import BotConnectorConfig from '../components/setup/BotConnectorConfig';
 import CustomMetricBuilder from '../components/setup/CustomMetricBuilder';
 import CsvUploadsList from '../components/setup/CsvUploadsList';
+import ProjectMembersPanel from '../components/setup/ProjectMembersPanel';
 
 export default function SetupPage() {
   const { project } = useProject();
+  const { authEnabled } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
 
   if (!project) {
@@ -78,6 +81,7 @@ export default function SetupPage() {
           />
           <BotConnectorConfig projectId={project.id} />
           <CustomMetricBuilder projectId={project.id} />
+          {authEnabled && <ProjectMembersPanel projectId={project.id} />}
         </div>
 
         {/* Right column: Uploaded CSVs */}

@@ -1,10 +1,10 @@
-"""Project CRUD, external baselines, and API config routes."""
+"""Project CRUD, external baselines, members, and API config routes."""
 
 import csv
 import io
 import json
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 import db.init
 from app.models import (
@@ -18,20 +18,27 @@ from db.init import NOW_SQL, is_integrity_error
 router = APIRouter(prefix="/api", tags=["projects"])
 
 
+def _current_user(request: Request):
+    """The authenticated user set by the auth middleware; None in open mode."""
+    return getattr(request.state, "user", None)
+
+
 # --- Project CRUD ---
 
 
 @router.post("/projects", status_code=201)
-async def create_project(req: ProjectCreate):
+async def create_project(req: ProjectCreate, request: Request):
     conn = db.init.get_db()
+    user = _current_user(request)
+    owner_id = user.id if user is not None else None
     try:
         cursor = conn.execute(
-            "INSERT INTO projects (name, description) VALUES (?, ?)",
-            (req.name, req.description),
+            "INSERT INTO projects (name, description, owner_id) VALUES (?, ?, ?)",
+            (req.name, req.description, owner_id),
         )
         conn.commit()
         row = conn.execute(
-            "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects WHERE id = ?",
+            "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model, owner_id FROM projects WHERE id = ?",
             (cursor.lastrowid,),
         ).fetchone()
         return _format_project(row)
@@ -49,11 +56,27 @@ def _format_project(row) -> dict:
 
 
 @router.get("/projects")
-async def list_projects():
+async def list_projects(request: Request):
+    """Projects visible to the caller: owned or member of; admins see all.
+
+    Open mode (no registered users) shows everything, as before.
+    """
     conn = db.init.get_db()
-    rows = conn.execute(
-        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects"
-    ).fetchall()
+    user = _current_user(request)
+    if user is None or user.is_admin:
+        rows = conn.execute(
+            "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model, owner_id FROM projects"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT DISTINCT p.id, p.name, p.description, p.created_at, p.updated_at,
+                      p.judge_model_assignments_json, p.preferred_model, p.owner_id
+               FROM projects p
+               LEFT JOIN project_members pm ON pm.project_id = p.id
+               WHERE p.owner_id = ? OR pm.user_id = ?
+               ORDER BY p.id""",
+            (user.id, user.id),
+        ).fetchall()
     return [_format_project(r) for r in rows]
 
 
@@ -61,7 +84,7 @@ async def list_projects():
 async def get_project(project_id: int):
     conn = db.init.get_db()
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects WHERE id = ?",
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model, owner_id FROM projects WHERE id = ?",
         (project_id,),
     ).fetchone()
     if row is None:
@@ -103,7 +126,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
             raise HTTPException(status_code=409, detail="Project name already exists") from e
         raise
     row = conn.execute(
-        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model FROM projects WHERE id = ?",
+        "SELECT id, name, description, created_at, updated_at, judge_model_assignments_json, preferred_model, owner_id FROM projects WHERE id = ?",
         (project_id,),
     ).fetchone()
     return _format_project(row)
@@ -133,6 +156,92 @@ async def delete_project(project_id: int):
     conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     conn.commit()
     return {"detail": "Project deleted"}
+
+
+# --- Project members ---
+
+
+def _require_owner_or_admin(conn, request: Request, project_id: int):
+    """Member management is restricted to the project owner and admins.
+
+    In open mode (no users) there is nothing to manage — reject clearly.
+    """
+    user = _current_user(request)
+    if user is None:
+        raise HTTPException(status_code=409, detail="User accounts are not set up yet")
+    if user.is_admin:
+        return user
+    row = conn.execute("SELECT owner_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if row["owner_id"] != user.id:
+        raise HTTPException(status_code=403, detail="Only the project owner or an admin can manage members")
+    return user
+
+
+@router.get("/projects/{project_id}/members")
+async def list_members(project_id: int):
+    conn = db.init.get_db()
+    project = conn.execute(
+        "SELECT owner_id FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    members = conn.execute(
+        """SELECT u.id, u.email, u.name, pm.role, pm.created_at
+           FROM project_members pm JOIN users u ON u.id = pm.user_id
+           WHERE pm.project_id = ? ORDER BY pm.id""",
+        (project_id,),
+    ).fetchall()
+    owner = None
+    if project["owner_id"]:
+        owner_row = conn.execute(
+            "SELECT id, email, name FROM users WHERE id = ?", (project["owner_id"],)
+        ).fetchone()
+        owner = dict(owner_row) if owner_row else None
+    return {"owner": owner, "members": [dict(m) for m in members]}
+
+
+@router.post("/projects/{project_id}/members", status_code=201)
+async def add_member(project_id: int, request: Request, body: dict):
+    """Add a member by email (owner/admin only)."""
+    conn = db.init.get_db()
+    _require_owner_or_admin(conn, request, project_id)
+    email = str(body.get("email", "")).strip().lower()
+    if not email:
+        raise HTTPException(status_code=422, detail="email is required")
+    target = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if target is None:
+        raise HTTPException(status_code=404, detail="No account with that email — they need to register first")
+    owner_row = conn.execute("SELECT owner_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if owner_row and owner_row["owner_id"] == target["id"]:
+        raise HTTPException(status_code=409, detail="That user already owns this project")
+    try:
+        conn.execute(
+            "INSERT INTO project_members (project_id, user_id) VALUES (?, ?)",
+            (project_id, target["id"]),
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        if is_integrity_error(e):
+            raise HTTPException(status_code=409, detail="Already a member") from e
+        raise
+    return {"detail": "Member added", "user_id": target["id"]}
+
+
+@router.delete("/projects/{project_id}/members/{user_id}")
+async def remove_member(project_id: int, user_id: int, request: Request):
+    conn = db.init.get_db()
+    _require_owner_or_admin(conn, request, project_id)
+    deleted = conn.execute(
+        "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
+        (project_id, user_id),
+    )
+    conn.commit()
+    if deleted.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Not a member of this project")
+    return {"detail": "Member removed"}
 
 
 # --- External Baselines ---

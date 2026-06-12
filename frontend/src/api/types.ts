@@ -1241,3 +1241,42 @@ export interface ApplyModelResponse {
   detail: string;
   preferred_model: string;
 }
+
+// ---------------------------------------------------------------------------
+// Auth & user management
+// ---------------------------------------------------------------------------
+
+export type UserRole = 'admin' | 'user';
+
+export interface AuthStatus {
+  auth_enabled: boolean;
+  registration_open: boolean;
+}
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  name: string;
+  role: UserRole;
+}
+
+export interface AdminUserRow extends AuthUser {
+  created_at: string;
+  project_count: number;
+}
+
+export interface ProjectOwner {
+  id: number;
+  email: string;
+  name: string;
+}
+
+export interface ProjectMember extends ProjectOwner {
+  role: string;
+  created_at: string;
+}
+
+export interface ProjectMembers {
+  owner: ProjectOwner | null;
+  members: ProjectMember[];
+}
