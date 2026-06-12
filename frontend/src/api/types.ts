@@ -616,6 +616,7 @@ export interface ExperimentCreate {
   test_set_id?: number | null;
   rag_config_id?: number | null;
   bot_config_id?: number | null;
+  tool_ids?: number[] | null;
   name: string;
 }
 

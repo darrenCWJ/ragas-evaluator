@@ -463,6 +463,7 @@ async def upload_test_set(
     reference_sql_column: str | None = Form(None),
     schema_contexts_column: str | None = Form(None),
     reference_data_column: str | None = Form(None),
+    reference_tool_calls_column: str | None = Form(None),
     name: str | None = Form(None),
 ):
     """Step 2: Upload the same file again with chosen column mappings to create the test set.
@@ -531,6 +532,7 @@ async def upload_test_set(
         (reference_sql_column, "reference_sql_column"),
         (schema_contexts_column, "schema_contexts_column"),
         (reference_data_column, "reference_data_column"),
+        (reference_tool_calls_column, "reference_tool_calls_column"),
     ]:
         if col_name and col_name not in columns:
             raise HTTPException(
@@ -565,6 +567,7 @@ async def upload_test_set(
             "reference_sql": reference_sql_column,
             "schema_contexts": schema_contexts_column,
             "reference_data": reference_data_column,
+            "reference_tool_calls": reference_tool_calls_column,
         },
     }
     cursor = conn.execute(
@@ -582,6 +585,8 @@ async def upload_test_set(
         _domain_col_map["schema_contexts"] = schema_contexts_column
     if reference_data_column:
         _domain_col_map["reference_data"] = reference_data_column
+    if reference_tool_calls_column:
+        _domain_col_map["reference_tool_calls"] = reference_tool_calls_column
 
     # Validate domain-specific column values upfront
     for i, row in enumerate(rows):
@@ -612,6 +617,19 @@ async def upload_test_set(
                             status_code=422,
                             detail=f"Row {i + 1}, column '{col_name}': invalid JSON — {e}",
                         ) from e
+            elif meta_key == "reference_tool_calls":
+                try:
+                    parsed = json.loads(str(val))
+                    if not isinstance(parsed, list):
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"Row {i + 1}, column '{col_name}': must be a JSON array of tool calls, got {type(parsed).__name__}.",
+                        )
+                except json.JSONDecodeError as e:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Row {i + 1}, column '{col_name}': invalid JSON — {e}",
+                    ) from e
 
     # Insert questions
     inserted = []
@@ -639,6 +657,12 @@ async def upload_test_set(
                     metadata[meta_key] = parsed if isinstance(parsed, list) else [str(parsed)]
                 except (json.JSONDecodeError, TypeError):
                     metadata[meta_key] = [str(val).strip()]
+            elif meta_key == "reference_tool_calls":
+                try:
+                    parsed = json.loads(str(val))
+                    metadata[meta_key] = parsed if isinstance(parsed, list) else []
+                except (json.JSONDecodeError, TypeError):
+                    continue
             else:
                 metadata[meta_key] = str(val).strip()
 

@@ -113,29 +113,39 @@ async def chat_completion(
     model: str,
     messages: list[dict],
     params: dict | None = None,
+    tools: list[dict] | None = None,
 ) -> dict:
     """Dispatch a chat completion request to the appropriate LLM provider.
 
     Args:
         model: Model identifier (e.g., "gpt-4o", "claude-sonnet-4-5", "gemini-2.0-flash").
-        messages: List of message dicts with "role" and "content" keys.
+        messages: List of message dicts with "role" and "content" keys. With
+            tools, two extra canonical shapes are accepted:
+            - assistant turn that called tools:
+              ``{"role": "assistant", "content": str|None,
+                 "tool_calls": [{"id", "name", "arguments": dict}]}``
+            - tool result:
+              ``{"role": "tool", "tool_call_id": str, "name": str, "content": str}``
         params: Optional parameters (temperature, max_tokens, etc.).
+        tools: Optional tool specs ``[{"name", "description", "parameters": <JSON schema>}]``.
 
     Returns:
-        Dict with "content" (str) and "usage" (dict with prompt_tokens, completion_tokens).
+        Dict with "content" (str), "usage" (prompt_tokens/completion_tokens),
+        and — when tools are provided — "tool_calls"
+        (``[{"id", "name", "arguments": dict}]``, empty when the model answered).
     """
     # Gateway mode: all models go through the OpenAI-compatible endpoint
     if _LLM_GATEWAY_MODE:
-        return await _openai_completion(model, messages, params)
+        return await _openai_completion(model, messages, params, tools)
 
     if _is_openai_model(model):
-        return await _openai_completion(model, messages, params)
+        return await _openai_completion(model, messages, params, tools)
 
     if any(model.startswith(p) for p in ANTHROPIC_PREFIXES):
-        return await _anthropic_completion(model, messages, params)
+        return await _anthropic_completion(model, messages, params, tools)
 
     if any(model.startswith(p) for p in GEMINI_PREFIXES):
-        return await _gemini_completion(model, messages, params)
+        return await _gemini_completion(model, messages, params, tools)
 
     if model.startswith("glean"):
         raise HTTPException(
@@ -154,13 +164,52 @@ async def chat_completion(
 # OpenAI
 # ---------------------------------------------------------------------------
 
+def _openai_convert_messages(messages: list[dict]) -> list[dict]:
+    """Canonical messages → OpenAI wire format (tool calls and results)."""
+    import json as _json
+
+    converted: list[dict] = []
+    for m in messages:
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            converted.append({
+                "role": "assistant",
+                "content": m.get("content") or None,
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": _json.dumps(tc["arguments"]),
+                        },
+                    }
+                    for tc in m["tool_calls"]
+                ],
+            })
+        elif m["role"] == "tool":
+            converted.append({
+                "role": "tool",
+                "tool_call_id": m["tool_call_id"],
+                "content": m["content"],
+            })
+        else:
+            converted.append({"role": m["role"], "content": m["content"]})
+    return converted
+
+
 async def _openai_completion(
     model: str,
     messages: list[dict],
     params: dict | None = None,
+    tools: list[dict] | None = None,
 ) -> dict:
+    import json as _json
+
     client = _get_openai_client()
-    extra = params or {}
+    extra = dict(params or {})
+    if tools:
+        extra["tools"] = [{"type": "function", "function": t} for t in tools]
+        messages = _openai_convert_messages(messages)
 
     try:
         response = await client.chat.completions.create(
@@ -177,22 +226,61 @@ async def _openai_completion(
     except openai.APIError as e:
         raise HTTPException(status_code=502, detail=f"OpenAI API error: {e.message}") from e
 
-    content = response.choices[0].message.content or ""
+    message = response.choices[0].message
+    content = message.content or ""
     usage = {
         "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
         "completion_tokens": response.usage.completion_tokens if response.usage else 0,
     }
-    return {"content": content, "usage": usage}
+    result = {"content": content, "usage": usage}
+    if tools:
+        tool_calls = []
+        for tc in message.tool_calls or []:
+            try:
+                arguments = _json.loads(tc.function.arguments or "{}")
+            except ValueError:
+                arguments = {"_raw": tc.function.arguments}
+            tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": arguments})
+        result["tool_calls"] = tool_calls
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Anthropic (Claude)
 # ---------------------------------------------------------------------------
 
+def _anthropic_convert_messages(messages: list[dict]) -> list[dict]:
+    """Canonical non-system messages → Anthropic content-block format."""
+    converted: list[dict] = []
+    for m in messages:
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            blocks: list[dict] = []
+            if m.get("content"):
+                blocks.append({"type": "text", "text": m["content"]})
+            blocks.extend(
+                {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["arguments"]}
+                for tc in m["tool_calls"]
+            )
+            converted.append({"role": "assistant", "content": blocks})
+        elif m["role"] == "tool":
+            converted.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": m["tool_call_id"],
+                    "content": m["content"],
+                }],
+            })
+        else:
+            converted.append({"role": m["role"], "content": m["content"]})
+    return converted
+
+
 async def _anthropic_completion(
     model: str,
     messages: list[dict],
     params: dict | None = None,
+    tools: list[dict] | None = None,
 ) -> dict:
     """Execute a chat completion via Anthropic."""
     from config import ANTHROPIC_API_KEY
@@ -213,6 +301,14 @@ async def _anthropic_completion(
     conversation = [m for m in messages if m["role"] != "system"]
     system_text = "\n\n".join(system_parts) if system_parts else _anthropic.NOT_GIVEN
 
+    kwargs: dict = {}
+    if tools:
+        kwargs["tools"] = [
+            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
+            for t in tools
+        ]
+        conversation = _anthropic_convert_messages(conversation)
+
     client = _get_anthropic_client()
     try:
         response = await client.messages.create(
@@ -221,6 +317,7 @@ async def _anthropic_completion(
             temperature=temperature,
             system=system_text,
             messages=conversation,
+            **kwargs,
         )
     except _anthropic.RateLimitError as exc:
         raise HTTPException(status_code=429, detail="Anthropic rate limit exceeded") from exc
@@ -231,22 +328,88 @@ async def _anthropic_completion(
     except _anthropic.APIError as e:
         raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}") from e
 
-    content = response.content[0].text if response.content else ""
+    text_parts = [b.text for b in (response.content or []) if getattr(b, "type", "") == "text"]
+    content = "\n".join(text_parts)
     usage = {
         "prompt_tokens": response.usage.input_tokens if response.usage else 0,
         "completion_tokens": response.usage.output_tokens if response.usage else 0,
     }
-    return {"content": content, "usage": usage}
+    result = {"content": content, "usage": usage}
+    if tools:
+        result["tool_calls"] = [
+            {"id": b.id, "name": b.name, "arguments": dict(b.input or {})}
+            for b in (response.content or [])
+            if getattr(b, "type", "") == "tool_use"
+        ]
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Google Gemini
 # ---------------------------------------------------------------------------
 
+def _gemini_convert_messages(messages: list[dict], genai_types) -> list:
+    """Canonical messages → Gemini Content list (text, function calls, results)."""
+    role_map = {"user": "user", "assistant": "model", "system": "user"}
+    contents = []
+    for m in messages:
+        gemini_role = role_map.get(m["role"], "user")
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            parts = []
+            if m.get("content"):
+                parts.append(genai_types.Part(text=m["content"]))
+            parts.extend(
+                genai_types.Part(
+                    function_call=genai_types.FunctionCall(name=tc["name"], args=tc["arguments"])
+                )
+                for tc in m["tool_calls"]
+            )
+            contents.append(genai_types.Content(role="model", parts=parts))
+            continue
+        if m["role"] == "tool":
+            contents.append(
+                genai_types.Content(
+                    role="user",
+                    parts=[
+                        genai_types.Part(
+                            function_response=genai_types.FunctionResponse(
+                                name=m.get("name", "tool"),
+                                response={"result": m["content"]},
+                            )
+                        )
+                    ],
+                )
+            )
+            continue
+
+        # Merge consecutive same-role plain-text messages (Gemini requires
+        # alternating turns); never merge into function-call/result turns.
+        if (
+            contents
+            and contents[-1].role == gemini_role
+            and len(contents[-1].parts) == 1
+            and contents[-1].parts[0].text is not None
+        ):
+            prev_text = contents[-1].parts[0].text
+            contents[-1] = genai_types.Content(
+                role=gemini_role,
+                parts=[genai_types.Part(text=prev_text + "\n\n" + m["content"])],
+            )
+        else:
+            contents.append(
+                genai_types.Content(
+                    role=gemini_role,
+                    parts=[genai_types.Part(text=m["content"])],
+                )
+            )
+    return contents
+
+
 async def _gemini_completion(
     model: str,
     messages: list[dict],
     params: dict | None = None,
+    tools: list[dict] | None = None,
 ) -> dict:
     """Execute a chat completion via Google Gemini."""
     from config import GOOGLE_API_KEY
@@ -263,26 +426,22 @@ async def _gemini_completion(
     temperature = extra.get("temperature", 0.5)
     max_tokens = extra.get("max_tokens", 1024)
 
-    # Convert OpenAI-style messages to Gemini contents
-    # System messages are prepended as user turn; Gemini doesn't have a system role
-    role_map = {"user": "user", "assistant": "model", "system": "user"}
-    contents = []
-    for m in messages:
-        gemini_role = role_map.get(m["role"], "user")
-        # Merge consecutive same-role messages (Gemini requires alternating turns)
-        if contents and contents[-1].role == gemini_role:
-            prev_text = contents[-1].parts[0].text
-            contents[-1] = genai_types.Content(
-                role=gemini_role,
-                parts=[genai_types.Part(text=prev_text + "\n\n" + m["content"])],
+    contents = _gemini_convert_messages(messages, genai_types)
+
+    config_kwargs: dict = {"temperature": temperature, "max_output_tokens": max_tokens}
+    if tools:
+        config_kwargs["tools"] = [
+            genai_types.Tool(
+                function_declarations=[
+                    genai_types.FunctionDeclaration(
+                        name=t["name"],
+                        description=t["description"],
+                        parameters=t["parameters"],
+                    )
+                    for t in tools
+                ]
             )
-        else:
-            contents.append(
-                genai_types.Content(
-                    role=gemini_role,
-                    parts=[genai_types.Part(text=m["content"])],
-                )
-            )
+        ]
 
     client = _get_gemini_client()
     try:
@@ -291,10 +450,7 @@ async def _gemini_completion(
             lambda: client.aio.models.generate_content(
                 model=model,
                 contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
+                config=genai_types.GenerateContentConfig(**config_kwargs),
             ),
             label=f"gemini:{model}",
         )
@@ -306,14 +462,32 @@ async def _gemini_completion(
             raise HTTPException(status_code=502, detail="Google Gemini authentication failed — check GOOGLE_API_KEY") from e
         raise HTTPException(status_code=502, detail=f"Gemini API error: {e}") from e
 
-    content = response.text or ""
-    # Gemini usage metadata
+    # Collect text + function-call parts from the first candidate
+    text_parts: list[str] = []
+    tool_calls: list[dict] = []
+    candidates = getattr(response, "candidates", None) or []
+    if candidates and candidates[0].content and candidates[0].content.parts:
+        for i, part in enumerate(candidates[0].content.parts):
+            if getattr(part, "text", None):
+                text_parts.append(part.text)
+            fc = getattr(part, "function_call", None)
+            if fc is not None:
+                tool_calls.append({
+                    "id": f"gemini_call_{i}",
+                    "name": fc.name,
+                    "arguments": dict(fc.args or {}),
+                })
+
+    content = "\n".join(text_parts)
     usage_meta = getattr(response, "usage_metadata", None)
     usage = {
         "prompt_tokens": getattr(usage_meta, "prompt_token_count", 0) or 0,
         "completion_tokens": getattr(usage_meta, "candidates_token_count", 0) or 0,
     }
-    return {"content": content, "usage": usage}
+    result = {"content": content, "usage": usage}
+    if tools:
+        result["tool_calls"] = tool_calls
+    return result
 
 
 # ---------------------------------------------------------------------------

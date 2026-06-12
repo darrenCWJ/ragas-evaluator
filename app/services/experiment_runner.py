@@ -388,6 +388,11 @@ async def run_experiment_background(
         connector = None
         virtual_config = None
         csv_answer_lookup: dict[str, dict] = {}
+        # Agent tool-calling state (set when the experiment has tools attached)
+        agent_tool_specs: list[dict] = []
+        agent_executor = None
+        agent_model = ""
+        agent_system_prompt = ""
 
         if use_bot:
             bot_cfg = run_conn.execute(
@@ -419,6 +424,27 @@ async def run_experiment_background(
                     bot_config_dict,
                     prompt_for_sources=bool(bot_cfg["prompt_for_sources"]),
                 )
+
+                # Agent tools — run the tool-calling loop instead of a plain
+                # connector query (LLM connectors only; enforced at create time).
+                tool_ids = json.loads(experiment["tools_json"]) if experiment["tools_json"] else []
+                if tool_ids:
+                    from config import CONNECTOR_DEFAULT_MODELS
+                    from pipeline.tools import build_tool_specs, make_executor
+
+                    placeholders = ",".join("?" * len(tool_ids))
+                    tool_rows = [dict(r) for r in run_conn.execute(
+                        f"SELECT * FROM tool_definitions WHERE id IN ({placeholders}) AND project_id = ?",
+                        (*tool_ids, project_id),
+                    ).fetchall()]
+                    if tool_rows:
+                        agent_tool_specs = build_tool_specs(tool_rows)
+                        agent_executor = make_executor(tool_rows, run_conn, project_id)
+                        agent_model = (
+                            bot_config_dict.get("model")
+                            or CONNECTOR_DEFAULT_MODELS.get(bot_cfg["connector_type"], "")
+                        )
+                        agent_system_prompt = bot_config_dict.get("system_prompt", "")
         else:
             virtual_config = build_virtual_rag_config_row(experiment, project_id)
 
@@ -489,6 +515,48 @@ async def run_experiment_background(
                             for c in raw_contexts
                         ]
                         usage_info = {"source": "csv_preloaded"}
+                    elif use_bot and agent_executor is not None:
+                        # Agent mode: the model can call the configured tools;
+                        # the full step trace is stored with the result.
+                        from evaluation.metrics.agent_trace import trace_stats
+                        from pipeline.agent_loop import run_agent
+
+                        agent_messages: list[dict] = []
+                        if agent_system_prompt:
+                            agent_messages.append({"role": "system", "content": agent_system_prompt})
+                        agent_steps: list[dict] = []
+                        agent_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+                        async def _agent_turn(user_text: str) -> dict:
+                            agent_messages.append({"role": "user", "content": user_text})
+                            turn = await asyncio.wait_for(
+                                run_agent(agent_model, agent_messages, agent_tool_specs, agent_executor),
+                                timeout=BOT_QUERY_TIMEOUT * 2,
+                            )
+                            agent_messages.append({"role": "assistant", "content": turn["answer"]})
+                            agent_steps.extend(turn["steps"])
+                            agent_usage["prompt_tokens"] += turn["usage"]["prompt_tokens"]
+                            agent_usage["completion_tokens"] += turn["usage"]["completion_tokens"]
+                            return turn
+
+                        for turn_text in conversation_turns:
+                            await _agent_turn(turn_text)
+                        final_turn = await _agent_turn(question_text)
+
+                        generated_answer = final_turn["answer"]
+                        full_context_dicts = []
+                        context_strings = []
+                        usage_info = {
+                            "source": "agent_loop",
+                            "agent_trace": agent_steps,
+                            "agent_stop_reason": final_turn["stop_reason"],
+                            "agent_stats": trace_stats(agent_steps),
+                            "usage": agent_usage,
+                        }
+                        if conversation_turns:
+                            usage_info["transcript"] = [
+                                m for m in agent_messages if m["role"] in ("user", "assistant")
+                            ]
                     elif use_bot:
                         # Multi-turn: play the setup turns first, carrying history
                         chat_history: list[dict] = []
@@ -565,7 +633,9 @@ async def run_experiment_background(
                     # metrics (conversation_retention). Internal RAG runs
                     # don't simulate turns — only bot runs build history.
                     if conversation_turns and use_bot and not is_csv:
-                        q_metadata = {**(q_metadata or {}), "_transcript": chat_history}
+                        _transcript = usage_info.get("transcript")
+                        if _transcript:
+                            q_metadata = {**(q_metadata or {}), "_transcript": _transcript}
 
                     def _on_metric_start(metric_name):
                         def _apply(prog: dict) -> None:
@@ -621,6 +691,16 @@ async def run_experiment_background(
                         )
                         if retrieval_metrics:
                             metrics_result.update(retrieval_metrics)
+
+                    # Deterministic agent-trace metric: compare the tool calls
+                    # the agent made against the question's reference calls.
+                    if "tool_call_f1" in selected_metrics and "agent_trace" in usage_info:
+                        from evaluation.metrics.agent_trace import tool_call_f1_score
+
+                        ref_calls = (q_metadata or {}).get("reference_tool_calls") or []
+                        metrics_result["tool_call_f1"] = tool_call_f1_score(
+                            usage_info["agent_trace"], ref_calls
+                        )
 
                     await progress_queue.put({
                         "idx": idx, "qid": qid, "question_text": question_text,

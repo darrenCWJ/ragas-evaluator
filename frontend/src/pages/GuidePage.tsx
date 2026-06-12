@@ -77,6 +77,12 @@ const DATASET_COLUMNS: ColumnSpec[] = [
     required: false,
     unlocks: 'datacompy_score (structured data comparison)',
   },
+  {
+    column: 'reference_tool_calls',
+    aliases: 'reference_tool_calls, tool_calls, expected_tool_calls',
+    required: false,
+    unlocks: 'tool_call_f1 (agent experiments — expected tool calls as a JSON array)',
+  },
 ];
 
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {

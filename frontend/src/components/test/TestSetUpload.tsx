@@ -19,6 +19,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
   const [refSqlCol, setRefSqlCol] = useState('');
   const [schemaCtxCol, setSchemaCtxCol] = useState('');
   const [refDataCol, setRefDataCol] = useState('');
+  const [refToolCallsCol, setRefToolCallsCol] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -36,6 +37,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
     setRefSqlCol('');
     setSchemaCtxCol('');
     setRefDataCol('');
+    setRefToolCallsCol('');
     setError(null);
     setSuccess(null);
     setLoading(true);
@@ -57,6 +59,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
       const sqlNames = new Set(['reference_sql', 'ref_sql', 'expected_sql', 'sql']);
       const schemaNames = new Set(['schema_contexts', 'schema', 'ddl']);
       const dataNames = new Set(['reference_data', 'ref_data', 'expected_data']);
+      const toolCallNames = new Set(['reference_tool_calls', 'tool_calls', 'expected_tool_calls']);
       for (const col of result.columns) {
         const lower = col.toLowerCase();
         if (qNames.has(lower)) setQuestionCol(col);
@@ -65,6 +68,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
         else if (sqlNames.has(lower)) setRefSqlCol(col);
         else if (schemaNames.has(lower)) setSchemaCtxCol(col);
         else if (dataNames.has(lower)) setRefDataCol(col);
+        else if (toolCallNames.has(lower)) setRefToolCallsCol(col);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -90,6 +94,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
         referenceSqlColumn: refSqlCol || undefined,
         schemaContextsColumn: schemaCtxCol || undefined,
         referenceDataColumn: refDataCol || undefined,
+        referenceToolCallsColumn: refToolCallsCol || undefined,
         categoryColumn: categoryCol || undefined,
         turnsColumn: turnsCol || undefined,
       });
@@ -513,6 +518,29 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
                 </select>
                 <p className="mt-0.5 text-xs text-text-muted">
                   Expected tabular output (CSV) for the datacompy_score metric
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-text-secondary">
+                  Reference Tool Calls Column
+                </label>
+                <select
+                  value={refToolCallsCol}
+                  onChange={(e) => setRefToolCallsCol(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:border-rose-500 focus:outline-none"
+                >
+                  <option value="">None</option>
+                  {preview.columns.map((col) => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  JSON array of expected tool calls, e.g.{' '}
+                  {`[{"name": "search", "arguments": {"query": "..."}}]`} — enables the
+                  tool_call_f1 metric for agent experiments
                 </p>
               </div>
             </div>

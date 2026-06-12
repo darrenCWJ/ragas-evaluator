@@ -434,10 +434,20 @@ class RagQueryRequest(BaseModel):
         return v
 
 
+class ToolDefinitionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=2000)
+    parameters: dict | None = None  # JSON schema for tool arguments
+    mode: str = "mock"  # mock | simulated | builtin
+    fixtures: dict | None = None  # mock mode: {"default": ..., "cases": [{"when": {...}, "response": ...}]}
+    builtin_name: str | None = None  # builtin mode: search_documents | read_file | calculator
+
+
 class ExperimentCreate(BaseModel):
     test_set_id: int | None = None
     rag_config_id: int | None = None
     bot_config_id: int | None = None
+    tool_ids: list[int] | None = None  # agent tools (LLM connectors only)
     name: str
 
     @field_validator("name")

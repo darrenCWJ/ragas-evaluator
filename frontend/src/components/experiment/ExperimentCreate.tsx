@@ -8,11 +8,14 @@ import {
   createExperiment,
 } from '../../lib/api';
 import type { TestSet, RagConfigExpanded, BotConfig, TestSetCapabilities } from '../../lib/api';
+import AgentToolsPanel from './AgentToolsPanel';
 
 interface Props {
   projectId: number;
   onCreated: () => void;
 }
+
+const AGENT_CAPABLE_CONNECTORS = new Set(['openai', 'claude', 'gemini']);
 
 const CAPABILITY_CHIPS: { key: string; label: string }[] = [
   { key: 'contexts', label: 'contexts' },
@@ -37,6 +40,7 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [capabilities, setCapabilities] = useState<TestSetCapabilities | null>(null);
+  const [selectedToolIds, setSelectedToolIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     setLoading(true);
@@ -90,16 +94,20 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
     setSubmitting(true);
     setError(null);
     try {
+      const agentCapable =
+        mode === 'bot' && selectedBot && AGENT_CAPABLE_CONNECTORS.has(selectedBot.connector_type);
       await createExperiment(projectId, {
         name: name.trim(),
         test_set_id: isCsvBot ? undefined : (testSetId as number),
         rag_config_id: mode === 'rag' ? (ragConfigId as number) : undefined,
         bot_config_id: mode === 'bot' ? (botConfigId as number) : undefined,
+        tool_ids: agentCapable && selectedToolIds.size > 0 ? Array.from(selectedToolIds) : undefined,
       });
       setName('');
       setTestSetId('');
       setRagConfigId('');
       setBotConfigId('');
+      setSelectedToolIds(new Set());
       setTouched(false);
       onCreated();
     } catch (err) {
@@ -219,6 +227,15 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
                 Questions will be sent to this external bot instead of the internal RAG pipeline.
               </p>
             </div>
+          )}
+
+          {/* Agent tools — only LLM connectors can run the tool-calling loop */}
+          {mode === 'bot' && selectedBot && AGENT_CAPABLE_CONNECTORS.has(selectedBot.connector_type) && (
+            <AgentToolsPanel
+              projectId={projectId}
+              selectedToolIds={selectedToolIds}
+              onChange={setSelectedToolIds}
+            />
           )}
 
           {/* Test Set — hidden for CSV bot connectors (auto-created from CSV data) */}

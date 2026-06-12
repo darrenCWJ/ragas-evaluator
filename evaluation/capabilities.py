@@ -55,6 +55,7 @@ METRIC_REQUIREMENTS: dict[str, frozenset[str]] = {
     "conversation_retention": frozenset({TURNS}),
     "sql_semantic_equivalence": frozenset({REF_SQL}),
     "datacompy_score": frozenset({REF_DATA}),
+    "tool_call_f1": frozenset({REF_TOOL_CALLS}),
 }
 
 

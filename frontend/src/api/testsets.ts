@@ -37,6 +37,7 @@ export async function confirmTestSetUpload(
     referenceSqlColumn?: string;
     schemaContextsColumn?: string;
     referenceDataColumn?: string;
+    referenceToolCallsColumn?: string;
     categoryColumn?: string;
     turnsColumn?: string;
   },
@@ -51,6 +52,8 @@ export async function confirmTestSetUpload(
   if (opts?.referenceSqlColumn) form.append('reference_sql_column', opts.referenceSqlColumn);
   if (opts?.schemaContextsColumn) form.append('schema_contexts_column', opts.schemaContextsColumn);
   if (opts?.referenceDataColumn) form.append('reference_data_column', opts.referenceDataColumn);
+  if (opts?.referenceToolCallsColumn)
+    form.append('reference_tool_calls_column', opts.referenceToolCallsColumn);
   if (opts?.name) form.append('name', opts.name);
   return formRequest<UploadConfirmResult>(`/api/projects/${projectId}/test-sets/upload`, form);
 }

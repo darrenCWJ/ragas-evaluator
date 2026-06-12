@@ -30,6 +30,7 @@ from app.services.progress import experiment_runs
 from config import DEFAULT_EVAL_MODEL, DEFAULT_EXPERIMENT_METRICS
 from evaluation.scoring import ALL_METRICS
 from evaluation.source_verification import verify_all_citations
+from pipeline.tools import AGENT_CAPABLE_CONNECTORS
 
 logger = logging.getLogger(__name__)
 
@@ -189,16 +190,38 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
                     detail="Test set not found in this project",
                 )
 
+        # Agent tools — only LLM connectors can run the tool-calling loop
+        tools_json = None
+        if req.tool_ids:
+            if bot_config["connector_type"] not in AGENT_CAPABLE_CONNECTORS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Agent tools require an LLM connector ({', '.join(sorted(AGENT_CAPABLE_CONNECTORS))}); "
+                        f"'{bot_config['connector_type']}' connectors cannot call tools."
+                    ),
+                )
+            placeholders = ",".join("?" * len(req.tool_ids))
+            valid_tools = conn.execute(
+                f"SELECT id FROM tool_definitions WHERE id IN ({placeholders}) AND project_id = ?",
+                (*req.tool_ids, project_id),
+            ).fetchall()
+            missing = set(req.tool_ids) - {r["id"] for r in valid_tools}
+            if missing:
+                raise HTTPException(status_code=422, detail=f"Tools not found in this project: {sorted(missing)}")
+            tools_json = json.dumps(req.tool_ids)
+
         cursor = conn.execute(
             """INSERT INTO experiments
-               (project_id, test_set_id, name, model, bot_config_id, status)
-               VALUES (?, ?, ?, ?, ?, 'pending')""",
+               (project_id, test_set_id, name, model, bot_config_id, tools_json, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
             (
                 project_id,
                 test_set_id,
                 req.name,
                 f"{bot_config['connector_type']}:{bot_config['name']}",
                 req.bot_config_id,
+                tools_json,
             ),
         )
         conn.commit()
