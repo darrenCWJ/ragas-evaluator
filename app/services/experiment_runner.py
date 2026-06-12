@@ -690,8 +690,8 @@ async def run_experiment_background(
                             for ev in judge_evals:
                                 run_conn.execute(
                                     """INSERT INTO multi_llm_evaluations
-                                       (experiment_result_id, evaluator_index, verdict, score, claims_json, reasoning)
-                                       VALUES (?, ?, ?, ?, ?, ?)""",
+                                       (experiment_result_id, evaluator_index, verdict, score, claims_json, reasoning, model)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                                     (
                                         result_row_id,
                                         ev["evaluator_index"],
@@ -699,6 +699,7 @@ async def run_experiment_background(
                                         ev["score"],
                                         json.dumps(ev["claims"]),
                                         ev.get("reasoning") or None,
+                                        ev.get("model"),
                                     ),
                                 )
                             agg = _multi_llm_judge_module.aggregate_score(judge_evals)
@@ -729,8 +730,8 @@ async def run_experiment_background(
                                 run_conn.execute(
                                     """INSERT INTO multi_llm_evaluations
                                        (experiment_result_id, evaluator_index, verdict, score,
-                                        claims_json, custom_metric_name)
-                                       VALUES (?, ?, ?, ?, ?, ?)""",
+                                        claims_json, custom_metric_name, model)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                                     (
                                         result_row_id,
                                         ev["evaluator_index"],
@@ -738,6 +739,7 @@ async def run_experiment_background(
                                         ev["score"],
                                         json.dumps(ev["highlights"]),
                                         cj_config.metric_name,
+                                        ev.get("model"),
                                     ),
                                 )
                             agg = _multi_llm_judge_module.aggregate_criteria_score(cj_evals)
@@ -769,8 +771,8 @@ async def run_experiment_background(
                                 run_conn.execute(
                                     """INSERT INTO multi_llm_evaluations
                                        (experiment_result_id, evaluator_index, verdict, score,
-                                        claims_json, custom_metric_name)
-                                       VALUES (?, ?, ?, ?, ?, ?)""",
+                                        claims_json, custom_metric_name, model)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                                     (
                                         result_row_id,
                                         ev["evaluator_index"],
@@ -778,6 +780,7 @@ async def run_experiment_background(
                                         ev["score"],
                                         json.dumps(ev["highlights"]),
                                         rj_config.metric_name,
+                                        ev.get("model"),
                                     ),
                                 )
                             agg = _multi_llm_judge_module.aggregate_criteria_score(rj_evals)

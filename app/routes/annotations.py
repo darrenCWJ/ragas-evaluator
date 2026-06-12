@@ -7,8 +7,12 @@ import random
 from fastapi import APIRouter, HTTPException
 
 import db.init
-from app.models import HumanAnnotationBatch
+from app.models import HumanAnnotationBatch, JudgeCalibrationApply
 from app.services.experiment_runner import sanitize_nan
+from app.services.judge_calibration import (
+    apply_judge_assignments,
+    judge_calibration_report,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,4 +262,45 @@ async def get_evaluator_accuracy(project_id: int, experiment_id: int):
         "agreements": agreements,
         "agreement_rate": agreement_rate,
         "comparisons": comparisons,
+    }
+
+
+@router.get("/projects/{project_id}/judge-calibration")
+async def get_judge_calibration(project_id: int):
+    """Rank judge models by agreement with this project's human annotations."""
+    conn = db.init.get_db()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return judge_calibration_report(conn, project_id)
+
+
+@router.post("/projects/{project_id}/judge-calibration/apply")
+async def apply_judge_calibration(project_id: int, body: JudgeCalibrationApply):
+    """Set the project's default judge assignments.
+
+    With an explicit ``models`` list it is applied verbatim; otherwise the
+    calibration recommendation (top calibrated models) is used.
+    """
+    conn = db.init.get_db()
+    project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    models = body.models
+    if not models:
+        report = judge_calibration_report(conn, project_id)
+        models = report["recommended_assignments"]
+        if not models:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "No calibrated judge models yet — annotate more judged results "
+                    f"(each model needs {report['min_pairs_required']}+ human-paired evaluations)"
+                ),
+            )
+
+    return {
+        "project_id": project_id,
+        "judge_model_assignments": apply_judge_assignments(conn, project_id, models),
     }

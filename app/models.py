@@ -711,6 +711,25 @@ class HumanAnnotationCreate(BaseModel):
         return v
 
 
+class JudgeCalibrationApply(BaseModel):
+    """Explicit judge panel, or empty to apply the calibration recommendation."""
+
+    models: list[str] | None = None
+
+    @field_validator("models")
+    @classmethod
+    def validate_models(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None:
+            if not v:
+                raise ValueError("models must not be an empty list (omit it instead)")
+            if len(v) > 10:
+                raise ValueError("at most 10 judge assignments")
+            for m in v:
+                if not _LLM_MODEL_RE.match(m):
+                    raise ValueError(f"invalid judge model id: {m!r}")
+        return v
+
+
 class HumanAnnotationBatch(BaseModel):
     annotations: list[HumanAnnotationCreate]
 

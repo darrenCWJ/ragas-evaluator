@@ -394,6 +394,7 @@ CREATE TABLE IF NOT EXISTS multi_llm_evaluations (
     score REAL NOT NULL,
     claims_json TEXT NOT NULL,
     custom_metric_name TEXT,
+    model TEXT,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -587,6 +588,7 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN score_threshold REAL")
     _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN mmr_lambda REAL")
     _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN kg_expansion INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN model TEXT")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:
