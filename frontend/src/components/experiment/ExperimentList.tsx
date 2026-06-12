@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
-import { deleteExperiment, cancelExperiment, resetExperiment, ApiError } from "../../lib/api";
-import type { Experiment } from "../../lib/api";
-import ExperimentRunner from "./ExperimentRunner";
-import ExperimentResults from "./ExperimentResults";
-import SourceVerificationPanel from "./SourceVerificationPanel";
-import HumanAnnotationPanel from "./HumanAnnotationPanel";
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { deleteExperiment, cancelExperiment, resetExperiment, ApiError } from '../../lib/api';
+import type { Experiment } from '../../lib/api';
+import ExperimentRunner from './ExperimentRunner';
+import ExperimentResults from './ExperimentResults';
+import SourceVerificationPanel from './SourceVerificationPanel';
+import HumanAnnotationPanel from './HumanAnnotationPanel';
 
 /** Animated expand/collapse using grid-template-rows trick */
 function ExpandablePanel({ open, children }: { open: boolean; children: ReactNode }) {
@@ -22,13 +22,13 @@ function ExpandablePanel({ open, children }: { open: boolean; children: ReactNod
   return (
     <div
       className="grid transition-[grid-template-rows] duration-300 ease-out"
-      style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
+      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
       onTransitionEnd={handleTransitionEnd}
     >
       <div ref={contentRef} className="overflow-hidden">
         <div
           className={`transition-opacity duration-200 ${
-            open ? "opacity-100 delay-100" : "opacity-0"
+            open ? 'opacity-100 delay-100' : 'opacity-0'
           }`}
         >
           {shouldRender && children}
@@ -50,54 +50,50 @@ interface Props {
   onToggleCompare?: (id: number) => void;
 }
 
-type TabKey = "run" | "results" | "source" | "annotations";
+type TabKey = 'run' | 'results' | 'source' | 'annotations';
 
-const STATUS_STYLES: Record<
-  string,
-  { bg: string; text: string; label: string; pulse?: boolean }
-> = {
-  pending: {
-    bg: "bg-yellow-500/15",
-    text: "text-yellow-300",
-    label: "Pending",
-  },
-  running: {
-    bg: "bg-blue-500/15",
-    text: "text-blue-300",
-    label: "Running",
-    pulse: true,
-  },
-  completed: {
-    bg: "bg-green-500/15",
-    text: "text-green-300",
-    label: "Completed",
-  },
-  failed: {
-    bg: "bg-red-500/15",
-    text: "text-red-300",
-    label: "Failed",
-  },
-};
+const STATUS_STYLES: Record<string, { bg: string; text: string; label: string; pulse?: boolean }> =
+  {
+    pending: {
+      bg: 'bg-yellow-500/15',
+      text: 'text-yellow-300',
+      label: 'Pending',
+    },
+    running: {
+      bg: 'bg-blue-500/15',
+      text: 'text-blue-300',
+      label: 'Running',
+      pulse: true,
+    },
+    completed: {
+      bg: 'bg-green-500/15',
+      text: 'text-green-300',
+      label: 'Completed',
+    },
+    failed: {
+      bg: 'bg-red-500/15',
+      text: 'text-red-300',
+      label: 'Failed',
+    },
+  };
 
 function getDefaultTab(exp: Experiment): TabKey {
-  if (exp.status === "completed") return "results";
-  return "run";
+  if (exp.status === 'completed') return 'results';
+  return 'run';
 }
 
 function getAvailableTabs(exp: Experiment): { key: TabKey; label: string }[] {
-  if (exp.status === "completed") {
-    const tabs: { key: TabKey; label: string }[] = [
-      { key: "results", label: "Results" },
-    ];
+  if (exp.status === 'completed') {
+    const tabs: { key: TabKey; label: string }[] = [{ key: 'results', label: 'Results' }];
     if (exp.bot_config_id != null) {
-      tabs.push({ key: "source", label: "Source Verification" });
+      tabs.push({ key: 'source', label: 'Source Verification' });
     }
-    tabs.push({ key: "annotations", label: "Annotations" });
-    tabs.push({ key: "run", label: "Retest" });
+    tabs.push({ key: 'annotations', label: 'Annotations' });
+    tabs.push({ key: 'run', label: 'Retest' });
     return tabs;
   }
   // pending, running, failed — only the runner
-  return [{ key: "run", label: "Run" }];
+  return [{ key: 'run', label: 'Run' }];
 }
 
 export default function ExperimentList({
@@ -152,7 +148,7 @@ export default function ExperimentList({
       if (err instanceof ApiError) {
         setDeleteError(err.message);
       } else {
-        setDeleteError((err as Error).message || "Delete failed");
+        setDeleteError((err as Error).message || 'Delete failed');
       }
     } finally {
       setDeleting(false);
@@ -165,14 +161,13 @@ export default function ExperimentList({
       await resetExperiment(projectId, exp.id);
       await onRefresh();
     } catch (err) {
-      setDeleteError((err as Error).message || "Failed to reset experiment");
+      setDeleteError((err as Error).message || 'Failed to reset experiment');
     } finally {
       setResetting(false);
     }
   };
 
-  const currentTab = (id: number, exp: Experiment): TabKey =>
-    activeTab[id] ?? getDefaultTab(exp);
+  const currentTab = (id: number, exp: Experiment): TabKey => activeTab[id] ?? getDefaultTab(exp);
 
   if (experiments.length === 0) {
     return (
@@ -198,7 +193,7 @@ export default function ExperimentList({
 
       <div className="space-y-2">
         {experiments.map((exp) => {
-          const style = STATUS_STYLES[exp.status] ?? STATUS_STYLES["pending"]!;
+          const style = STATUS_STYLES[exp.status] ?? STATUS_STYLES['pending']!;
           const isExpanded = expandedId === exp.id;
           const tabs = getAvailableTabs(exp);
           const tab = currentTab(exp.id, exp);
@@ -208,8 +203,8 @@ export default function ExperimentList({
               key={exp.id}
               className={`rounded-xl border transition-all duration-200 ${
                 isExpanded
-                  ? "border-accent/50 bg-accent/5 ring-1 ring-accent/30"
-                  : "border-border bg-card hover:border-border-focus"
+                  ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/30'
+                  : 'border-border bg-card hover:border-border-focus'
               }`}
             >
               {/* Row header */}
@@ -224,7 +219,7 @@ export default function ExperimentList({
                       {/* Expand chevron */}
                       <svg
                         className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-200 ${
-                          isExpanded ? "rotate-90" : ""
+                          isExpanded ? 'rotate-90' : ''
                         }`}
                         fill="none"
                         viewBox="0 0 24 24"
@@ -233,15 +228,13 @@ export default function ExperimentList({
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                       </svg>
-                      <p className="truncate font-medium text-text-primary">
-                        {exp.name}
-                      </p>
+                      <p className="truncate font-medium text-text-primary">{exp.name}</p>
                     </div>
                     <div className="mt-1.5 ml-6 flex flex-wrap items-center gap-2 text-xs">
                       {/* Status badge */}
                       <span
                         className={`rounded-full px-2 py-0.5 ${style.bg} ${style.text} ${
-                          style.pulse ? "animate-pulse" : ""
+                          style.pulse ? 'animate-pulse' : ''
                         }`}
                       >
                         {style.label}
@@ -251,9 +244,7 @@ export default function ExperimentList({
                       {exp.test_set_name && (
                         <>
                           <span className="text-text-muted">&middot;</span>
-                          <span className="text-text-secondary">
-                            {exp.test_set_name}
-                          </span>
+                          <span className="text-text-secondary">{exp.test_set_name}</span>
                         </>
                       )}
                       {exp.approved_question_count != null && (
@@ -276,18 +267,18 @@ export default function ExperimentList({
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Cancel button — running experiments only */}
-                    {exp.status === "running" && (
+                    {exp.status === 'running' && (
                       <button
                         onClick={() => handleCancel(exp.id)}
                         disabled={cancelling === exp.id}
                         className="rounded-lg border border-red-500/30 px-2.5 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-40"
                       >
-                        {cancelling === exp.id ? "Stopping..." : "Stop"}
+                        {cancelling === exp.id ? 'Stopping...' : 'Stop'}
                       </button>
                     )}
 
                     {/* Compare checkbox — completed experiments only */}
-                    {exp.status === "completed" && compareSet && onToggleCompare && (
+                    {exp.status === 'completed' && compareSet && onToggleCompare && (
                       <label
                         className="flex items-center gap-1 cursor-pointer"
                         title="Select for comparison"
@@ -308,7 +299,7 @@ export default function ExperimentList({
                           disabled={deleting}
                           className="rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/30 disabled:opacity-40"
                         >
-                          {deleting ? "..." : "Confirm"}
+                          {deleting ? '...' : 'Confirm'}
                         </button>
                         <button
                           onClick={() => {
@@ -358,13 +349,11 @@ export default function ExperimentList({
                         <button
                           key={t.key}
                           type="button"
-                          onClick={() =>
-                            setActiveTab((prev) => ({ ...prev, [exp.id]: t.key }))
-                          }
+                          onClick={() => setActiveTab((prev) => ({ ...prev, [exp.id]: t.key }))}
                           className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
                             tab === t.key
-                              ? "bg-accent text-white shadow-sm"
-                              : "text-text-secondary hover:text-text-primary hover:bg-card/80"
+                              ? 'bg-accent text-white shadow-sm'
+                              : 'text-text-secondary hover:text-text-primary hover:bg-card/80'
                           }`}
                         >
                           {t.label}
@@ -374,10 +363,10 @@ export default function ExperimentList({
                   )}
 
                   {/* Tab content */}
-                  {tab === "run" && (
+                  {tab === 'run' && (
                     <div>
                       {/* Reset prompt for failed experiments */}
-                      {exp.status === "failed" && (
+                      {exp.status === 'failed' && (
                         <div className="mb-4 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5">
                           <span className="text-xs text-red-300">
                             This experiment failed. Reset to re-run with new metrics.
@@ -387,13 +376,13 @@ export default function ExperimentList({
                             disabled={resetting}
                             className="rounded-lg bg-red-500/15 px-3 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/25 disabled:opacity-40"
                           >
-                            {resetting ? "Resetting..." : "Reset & Re-run"}
+                            {resetting ? 'Resetting...' : 'Reset & Re-run'}
                           </button>
                         </div>
                       )}
 
                       {/* Reset prompt for completed experiments (retest) */}
-                      {exp.status === "completed" && (
+                      {exp.status === 'completed' && (
                         <div className="mb-4 flex items-center justify-between rounded-lg border border-border/60 bg-elevated/50 px-4 py-2.5">
                           <span className="text-xs text-text-secondary">
                             Reset this experiment to re-run with different metrics or settings.
@@ -403,13 +392,13 @@ export default function ExperimentList({
                             disabled={resetting}
                             className="rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
                           >
-                            {resetting ? "Resetting..." : "Reset & Re-run"}
+                            {resetting ? 'Resetting...' : 'Reset & Re-run'}
                           </button>
                         </div>
                       )}
 
                       {/* Runner for pending/running experiments */}
-                      {(exp.status === "pending" || exp.status === "running") && (
+                      {(exp.status === 'pending' || exp.status === 'running') && (
                         <ExperimentRunner
                           projectId={projectId}
                           experiment={exp}
@@ -419,15 +408,11 @@ export default function ExperimentList({
                     </div>
                   )}
 
-                  {tab === "results" && exp.status === "completed" && (
-                    <ExperimentResults
-                      key={exp.id}
-                      projectId={projectId}
-                      experimentId={exp.id}
-                    />
+                  {tab === 'results' && exp.status === 'completed' && (
+                    <ExperimentResults key={exp.id} projectId={projectId} experimentId={exp.id} />
                   )}
 
-                  {tab === "source" && exp.status === "completed" && exp.bot_config_id != null && (
+                  {tab === 'source' && exp.status === 'completed' && exp.bot_config_id != null && (
                     <SourceVerificationPanel
                       key={`sv-${exp.id}`}
                       projectId={projectId}
@@ -435,7 +420,7 @@ export default function ExperimentList({
                     />
                   )}
 
-                  {tab === "annotations" && exp.status === "completed" && (
+                  {tab === 'annotations' && exp.status === 'completed' && (
                     <HumanAnnotationPanel
                       key={`ann-${exp.id}`}
                       projectId={projectId}

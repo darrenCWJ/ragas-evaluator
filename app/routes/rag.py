@@ -2,11 +2,11 @@
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from app.models import RagConfigCreate, RagConfigUpdate, RagQueryRequest
 import db.init
-from pipeline.rag import single_shot_query, multi_step_query
+from app.models import RagConfigCreate, RagConfigUpdate, RagQueryRequest
+from pipeline.rag import multi_step_query, single_shot_query
 
 router = APIRouter(prefix="/api", tags=["rag"])
 
@@ -49,7 +49,11 @@ def _expand_rag_config(rag_row, conn) -> dict:
 
 
 @router.get("/projects/{project_id}/rag-configs")
-async def list_rag_configs(project_id: int):
+async def list_rag_configs(
+    project_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
     conn = db.init.get_db()
 
     project = conn.execute(
@@ -59,8 +63,8 @@ async def list_rag_configs(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     rows = conn.execute(
-        "SELECT * FROM rag_configs WHERE project_id = ? ORDER BY created_at DESC",
-        (project_id,),
+        "SELECT * FROM rag_configs WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (project_id, limit, offset),
     ).fetchall()
     return [_parse_rag_config_row(r) for r in rows]
 
@@ -155,8 +159,9 @@ async def create_rag_config(project_id: int, body: RagConfigCreate):
            (project_id, name, embedding_config_id, chunk_config_id,
             search_type, sparse_config_id, alpha, llm_model,
             llm_params_json, top_k, system_prompt, response_mode, max_steps,
-            reranker_model, reranker_top_k)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            reranker_model, reranker_top_k, query_expansion, num_expansions,
+            score_threshold, mmr_lambda, kg_expansion)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             project_id,
             body.name,
@@ -173,6 +178,11 @@ async def create_rag_config(project_id: int, body: RagConfigCreate):
             body.max_steps,
             body.reranker_model,
             body.reranker_top_k,
+            body.query_expansion,
+            body.num_expansions,
+            body.score_threshold,
+            body.mmr_lambda,
+            int(body.kg_expansion),
         ),
     )
     conn.commit()
@@ -271,6 +281,16 @@ async def update_rag_config(
         updates["reranker_model"] = body.reranker_model
     if body.reranker_top_k is not None:
         updates["reranker_top_k"] = body.reranker_top_k
+    if body.query_expansion is not None:
+        updates["query_expansion"] = body.query_expansion
+    if body.num_expansions is not None:
+        updates["num_expansions"] = body.num_expansions
+    if body.score_threshold is not None:
+        updates["score_threshold"] = body.score_threshold
+    if body.mmr_lambda is not None:
+        updates["mmr_lambda"] = body.mmr_lambda
+    if body.kg_expansion is not None:
+        updates["kg_expansion"] = int(body.kg_expansion)
 
     if updates:
         set_clause = ", ".join(f"{k} = ?" for k in updates)

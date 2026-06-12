@@ -8,23 +8,28 @@ import logging
 import threading
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import db.init
 from app.models import (
+    BULK_ACTION_TO_STATUS,
+    VALID_QUESTION_STATUSES,
+    BulkAnnotation,
+    QuestionAnnotation,
     TestGenRequest,
     TestSetCreate,
-    QuestionAnnotation,
-    BulkAnnotation,
-    VALID_QUESTION_STATUSES,
-    BULK_ACTION_TO_STATUS,
+)
+from config import (
+    KG_SUBPROCESS_MAX_RSS_MB,
+    KG_SUBPROCESS_TIMEOUT,
+    KG_THREAD_MODE,
+    KG_WORKER_URLS,
     MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
+    MAX_UPLOAD_SIZE,
 )
-from config import KG_SUBPROCESS_TIMEOUT, MAX_UPLOAD_SIZE, KG_WORKER_URL, KG_WORKER_URLS, KG_THREAD_MODE
-import db.init
-from db.init import NOW_SQL, json_extract_sql
 
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
@@ -35,6 +40,11 @@ _gen_lock = threading.Lock()
 
 
 # --- Helpers ---
+
+
+def _normalize_for_hash(text: str) -> str:
+    """Whitespace-insensitive key for matching reference contexts to chunks."""
+    return " ".join((text or "").split())
 
 
 def _parse_test_question_row(row) -> dict:
@@ -148,8 +158,9 @@ async def create_test_set(project_id: int, req: TestSetCreate):
     chunks: list[str] = []
 
     if req.use_kg_as_source:
-        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
         import json as _json
+
+        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
 
         _kg_json = _load_full_kg_json(project_id, "chunks")
         if _kg_json is None:
@@ -304,25 +315,51 @@ def _run_generation(
     asyncio.set_event_loop(loop)
 
     from evaluation.metrics.testgen import (
-        generate_project_testset,
-        register_cancel_flag,
         clear_cancel_flag,
+        generate_project_testset,
         is_cancelled,
+        register_cancel_flag,
     )
 
-    cancel_flag = register_cancel_flag(project_id)
+    register_cancel_flag(project_id)
     conn = db.init.get_thread_db()
     saved_count = 0
+
+    # Provenance lookup: normalized chunk content hash → (chunk_id, document_id).
+    # Lets every generated question record WHICH chunks its reference contexts
+    # came from, so failed experiment results can point at the exact source.
+    chunk_lookup: dict[str, tuple[int, int]] = {}
+    if req.chunk_config_id:
+        for row in conn.execute(
+            "SELECT id, document_id, content FROM chunks WHERE chunk_config_id = ?",
+            (req.chunk_config_id,),
+        ).fetchall():
+            chunk_lookup[_normalize_for_hash(row["content"])] = (row["id"], row["document_id"])
 
     def _save_batch(batch: list[dict]) -> None:
         nonlocal saved_count
         for q in batch:
             persona_name = q.get("persona") or q.get("synthesizer_name") or ""
             category = q.get("category", "")
+
+            metadata = dict(q.get("metadata") or {})
+            if chunk_lookup:
+                source_chunks: list[int] = []
+                source_docs: set[int] = set()
+                for ctx in q.get("reference_contexts", []) or []:
+                    text = ctx if isinstance(ctx, str) else ctx.get("content", "")
+                    hit = chunk_lookup.get(_normalize_for_hash(text))
+                    if hit:
+                        source_chunks.append(hit[0])
+                        source_docs.add(hit[1])
+                if source_chunks:
+                    metadata["source_chunk_ids"] = source_chunks
+                    metadata["source_document_ids"] = sorted(source_docs)
+
             conn.execute(
                 """INSERT INTO test_questions
-                   (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                   (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, status, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
                 (
                     test_set_id,
                     q.get("user_input", ""),
@@ -331,6 +368,7 @@ def _run_generation(
                     q.get("synthesizer_name", ""),
                     persona_name,
                     category,
+                    json.dumps(metadata) if metadata else None,
                 ),
             )
         conn.commit()
@@ -410,7 +448,7 @@ def _parse_upload_file(content: bytes, filename: str) -> list[dict]:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as e:
-            raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
+            raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}") from e
         if not isinstance(parsed, list):
             raise HTTPException(
                 status_code=422,
@@ -473,6 +511,12 @@ class TestSetUploadConfirm(BaseModel):
     name: str | None = None
 
 
+# Category values (case-insensitive) that mark a question as expecting the
+# agent to DECLINE rather than answer — wires uploaded questions into the
+# refusal_accuracy metric the same way generated out-of-KB questions are.
+_REFUSAL_CATEGORY_VALUES = {"out_of_knowledge_base", "out_of_scope", "refusal", "unanswerable"}
+
+
 @router.post("/projects/{project_id}/test-sets/upload", status_code=201)
 async def upload_test_set(
     project_id: int,
@@ -480,6 +524,8 @@ async def upload_test_set(
     question_column: str = Form(...),
     answer_column: str = Form(...),
     contexts_column: str | None = Form(None),
+    category_column: str | None = Form(None),
+    turns_column: str | None = Form(None),
     reference_sql_column: str | None = Form(None),
     schema_contexts_column: str | None = Form(None),
     reference_data_column: str | None = Form(None),
@@ -492,6 +538,15 @@ async def upload_test_set(
       - question_column: which column to use as the question
       - answer_column: which column to use as the reference answer
       - contexts_column: (optional) column for reference contexts
+      - category_column: (optional) question category. Values like
+        "out_of_knowledge_base" / "refusal" / "unanswerable" additionally tag
+        the question as expecting a refusal, enabling the refusal_accuracy
+        metric and per-category breakdowns for external test sets.
+      - turns_column: (optional) prior conversation turns before the question,
+        as a JSON array of user messages or a ``|||``-separated string.
+        Makes the question a multi-turn conversation test: the runner plays
+        each turn against the agent (carrying history) before asking the
+        final question, and conversation_retention can score the result.
       - name: (optional) test set name
     """
     conn = db.init.get_db()
@@ -537,6 +592,8 @@ async def upload_test_set(
             detail=f"Column '{contexts_column}' not found. Available: {sorted(columns)}",
         )
     for col_name, col_label in [
+        (category_column, "category_column"),
+        (turns_column, "turns_column"),
         (reference_sql_column, "reference_sql_column"),
         (schema_contexts_column, "schema_contexts_column"),
         (reference_data_column, "reference_data_column"),
@@ -570,6 +627,7 @@ async def upload_test_set(
             "question": question_column,
             "answer": answer_column,
             "contexts": contexts_column,
+            "category": category_column,
             "reference_sql": reference_sql_column,
             "schema_contexts": schema_contexts_column,
             "reference_data": reference_data_column,
@@ -619,7 +677,7 @@ async def upload_test_set(
                         raise HTTPException(
                             status_code=422,
                             detail=f"Row {i + 1}, column '{col_name}': invalid JSON — {e}",
-                        )
+                        ) from e
 
     # Insert questions
     inserted = []
@@ -649,17 +707,47 @@ async def upload_test_set(
                     metadata[meta_key] = [str(val).strip()]
             else:
                 metadata[meta_key] = str(val).strip()
+
+        # Category + refusal tagging — lets external test sets use the
+        # refusal_accuracy metric and per-category breakdowns.
+        category = ""
+        if category_column:
+            category = str(row.get(category_column) or "").strip()
+            if category.lower().replace(" ", "_") in _REFUSAL_CATEGORY_VALUES:
+                metadata["expected_behavior"] = "refusal"
+
+        # Conversation turns — JSON array or |||-separated user messages
+        if turns_column:
+            raw_turns = row.get(turns_column)
+            turns: list[str] = []
+            if isinstance(raw_turns, list):
+                turns = [str(t).strip() for t in raw_turns if str(t).strip()]
+            elif isinstance(raw_turns, str) and raw_turns.strip():
+                stripped = raw_turns.strip()
+                if stripped.startswith("["):
+                    try:
+                        parsed_turns = json.loads(stripped)
+                        if isinstance(parsed_turns, list):
+                            turns = [str(t).strip() for t in parsed_turns if str(t).strip()]
+                    except json.JSONDecodeError:
+                        turns = [stripped]
+                else:
+                    turns = [t.strip() for t in stripped.split("|||") if t.strip()]
+            if turns:
+                metadata["turns"] = turns
+
         metadata_json_val = json.dumps(metadata) if metadata else None
 
         conn.execute(
             """INSERT INTO test_questions
-               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, metadata_json, status)
-               VALUES (?, ?, ?, ?, 'uploaded', '', ?, 'pending')""",
+               (test_set_id, question, reference_answer, reference_contexts, question_type, persona, category, metadata_json, status)
+               VALUES (?, ?, ?, ?, 'uploaded', '', ?, ?, 'pending')""",
             (
                 test_set_id,
                 row[question_column].strip(),
                 row[answer_column].strip(),
                 json.dumps(ref_ctx),
+                category,
                 metadata_json_val,
             ),
         )
@@ -669,6 +757,7 @@ async def upload_test_set(
                 "reference_answer": row[answer_column].strip(),
                 "reference_contexts": ref_ctx,
                 "question_type": "uploaded",
+                "category": category,
                 "status": "pending",
                 "metadata": metadata or None,
             }
@@ -717,7 +806,8 @@ async def cancel_test_set_generation(project_id: int, test_set_id: int):
                     if resp.status_code == 200:
                         worker_accepted = True
                         break
-                except Exception:
+                except Exception as exc:
+                    logger.warning("cancel-testgen: worker %s unreachable: %s", worker_url, exc)
                     continue
 
     # If no worker accepted the cancel and no local thread running,
@@ -779,8 +869,9 @@ async def resume_test_set_generation(project_id: int, test_set_id: int):
 
     chunks: list[str] = []
     if use_kg_as_source:
-        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
         import json as _json
+
+        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
         _kg_json = _load_full_kg_json(project_id, "chunks")
         if _kg_json:
             _nodes = _json.loads(_kg_json).get("nodes", [])
@@ -854,7 +945,8 @@ async def generation_progress(project_id: int):
                             data = resp.json()
                             if data.get("active"):
                                 return {"active": True, **data}
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("testgen-progress: worker %s unreachable: %s", worker_url, exc)
                         continue
 
     # Check DB for completed/failed/cancelled status when no in-memory progress
@@ -939,7 +1031,7 @@ async def list_test_sets(project_id: int):
            FROM test_sets ts
            LEFT JOIN test_questions tq ON tq.test_set_id = ts.id
            WHERE ts.project_id = ? AND ts.status != 'generating'
-                 AND COALESCE({json_extract_sql('ts.generation_config_json', 'source')}, '') != 'csv_auto'
+                 AND COALESCE({db.init.json_extract_sql('ts.generation_config_json', 'source')}, '') != 'csv_auto'
            GROUP BY ts.id
            ORDER BY ts.created_at DESC""",
         (project_id,),
@@ -1068,7 +1160,7 @@ async def annotate_question(
         f"""UPDATE test_questions
            SET status = ?, user_edited_answer = ?, user_edited_contexts = ?, user_notes = ?,
                metadata_json = COALESCE(?, metadata_json),
-               reviewed_at = {NOW_SQL}
+               reviewed_at = {db.init.NOW_SQL}
            WHERE id = ?""",
         (req.status, req.user_edited_answer, edited_ctx_json, req.user_notes, metadata_json, question_id),
     )
@@ -1132,7 +1224,7 @@ async def bulk_annotate_questions(
 
         # Update specified questions
         cursor = conn.execute(
-            f"UPDATE test_questions SET status = ?, reviewed_at = {NOW_SQL} WHERE id IN ({placeholders}) AND test_set_id = ?",
+            f"UPDATE test_questions SET status = ?, reviewed_at = {db.init.NOW_SQL} WHERE id IN ({placeholders}) AND test_set_id = ?",
             (target_status, *req.question_ids, test_set_id),
         )
         conn.commit()
@@ -1148,7 +1240,7 @@ async def bulk_annotate_questions(
 
         # Update all pending questions in this test set
         cursor = conn.execute(
-            f"UPDATE test_questions SET status = ?, reviewed_at = {NOW_SQL} WHERE test_set_id = ? AND status = 'pending'",
+            f"UPDATE test_questions SET status = ?, reviewed_at = {db.init.NOW_SQL} WHERE test_set_id = ? AND status = 'pending'",
             (target_status, test_set_id),
         )
         conn.commit()
@@ -1290,7 +1382,7 @@ async def get_knowledge_graph_info(project_id: int, kg_source: str = "chunks"):
     Includes a ``chunks_stale`` flag indicating whether the current source content
     differs from what was used to build the cached KG.
     """
-    from evaluation.metrics.testgen import get_kg_info, _chunks_hash
+    from evaluation.metrics.testgen import _chunks_hash, get_kg_info
 
     conn = db.init.get_db()
     project = conn.execute(
@@ -1386,7 +1478,7 @@ def _run_kg_in_thread(
     asyncio.set_event_loop(loop)
     try:
         logger.info("KG thread build starting: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import set_progress, clear_progress
+        from evaluation.metrics.testgen import clear_progress, set_progress
 
         set_progress(project_id, {"stage": "building_knowledge_graph", "kg_building": True}, kg_source=kg_source)
 
@@ -1412,6 +1504,13 @@ def _run_kg_in_thread(
             _active_kg_builds.pop((project_id, kg_source), None)
 
 
+def _limit_subprocess_memory() -> None:
+    """Apply RLIMIT_AS to the KG subprocess (runs in the child after fork; Linux only)."""
+    import resource as _resource
+    limit = KG_SUBPROCESS_MAX_RSS_MB * 1024 * 1024
+    _resource.setrlimit(_resource.RLIMIT_AS, (limit, limit))
+
+
 def _run_kg_subprocess(
     project_id: int,
     script: str,
@@ -1428,6 +1527,7 @@ def _run_kg_subprocess(
     polling endpoint can reflect real step-by-step status.
     """
     import json
+    import os
     import subprocess
     import sys
     from pathlib import Path
@@ -1436,19 +1536,20 @@ def _run_kg_subprocess(
 
     try:
         logger.info("KG subprocess thread started: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import set_progress, clear_progress
+        from evaluation.metrics.testgen import clear_progress, set_progress
         set_progress(project_id, {
             "stage": initial_stage,
             "kg_building": True,
         }, kg_source=kg_source)
 
-        env = {**__import__("os").environ, "KG_PROGRESS_PIPE": "1"}
+        env = {**os.environ, "KG_PROGRESS_PIPE": "1"}
         proc = subprocess.Popen(
             [sys.executable, "-c", script, project_dir, *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            preexec_fn=_limit_subprocess_memory if (KG_SUBPROCESS_MAX_RSS_MB > 0 and os.name != "nt") else None,
         )
 
         # Kill the subprocess if it runs too long
@@ -1472,9 +1573,9 @@ def _run_kg_subprocess(
                         data.pop("_progress", None)
                         set_progress(proj_id, data, kg_source=src)
                     else:
-                        print(f"[KG-SUB] {line}", flush=True)
+                        pass
                 except (json.JSONDecodeError, AttributeError):
-                    print(f"[KG-SUB] {line}", flush=True)
+                    pass
         finally:
             kill_timer.cancel()
             proc.wait()
@@ -1494,7 +1595,6 @@ def _run_kg_subprocess(
 
         logger.info("KG operation '%s' completed for project %d", success_marker, project_id)
     except Exception as _exc:
-        print(f"[KG] EXCEPTION project={project_id}: {_exc}", flush=True)
         logger.exception("KG operation failed for project %d", project_id)
     finally:
         from evaluation.metrics.testgen import clear_progress
@@ -1550,8 +1650,11 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                     raise HTTPException(status_code=409, detail="KG build already in progress on a worker")
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "KG build guard: worker %s unreachable, releasing stale delegation: %s",
+                known_url, exc,
+            )
         _project_worker.pop(key, None)
 
     # Offload to worker service(s) if configured
@@ -1571,7 +1674,8 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                         raise HTTPException(status_code=409, detail="KG build already in progress on a worker")
                 except HTTPException:
                     raise
-                except Exception:
+                except Exception as exc:
+                    logger.debug("KG pre-check: worker %s unreachable: %s", worker_url, exc)
                     continue
 
         payload = {
@@ -1663,7 +1767,7 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
 @router.get("/projects/{project_id}/knowledge-graph/progress")
 async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
     """Poll knowledge graph build progress."""
-    from evaluation.metrics.testgen import get_progress, get_kg_info
+    from evaluation.metrics.testgen import get_kg_info, get_progress
 
     # When using worker(s), proxy progress — try the known worker first, then others
     if KG_WORKER_URLS:
@@ -1683,10 +1787,11 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
                             data = resp.json()
                             if data.get("active") or data.get("status"):
                                 return data
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("KG progress: worker %s unreachable: %s", worker_url, exc)
                         continue
         except Exception:
-            pass  # fall through to local DB check on all workers unreachable
+            logger.warning("KG progress: all workers unreachable, falling back to local DB", exc_info=True)
 
     # Check if a build thread is actively running
     with _kg_lock:
@@ -1722,7 +1827,7 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
 @router.post("/projects/{project_id}/knowledge-graph/reset")
 async def kg_reset_stale(project_id: int, kg_source: str = "chunks"):
     """Delete a partial/stale KG checkpoint so a fresh build can start."""
-    from evaluation.metrics.testgen import get_kg_info, delete_kg_from_db, clear_progress
+    from evaluation.metrics.testgen import clear_progress, delete_kg_from_db, get_kg_info
 
     with _kg_lock:
         if _active_kg_builds.get((project_id, kg_source)):
@@ -1876,8 +1981,10 @@ async def get_knowledge_graph_data(project_id: int):
     # Parse KG JSON via Ragas loader
     from ragas.testset.graph import KnowledgeGraph
 
+    from evaluation.metrics.testgen import decode_kg_json
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        f.write(row["kg_json"])
+        f.write(decode_kg_json(row["kg_json"]))
         tmp_path = f.name
     try:
         kg = KnowledgeGraph.load(tmp_path)
@@ -1915,8 +2022,10 @@ async def stream_knowledge_graph_data(project_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="No knowledge graph found")
 
+    from evaluation.metrics.testgen import decode_kg_json
+
     is_complete = bool(row["is_complete"])
-    kg_json_text = row["kg_json"]
+    kg_json_text = decode_kg_json(row["kg_json"])
 
     async def _stream():
         from ragas.testset.graph import KnowledgeGraph
@@ -2053,9 +2162,10 @@ async def list_all_knowledge_graphs():
                                     "build_progress": progress_info,
                                 })
                                 existing_keys.add(key)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("KG list: worker %s unreachable: %s", worker_url, exc)
                         continue
         except Exception:
-            pass
+            logger.warning("KG list: worker enumeration failed", exc_info=True)
 
     return result

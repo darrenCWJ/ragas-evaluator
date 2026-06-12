@@ -1,32 +1,32 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from 'react';
 import type {
   RagConfig,
   RagConfigCreate,
   RagConfigExpanded,
   EmbeddingConfig,
   ChunkConfig,
-} from "../../lib/api";
+} from '../../lib/api';
 import {
   fetchRagConfigs,
   fetchConfigDefaults,
   createRagConfig,
   deleteRagConfig,
   fetchRagConfigExpanded,
-} from "../../lib/api";
-import RagTestQuery from "./RagTestQuery";
+} from '../../lib/api';
+import RagTestQuery from './RagTestQuery';
 
-const SEARCH_TYPES = ["dense", "sparse", "hybrid"] as const;
-const RESPONSE_MODES = ["single_shot", "multi_step"] as const;
+const SEARCH_TYPES = ['dense', 'sparse', 'hybrid'] as const;
+const RESPONSE_MODES = ['single_shot', 'multi_step'] as const;
 
 const SEARCH_LABELS: Record<string, string> = {
-  dense: "Dense",
-  sparse: "Sparse",
-  hybrid: "Hybrid",
+  dense: 'Dense',
+  sparse: 'Sparse',
+  hybrid: 'Hybrid',
 };
 
 const MODE_LABELS: Record<string, string> = {
-  single_shot: "Single Shot",
-  multi_step: "Multi Step",
+  single_shot: 'Single Shot',
+  multi_step: 'Multi Step',
 };
 
 interface Props {
@@ -47,28 +47,35 @@ export default function RagConfigPanel({
   const [error, setError] = useState<string | null>(null);
 
   // Form state
-  const [name, setName] = useState("");
-  const [embConfigId, setEmbConfigId] = useState<number | "">(
-    embeddingConfigs.length > 0 ? embeddingConfigs[0]!.id : "",
+  const [name, setName] = useState('');
+  const [embConfigId, setEmbConfigId] = useState<number | ''>(
+    embeddingConfigs.length > 0 ? embeddingConfigs[0]!.id : '',
   );
-  const [chunkConfigId, setChunkConfigId] = useState<number | "">(
-    chunkConfigs.length > 0 ? chunkConfigs[0]!.id : "",
+  const [chunkConfigId, setChunkConfigId] = useState<number | ''>(
+    chunkConfigs.length > 0 ? chunkConfigs[0]!.id : '',
   );
-  const [searchType, setSearchType] = useState<string>("dense");
-  const [llmModel, setLlmModel] = useState("");
-  const [responseMode, setResponseMode] = useState<string>("single_shot");
+  const [searchType, setSearchType] = useState<string>('dense');
+  const [llmModel, setLlmModel] = useState('');
+  const [responseMode, setResponseMode] = useState<string>('single_shot');
   const [topK, setTopK] = useState(5);
   const [maxSteps, setMaxSteps] = useState(3);
-  const [systemPrompt, setSystemPrompt] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   // Hybrid fields
-  const [sparseConfigId, setSparseConfigId] = useState<number | "">(
-    embeddingConfigs.find((c) => c.type === "bm25_sparse")?.id ?? "",
+  const [sparseConfigId, setSparseConfigId] = useState<number | ''>(
+    embeddingConfigs.find((c) => c.type === 'bm25_sparse')?.id ?? '',
   );
   const [alpha, setAlpha] = useState(0.5);
   // Reranker fields
-  const [rerankerModel, setRerankerModel] = useState("");
+  const [rerankerModel, setRerankerModel] = useState('');
   const [rerankerTopK, setRerankerTopK] = useState(5);
+  // Retrieval quality fields
+  const [queryExpansion, setQueryExpansion] = useState('');
+  const [numExpansions, setNumExpansions] = useState(3);
+  const [scoreThreshold, setScoreThreshold] = useState('');
+  const [mmrEnabled, setMmrEnabled] = useState(false);
+  const [mmrLambda, setMmrLambda] = useState(0.7);
+  const [kgExpansion, setKgExpansion] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -95,9 +102,7 @@ export default function RagConfigPanel({
       const data = await fetchRagConfigs(projectId);
       setConfigs(data);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load RAG configs",
-      );
+      setError(err instanceof Error ? err.message : 'Failed to load RAG configs');
     } finally {
       setLoading(false);
     }
@@ -106,28 +111,29 @@ export default function RagConfigPanel({
   useEffect(() => {
     loadConfigs();
     // Set default LLM model from backend config
-    fetchConfigDefaults().then((defaults) => {
-      setLlmModel((prev) => prev || defaults.default_eval_model);
-    }).catch(() => {
-      setLlmModel((prev) => prev || "gpt-4o-mini");
-    });
+    fetchConfigDefaults()
+      .then((defaults) => {
+        setLlmModel((prev) => prev || defaults.default_eval_model);
+      })
+      .catch(() => {
+        setLlmModel((prev) => prev || 'gpt-4o-mini');
+      });
   }, [loadConfigs]);
 
   // Update default selectors when configs change
   useEffect(() => {
-    if (embeddingConfigs.length > 0 && embConfigId === "") {
+    if (embeddingConfigs.length > 0 && embConfigId === '') {
       setEmbConfigId(embeddingConfigs[0]!.id);
     }
   }, [embeddingConfigs, embConfigId]);
 
   useEffect(() => {
-    if (chunkConfigs.length > 0 && chunkConfigId === "") {
+    if (chunkConfigs.length > 0 && chunkConfigId === '') {
       setChunkConfigId(chunkConfigs[0]!.id);
     }
   }, [chunkConfigs, chunkConfigId]);
 
-  const canSave =
-    name.trim().length > 0 && embConfigId !== "" && chunkConfigId !== "";
+  const canSave = name.trim().length > 0 && embConfigId !== '' && chunkConfigId !== '';
 
   async function handleSave() {
     if (!canSave) return;
@@ -143,31 +149,44 @@ export default function RagConfigPanel({
         top_k: topK,
         response_mode: responseMode,
       };
-      if (responseMode === "multi_step") payload.max_steps = maxSteps;
+      if (responseMode === 'multi_step') payload.max_steps = maxSteps;
       if (systemPrompt.trim()) payload.system_prompt = systemPrompt.trim();
-      if (searchType === "hybrid") {
-        if (sparseConfigId !== "") payload.sparse_config_id = sparseConfigId as number;
+      if (searchType === 'hybrid') {
+        if (sparseConfigId !== '') payload.sparse_config_id = sparseConfigId as number;
         payload.alpha = alpha;
       }
       if (rerankerModel.trim()) {
         payload.reranker_model = rerankerModel.trim();
         payload.reranker_top_k = rerankerTopK;
       }
+      if (queryExpansion) {
+        payload.query_expansion = queryExpansion;
+        if (queryExpansion === 'multi_query') payload.num_expansions = numExpansions;
+      }
+      if (scoreThreshold.trim() !== '') payload.score_threshold = parseFloat(scoreThreshold);
+      if (mmrEnabled) payload.mmr_lambda = mmrLambda;
+      if (kgExpansion) payload.kg_expansion = true;
       await createRagConfig(projectId, payload);
-      setName("");
-      setSearchType("dense");
-      setLlmModel("gpt-4o-mini");
-      setResponseMode("single_shot");
+      setName('');
+      setSearchType('dense');
+      setLlmModel('gpt-4o-mini');
+      setResponseMode('single_shot');
       setTopK(5);
       setMaxSteps(3);
-      setSystemPrompt("");
+      setSystemPrompt('');
       setShowAdvanced(false);
-      setRerankerModel("");
+      setRerankerModel('');
       setRerankerTopK(5);
+      setQueryExpansion('');
+      setNumExpansions(3);
+      setScoreThreshold('');
+      setMmrEnabled(false);
+      setMmrLambda(0.7);
+      setKgExpansion(false);
       loadConfigs();
       onConfigsChanged?.();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save");
+      setFormError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -182,7 +201,7 @@ export default function RagConfigPanel({
       loadConfigs();
       onConfigsChanged?.();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Delete failed");
+      setDeleteError(err instanceof Error ? err.message : 'Delete failed');
       setConfirmDeleteId(null);
     } finally {
       setDeleting(false);
@@ -218,7 +237,7 @@ export default function RagConfigPanel({
       const expanded = await fetchRagConfigExpanded(projectId, configId);
       setExpandedCache((prev) => new Map(prev).set(configId, expanded));
     } catch (err) {
-      setExpandError(err instanceof Error ? err.message : "Failed to load details");
+      setExpandError(err instanceof Error ? err.message : 'Failed to load details');
     } finally {
       setExpandLoading(false);
     }
@@ -227,17 +246,11 @@ export default function RagConfigPanel({
   function renderConfigsList() {
     return (
       <div>
-        <h4 className="mb-3 text-sm font-semibold text-text-primary">
-          Saved RAG Configs
-        </h4>
+        <h4 className="mb-3 text-sm font-semibold text-text-primary">Saved RAG Configs</h4>
 
         {loading ? (
           <div className="flex items-center gap-2 py-4 text-sm text-text-muted">
-            <svg
-              className="h-4 w-4 animate-spin"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
+            <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle
                 className="opacity-25"
                 cx="12"
@@ -270,163 +283,185 @@ export default function RagConfigPanel({
           </p>
         ) : (
           <>
-          {deleteError && (
-            <div className="mb-2 flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
-              <span>{deleteError}</span>
-              <button
-                onClick={() => setDeleteError(null)}
-                className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-          <ul className="space-y-2">
-            {configs.map((cfg) => (
-              <li key={cfg.id} className="rounded-lg bg-card px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 overflow-hidden">
-                    <span className="truncate text-sm font-medium text-text-primary">
-                      {cfg.name}
-                    </span>
-                    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider text-accent">
-                      {SEARCH_LABELS[cfg.search_type] ?? cfg.search_type}
-                    </span>
-                    <span className="shrink-0 font-mono text-2xs text-text-muted">
-                      {cfg.llm_model}
-                    </span>
-                    <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-2xs text-text-muted">
-                      {MODE_LABELS[cfg.response_mode] ?? cfg.response_mode}
-                    </span>
-                    <span className="shrink-0 text-xs text-text-muted">
-                      {new Date(cfg.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
+            {deleteError && (
+              <div className="mb-2 flex items-center justify-between rounded-lg bg-score-low/10 px-4 py-2 text-xs text-score-low">
+                <span>{deleteError}</span>
+                <button
+                  onClick={() => setDeleteError(null)}
+                  className="ml-2 rounded bg-score-low/20 px-2 py-0.5 text-xs hover:bg-score-low/30"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            <ul className="space-y-2">
+              {configs.map((cfg) => (
+                <li key={cfg.id} className="rounded-lg bg-card px-4 py-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="truncate text-sm font-medium text-text-primary">
+                        {cfg.name}
+                      </span>
+                      <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wider text-accent">
+                        {SEARCH_LABELS[cfg.search_type] ?? cfg.search_type}
+                      </span>
+                      <span className="shrink-0 font-mono text-2xs text-text-muted">
+                        {cfg.llm_model}
+                      </span>
+                      <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-2xs text-text-muted">
+                        {MODE_LABELS[cfg.response_mode] ?? cfg.response_mode}
+                      </span>
+                      <span className="shrink-0 text-xs text-text-muted">
+                        {new Date(cfg.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
 
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      onClick={() => handleToggleExpand(cfg.id)}
-                      className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
-                      title="Toggle config details"
-                    >
-                      <svg
-                        className={`h-3.5 w-3.5 transition-transform ${expandedConfigId === cfg.id ? "rotate-90" : ""}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() =>
-                        setTestConfigId(
-                          testConfigId === cfg.id ? null : cfg.id,
-                        )
-                      }
-                      className="rounded px-2 py-1 text-xs text-accent hover:bg-accent/10"
-                    >
-                      Test
-                    </button>
-                    {confirmDeleteId === cfg.id ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleDelete(cfg.id)}
-                          disabled={deleting}
-                          className="rounded bg-score-low/20 px-2 py-1 text-xs text-score-low hover:bg-score-low/30 disabled:opacity-50"
-                        >
-                          {deleting ? "..." : "Yes"}
-                        </button>
-                        <button
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="rounded bg-elevated px-2 py-1 text-xs text-text-secondary hover:bg-border"
-                        >
-                          No
-                        </button>
-                      </div>
-                    ) : (
+                    <div className="flex shrink-0 items-center gap-1">
                       <button
-                        onClick={() => setConfirmDeleteId(cfg.id)}
-                        className="rounded p-1 text-text-muted hover:bg-elevated hover:text-score-low"
-                        title="Delete config"
+                        onClick={() => handleToggleExpand(cfg.id)}
+                        className="rounded p-1 text-text-muted hover:bg-elevated hover:text-text-primary"
+                        title="Toggle config details"
                       >
                         <svg
-                          className="h-3.5 w-3.5"
+                          className={`h-3.5 w-3.5 transition-transform ${expandedConfigId === cfg.id ? 'rotate-90' : ''}`}
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
-                          strokeWidth={1.5}
+                          strokeWidth={2}
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                         </svg>
                       </button>
-                    )}
+                      <button
+                        onClick={() => setTestConfigId(testConfigId === cfg.id ? null : cfg.id)}
+                        className="rounded px-2 py-1 text-xs text-accent hover:bg-accent/10"
+                      >
+                        Test
+                      </button>
+                      {confirmDeleteId === cfg.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleDelete(cfg.id)}
+                            disabled={deleting}
+                            className="rounded bg-score-low/20 px-2 py-1 text-xs text-score-low hover:bg-score-low/30 disabled:opacity-50"
+                          >
+                            {deleting ? '...' : 'Yes'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="rounded bg-elevated px-2 py-1 text-xs text-text-secondary hover:bg-border"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteId(cfg.id)}
+                          className="rounded p-1 text-text-muted hover:bg-elevated hover:text-score-low"
+                          title="Delete config"
+                        >
+                          <svg
+                            className="h-3.5 w-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.5}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M6 18L18 6M6 6l12 12"
+                            />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {/* Expanded config summary */}
-                {expandedConfigId === cfg.id && (
-                  <div className="mt-3 border-t border-border pt-3">
-                    {expandLoading && !expandedCache.has(cfg.id) ? (
-                      <p className="text-xs text-text-muted">Loading details...</p>
-                    ) : expandError && !expandedCache.has(cfg.id) ? (
-                      <p className="text-xs text-score-low">Failed to load details</p>
-                    ) : expandedCache.has(cfg.id) ? (
-                      <div className="space-y-1 text-xs text-text-muted">
-                        {expandedCache.get(cfg.id)!.chunk_config ? (
+                  {/* Expanded config summary */}
+                  {expandedConfigId === cfg.id && (
+                    <div className="mt-3 border-t border-border pt-3">
+                      {expandLoading && !expandedCache.has(cfg.id) ? (
+                        <p className="text-xs text-text-muted">Loading details...</p>
+                      ) : expandError && !expandedCache.has(cfg.id) ? (
+                        <p className="text-xs text-score-low">Failed to load details</p>
+                      ) : expandedCache.has(cfg.id) ? (
+                        <div className="space-y-1 text-xs text-text-muted">
+                          {expandedCache.get(cfg.id)!.chunk_config ? (
+                            <p>
+                              <span className="text-text-secondary">Chunk:</span>{' '}
+                              {expandedCache.get(cfg.id)!.chunk_config!.name} —{' '}
+                              {expandedCache.get(cfg.id)!.chunk_config!.method}
+                            </p>
+                          ) : (
+                            <p>
+                              <span className="text-text-secondary">Chunk:</span> (deleted)
+                            </p>
+                          )}
+                          {expandedCache.get(cfg.id)!.embedding_config ? (
+                            <p>
+                              <span className="text-text-secondary">Embedding:</span>{' '}
+                              {expandedCache.get(cfg.id)!.embedding_config!.name} —{' '}
+                              {expandedCache.get(cfg.id)!.embedding_config!.type},{' '}
+                              {expandedCache.get(cfg.id)!.embedding_config!.model_name}
+                            </p>
+                          ) : (
+                            <p>
+                              <span className="text-text-secondary">Embedding:</span> (deleted)
+                            </p>
+                          )}
                           <p>
-                            <span className="text-text-secondary">Chunk:</span>{" "}
-                            {expandedCache.get(cfg.id)!.chunk_config!.name} — {expandedCache.get(cfg.id)!.chunk_config!.method}
+                            <span className="text-text-secondary">RAG:</span> search=
+                            {cfg.search_type}, LLM={cfg.llm_model}, top_k={cfg.top_k}, mode=
+                            {cfg.response_mode}
                           </p>
-                        ) : (
-                          <p><span className="text-text-secondary">Chunk:</span> (deleted)</p>
-                        )}
-                        {expandedCache.get(cfg.id)!.embedding_config ? (
-                          <p>
-                            <span className="text-text-secondary">Embedding:</span>{" "}
-                            {expandedCache.get(cfg.id)!.embedding_config!.name} — {expandedCache.get(cfg.id)!.embedding_config!.type}, {expandedCache.get(cfg.id)!.embedding_config!.model_name}
-                          </p>
-                        ) : (
-                          <p><span className="text-text-secondary">Embedding:</span> (deleted)</p>
-                        )}
-                        <p>
-                          <span className="text-text-secondary">RAG:</span>{" "}
-                          search={cfg.search_type}, LLM={cfg.llm_model}, top_k={cfg.top_k}, mode={cfg.response_mode}
-                        </p>
-                        {cfg.reranker_model && (
-                          <p>
-                            <span className="text-text-secondary">Reranker:</span>{" "}
-                            {cfg.reranker_model}{cfg.reranker_top_k ? `, top_k=${cfg.reranker_top_k}` : ""}
-                          </p>
-                        )}
-                        {cfg.system_prompt && (
-                          <p>
-                            <span className="text-text-secondary">System prompt:</span>{" "}
-                            {cfg.system_prompt.length > 80 ? cfg.system_prompt.slice(0, 80) + "..." : cfg.system_prompt}
-                          </p>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
+                          {cfg.reranker_model && (
+                            <p>
+                              <span className="text-text-secondary">Reranker:</span>{' '}
+                              {cfg.reranker_model}
+                              {cfg.reranker_top_k ? `, top_k=${cfg.reranker_top_k}` : ''}
+                            </p>
+                          )}
+                          {(cfg.query_expansion ||
+                            cfg.score_threshold != null ||
+                            cfg.mmr_lambda != null ||
+                            cfg.kg_expansion) && (
+                            <p>
+                              <span className="text-text-secondary">Retrieval extras:</span>{' '}
+                              {[
+                                cfg.query_expansion ? `expansion=${cfg.query_expansion}` : null,
+                                cfg.score_threshold != null
+                                  ? `threshold=${cfg.score_threshold}`
+                                  : null,
+                                cfg.mmr_lambda != null ? `mmr λ=${cfg.mmr_lambda}` : null,
+                                cfg.kg_expansion ? 'kg-expansion' : null,
+                              ]
+                                .filter(Boolean)
+                                .join(', ')}
+                            </p>
+                          )}
+                          {cfg.system_prompt && (
+                            <p>
+                              <span className="text-text-secondary">System prompt:</span>{' '}
+                              {cfg.system_prompt.length > 80
+                                ? cfg.system_prompt.slice(0, 80) + '...'
+                                : cfg.system_prompt}
+                            </p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
 
-                {/* Inline test query */}
-                {testConfigId === cfg.id && (
-                  <div className="mt-3 border-t border-border pt-3">
-                    <RagTestQuery
-                      projectId={projectId}
-                      ragConfigId={cfg.id}
-                    />
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+                  {/* Inline test query */}
+                  {testConfigId === cfg.id && (
+                    <div className="mt-3 border-t border-border pt-3">
+                      <RagTestQuery projectId={projectId} ragConfigId={cfg.id} />
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
           </>
         )}
       </div>
@@ -437,13 +472,13 @@ export default function RagConfigPanel({
     <div className="space-y-6">
       {/* New RAG Config Form */}
       <div className="rounded-xl border border-border bg-card/60 p-5">
-        <h4 className="mb-4 text-sm font-semibold text-text-primary">
-          New RAG Config
-        </h4>
+        <h4 className="mb-4 text-sm font-semibold text-text-primary">New RAG Config</h4>
 
         <label className="block">
           <span className="mb-1 block text-xs text-text-secondary">Name</span>
-          <p className="mt-0.5 text-xs text-text-muted">A descriptive name for this RAG configuration</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            A descriptive name for this RAG configuration
+          </p>
           <input
             type="text"
             value={name}
@@ -455,10 +490,10 @@ export default function RagConfigPanel({
 
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              Embedding Config
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">Which embedding model to use for retrieval</p>
+            <span className="mb-1 block text-xs text-text-secondary">Embedding Config</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Which embedding model to use for retrieval
+            </p>
             <select
               value={embConfigId}
               onChange={(e) => setEmbConfigId(Number(e.target.value))}
@@ -473,10 +508,10 @@ export default function RagConfigPanel({
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              Chunk Config
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">Which chunking strategy was used for the documents</p>
+            <span className="mb-1 block text-xs text-text-secondary">Chunk Config</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Which chunking strategy was used for the documents
+            </p>
             <select
               value={chunkConfigId}
               onChange={(e) => setChunkConfigId(Number(e.target.value))}
@@ -493,10 +528,11 @@ export default function RagConfigPanel({
 
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              Search Type
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">dense: vector similarity search | sparse: BM25 keyword search | hybrid: combines both with alpha weighting</p>
+            <span className="mb-1 block text-xs text-text-secondary">Search Type</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              dense: vector similarity search | sparse: BM25 keyword search | hybrid: combines both
+              with alpha weighting
+            </p>
             <select
               value={searchType}
               onChange={(e) => setSearchType(e.target.value)}
@@ -511,10 +547,10 @@ export default function RagConfigPanel({
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              LLM Model
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">OpenAI model for generating answers (e.g., gpt-4o-mini, gpt-4o, gpt-4-turbo)</p>
+            <span className="mb-1 block text-xs text-text-secondary">LLM Model</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              OpenAI model for generating answers (e.g., gpt-4o-mini, gpt-4o, gpt-4-turbo)
+            </p>
             <input
               type="text"
               value={llmModel}
@@ -526,20 +562,16 @@ export default function RagConfigPanel({
         </div>
 
         {/* Hybrid-specific fields */}
-        {searchType === "hybrid" && (
+        {searchType === 'hybrid' && (
           <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-border/50 bg-card/30 p-3">
             <label className="block">
-              <span className="mb-1 block text-xs text-text-secondary">
-                Sparse Config
-              </span>
-              <p className="mt-0.5 text-xs text-text-muted">BM25 embedding config for the sparse component of hybrid search</p>
+              <span className="mb-1 block text-xs text-text-secondary">Sparse Config</span>
+              <p className="mt-0.5 text-xs text-text-muted">
+                BM25 embedding config for the sparse component of hybrid search
+              </p>
               <select
                 value={sparseConfigId}
-                onChange={(e) =>
-                  setSparseConfigId(
-                    e.target.value ? Number(e.target.value) : "",
-                  )
-                }
+                onChange={(e) => setSparseConfigId(e.target.value ? Number(e.target.value) : '')}
                 className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
               >
                 <option value="">None</option>
@@ -555,7 +587,9 @@ export default function RagConfigPanel({
               <span className="mb-1 block text-xs text-text-secondary">
                 Alpha ({alpha.toFixed(2)})
               </span>
-              <p className="mt-0.5 text-xs text-text-muted">Weight between dense (1.0) and sparse (0.0) search in hybrid mode</p>
+              <p className="mt-0.5 text-xs text-text-muted">
+                Weight between dense (1.0) and sparse (0.0) search in hybrid mode
+              </p>
               <input
                 type="range"
                 min="0"
@@ -571,10 +605,11 @@ export default function RagConfigPanel({
 
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              Response Mode
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">single_shot: one retrieval + answer | multi_step: iteratively refines search queries for better context</p>
+            <span className="mb-1 block text-xs text-text-secondary">Response Mode</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              single_shot: one retrieval + answer | multi_step: iteratively refines search queries
+              for better context
+            </p>
             <select
               value={responseMode}
               onChange={(e) => setResponseMode(e.target.value)}
@@ -589,10 +624,10 @@ export default function RagConfigPanel({
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              Top K
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">Number of chunks to retrieve (1-50, typical: 3-10)</p>
+            <span className="mb-1 block text-xs text-text-secondary">Top K</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Number of chunks to retrieve (1-50, typical: 3-10)
+            </p>
             <input
               type="number"
               value={topK}
@@ -605,12 +640,12 @@ export default function RagConfigPanel({
         </div>
 
         {/* Multi-step: max_steps */}
-        {responseMode === "multi_step" && (
+        {responseMode === 'multi_step' && (
           <label className="mt-3 block">
-            <span className="mb-1 block text-xs text-text-secondary">
-              Max Steps
-            </span>
-            <p className="mt-0.5 text-xs text-text-muted">Maximum query refinement iterations in multi-step mode (1-10)</p>
+            <span className="mb-1 block text-xs text-text-secondary">Max Steps</span>
+            <p className="mt-0.5 text-xs text-text-muted">
+              Maximum query refinement iterations in multi-step mode (1-10)
+            </p>
             <input
               type="number"
               value={maxSteps}
@@ -630,17 +665,13 @@ export default function RagConfigPanel({
             className="flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary"
           >
             <svg
-              className={`h-3 w-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`}
+              className={`h-3 w-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M9 5l7 7-7 7"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
             Advanced Settings
           </button>
@@ -651,7 +682,9 @@ export default function RagConfigPanel({
                 <span className="mb-1 block text-xs text-text-secondary">
                   System Prompt (optional)
                 </span>
-                <p className="mt-0.5 text-xs text-text-muted">Custom instructions for the LLM (e.g., tone, format, domain constraints)</p>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  Custom instructions for the LLM (e.g., tone, format, domain constraints)
+                </p>
                 <textarea
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
@@ -663,14 +696,11 @@ export default function RagConfigPanel({
 
               {/* Reranker */}
               <div className="rounded-lg border border-border/50 bg-card/30 p-3">
-                <p className="mb-2 text-xs font-medium text-text-secondary">
-                  Reranker (optional)
-                </p>
+                <p className="mb-2 text-xs font-medium text-text-secondary">Reranker (optional)</p>
                 <p className="mb-2 text-xs text-text-muted">
-                  After initial retrieval, a cross-encoder reranker scores each
-                  (query, passage) pair directly for more accurate relevance
-                  ranking. This improves precision but adds latency. Models are
-                  loaded from{" "}
+                  After initial retrieval, a cross-encoder reranker scores each (query, passage)
+                  pair directly for more accurate relevance ranking. This improves precision but
+                  adds latency. Models are loaded from{' '}
                   <a
                     href="https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads&search=cross-encoder"
                     target="_blank"
@@ -682,11 +712,21 @@ export default function RagConfigPanel({
                   .
                 </p>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-text-secondary">
-                    Reranker Model
-                  </span>
+                  <span className="mb-1 block text-xs text-text-secondary">Reranker Model</span>
                   <p className="mt-0.5 text-xs text-text-muted">
-                    Common models: <code className="rounded bg-elevated px-1">cross-encoder/ms-marco-MiniLM-L-6-v2</code> (fast, good quality) | <code className="rounded bg-elevated px-1">cross-encoder/ms-marco-MiniLM-L-12-v2</code> (slower, better quality) | <code className="rounded bg-elevated px-1">BAAI/bge-reranker-base</code> | <code className="rounded bg-elevated px-1">BAAI/bge-reranker-large</code>
+                    Common models:{' '}
+                    <code className="rounded bg-elevated px-1">
+                      cross-encoder/ms-marco-MiniLM-L-6-v2
+                    </code>{' '}
+                    (fast, good quality) |{' '}
+                    <code className="rounded bg-elevated px-1">
+                      cross-encoder/ms-marco-MiniLM-L-12-v2
+                    </code>{' '}
+                    (slower, better quality) |{' '}
+                    <code className="rounded bg-elevated px-1">BAAI/bge-reranker-base</code> |{' '}
+                    <code className="rounded bg-elevated px-1">BAAI/bge-reranker-large</code> |{' '}
+                    <code className="rounded bg-elevated px-1">BAAI/bge-reranker-v2-m3</code>{' '}
+                    (multilingual, strongest)
                   </p>
                   <input
                     type="text"
@@ -698,40 +738,139 @@ export default function RagConfigPanel({
                 </label>
                 {rerankerModel.trim() && (
                   <label className="mt-2 block">
-                    <span className="mb-1 block text-xs text-text-secondary">
-                      Reranker Top K
-                    </span>
+                    <span className="mb-1 block text-xs text-text-secondary">Reranker Top K</span>
                     <p className="mt-0.5 text-xs text-text-muted">
-                      Number of results to keep after reranking (should be &le;
-                      retrieval Top K above)
+                      Number of results to keep after reranking (should be &le; retrieval Top K
+                      above)
                     </p>
                     <input
                       type="number"
                       value={rerankerTopK}
                       min={1}
                       max={50}
-                      onChange={(e) =>
-                        setRerankerTopK(parseInt(e.target.value) || 5)
-                      }
+                      onChange={(e) => setRerankerTopK(parseInt(e.target.value) || 5)}
                       className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
                     />
                   </label>
                 )}
               </div>
+
+              {/* Retrieval quality */}
+              <div className="rounded-lg border border-border/50 bg-card/30 p-3">
+                <p className="mb-2 text-xs font-medium text-text-secondary">
+                  Retrieval Quality (optional)
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-text-secondary">Query Expansion</span>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      multi_query: LLM rewrites the query N ways, results are rank-fused | hyde: LLM
+                      drafts a hypothetical answer and retrieval matches against it. Adds one LLM
+                      call per retrieval.
+                    </p>
+                    <select
+                      value={queryExpansion}
+                      onChange={(e) => setQueryExpansion(e.target.value)}
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                    >
+                      <option value="">None</option>
+                      <option value="multi_query">Multi-Query</option>
+                      <option value="hyde">HyDE</option>
+                    </select>
+                  </label>
+
+                  {queryExpansion === 'multi_query' && (
+                    <label className="block">
+                      <span className="mb-1 block text-xs text-text-secondary">Rewrites</span>
+                      <p className="mt-0.5 text-xs text-text-muted">
+                        Number of alternative phrasings (1-8)
+                      </p>
+                      <input
+                        type="number"
+                        value={numExpansions}
+                        min={1}
+                        max={8}
+                        onChange={(e) => setNumExpansions(parseInt(e.target.value) || 3)}
+                        className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-text-secondary">Score Threshold</span>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Drop retrieved chunks scoring below this instead of blindly keeping Top K
+                      (dense scores are 0-1; leave empty to disable)
+                    </p>
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={scoreThreshold}
+                      onChange={(e) => setScoreThreshold(e.target.value)}
+                      placeholder="e.g. 0.35"
+                      className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:border-border-focus focus:outline-none"
+                    />
+                  </label>
+
+                  <div className="block">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={mmrEnabled}
+                        onChange={(e) => setMmrEnabled(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-accent"
+                      />
+                      <span className="text-xs text-text-secondary">
+                        MMR Diversity {mmrEnabled ? `(λ=${mmrLambda.toFixed(2)})` : ''}
+                      </span>
+                    </label>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Over-fetch 3× then pick a diverse Top K — avoids near-duplicate chunks. λ=1
+                      pure relevance, λ=0 pure diversity.
+                    </p>
+                    {mmrEnabled && (
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={mmrLambda}
+                        onChange={(e) => setMmrLambda(parseFloat(e.target.value))}
+                        className="mt-1 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border accent-accent"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <label className="mt-3 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={kgExpansion}
+                    onChange={(e) => setKgExpansion(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-accent"
+                  />
+                  <span className="text-xs text-text-secondary">Knowledge-Graph Expansion</span>
+                </label>
+                <p className="mt-0.5 text-xs text-text-muted">
+                  Adds 1-hop KG neighbours of the retrieved chunks as extra candidates (needs a
+                  built knowledge graph; pair with a reranker so the extras get scored).
+                </p>
+              </div>
             </div>
           )}
         </div>
 
-        {formError && (
-          <p className="mt-3 text-xs text-score-low">{formError}</p>
-        )}
+        {formError && <p className="mt-3 text-xs text-score-low">{formError}</p>}
 
         <button
           onClick={handleSave}
           disabled={!canSave || saving}
           className="mt-4 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {saving ? "Saving..." : "Save Config"}
+          {saving ? 'Saving...' : 'Save Config'}
         </button>
       </div>
 

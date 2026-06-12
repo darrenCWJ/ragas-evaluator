@@ -18,8 +18,6 @@ import time
 import pytest
 import requests
 
-from evaluation.scoring import ALL_METRICS
-
 MAX_WAIT = 300  # 5 minutes
 POLL_INTERVAL = 5
 
@@ -40,6 +38,7 @@ _TEST_METRICS = [
     "context_entities_recall",   # ref_ctx
     "answer_accuracy",           # q_a_ref
     "instance_rubrics",          # q_a_rubrics_ctx
+    "refusal_accuracy",          # metadata_refusal
 ]
 
 _DETERMINISTIC = ["bleu_score", "rouge_score", "exact_match", "non_llm_string_similarity", "string_presence"]
@@ -241,7 +240,7 @@ class TestRAGPipelineExperiment:
             files={"file": ("rag.txt", _DOC_TEXT.encode(), "text/plain")},
         )
         assert resp.status_code == 201, resp.text
-        print(f"  doc uploaded")
+        print("  doc uploaded")
 
         # 3. Chunk config + generate
         resp = requests.post(
@@ -281,7 +280,7 @@ class TestRAGPipelineExperiment:
         )
         assert resp.status_code == 201, resp.text
         rcid = resp.json()["id"]
-        print(f"  rag config created")
+        print("  rag config created")
 
         # 6. Test set (insert manually — avoids slow async generation)
         conn = sqlite3.connect(db_path)
@@ -300,7 +299,7 @@ class TestRAGPipelineExperiment:
         )
         conn.commit()
         conn.close()
-        print(f"  test set created")
+        print("  test set created")
 
         # 7. Create experiment (RAG path)
         resp = requests.post(

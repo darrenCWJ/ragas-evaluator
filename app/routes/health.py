@@ -79,8 +79,10 @@ async def workers_status():
 async def clear_worker_personas(project_id: int):
     """Clear persona generation locks on workers AND the main app."""
     from app.routes.personas import (
-        _persona_worker, _persona_worker_lock,
-        _persona_tasks, _persona_task_lock,
+        _persona_task_lock,
+        _persona_tasks,
+        _persona_worker,
+        _persona_worker_lock,
     )
     cleared = False
     with _persona_worker_lock:

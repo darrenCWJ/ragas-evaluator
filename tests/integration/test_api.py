@@ -27,7 +27,6 @@ def test_db(tmp_path):
 async def client(test_db):
     """Create an async test client with patched database."""
     conn, db_path = test_db
-    import db.init as db_module
 
     # Patch get_db to return our test connection
     with patch("db.init.get_db", return_value=conn):
@@ -103,7 +102,7 @@ class TestProjectCRUD:
 
 class TestChunkConfigs:
     async def _create_project(self, client) -> int:
-        resp = await client.post("/api/projects", json={"name": f"ChunkProj"})
+        resp = await client.post("/api/projects", json={"name": "ChunkProj"})
         return resp.json()["id"]
 
     async def test_create_chunk_config(self, client):

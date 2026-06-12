@@ -1,5 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
-import { fetchBaselines, deleteBaseline, clearBaselines, type ExternalBaseline } from "../../lib/api";
+import { useState, useEffect, useCallback } from 'react';
+import {
+  fetchBaselines,
+  deleteBaseline,
+  clearBaselines,
+  type ExternalBaseline,
+} from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -23,7 +28,7 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
       const data = await fetchBaselines(projectId);
       setBaselines(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load baselines");
+      setError(err instanceof Error ? err.message : 'Failed to load baselines');
     } finally {
       setLoading(false);
     }
@@ -39,7 +44,7 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
       await deleteBaseline(projectId, id);
       setBaselines((prev) => prev.filter((b) => b.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
+      setError(err instanceof Error ? err.message : 'Failed to delete');
     } finally {
       setDeleting(null);
     }
@@ -52,7 +57,7 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
       setConfirmClear(false);
       setPage(0);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to clear");
+      setError(err instanceof Error ? err.message : 'Failed to clear');
     }
   }
 
@@ -63,11 +68,9 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-text-primary">
-            Baseline Data
-          </h3>
+          <h3 className="text-sm font-semibold text-text-primary">Baseline Data</h3>
           <p className="text-xs text-text-secondary">
-            {baselines.length} row{baselines.length !== 1 ? "s" : ""} imported
+            {baselines.length} row{baselines.length !== 1 ? 's' : ''} imported
           </p>
         </div>
 
@@ -102,8 +105,19 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
       {loading && (
         <div className="flex items-center gap-2 py-8 text-sm text-text-muted">
           <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
           </svg>
           Loading baselines...
         </div>
@@ -120,8 +134,18 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
 
       {!loading && !error && baselines.length === 0 && (
         <div className="rounded-xl border border-dashed border-border bg-surface/50 py-10 text-center">
-          <svg className="mx-auto mb-2 h-8 w-8 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+          <svg
+            className="mx-auto mb-2 h-8 w-8 text-text-muted"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={1.5}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+            />
           </svg>
           <p className="text-sm text-text-muted">No baselines imported yet.</p>
           <p className="mt-1 text-xs text-text-muted">
@@ -144,15 +168,27 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
               </thead>
               <tbody>
                 {visible.map((b) => (
-                  <tr key={b.id} className="border-b border-border last:border-0 hover:bg-surface/50">
-                    <td className="max-w-[200px] truncate px-3 py-2 text-text-primary" title={b.question}>
+                  <tr
+                    key={b.id}
+                    className="border-b border-border last:border-0 hover:bg-surface/50"
+                  >
+                    <td
+                      className="max-w-[200px] truncate px-3 py-2 text-text-primary"
+                      title={b.question}
+                    >
                       {b.question}
                     </td>
-                    <td className="max-w-[200px] truncate px-3 py-2 text-text-secondary" title={b.answer}>
+                    <td
+                      className="max-w-[200px] truncate px-3 py-2 text-text-secondary"
+                      title={b.answer}
+                    >
                       {b.answer}
                     </td>
-                    <td className="max-w-[150px] truncate px-3 py-2 text-text-muted" title={b.sources || "—"}>
-                      {b.sources || "—"}
+                    <td
+                      className="max-w-[150px] truncate px-3 py-2 text-text-muted"
+                      title={b.sources || '—'}
+                    >
+                      {b.sources || '—'}
                     </td>
                     <td className="px-3 py-2">
                       <button
@@ -161,8 +197,18 @@ export default function BaselinePreview({ projectId, refreshKey }: Props) {
                         className="text-text-muted transition-colors hover:text-score-low disabled:opacity-50"
                         title="Delete row"
                       >
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        <svg
+                          className="h-4 w-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
                         </svg>
                       </button>
                     </td>

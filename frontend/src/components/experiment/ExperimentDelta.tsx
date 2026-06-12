@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { fetchExperimentDelta, ApiError } from "../../lib/api";
-import type { DeltaResult } from "../../lib/api";
-import { humanizeMetric, scoreBarColor, scoreTextColor } from "./scoreUtils";
+import { useState, useEffect, useCallback } from 'react';
+import { fetchExperimentDelta, ApiError } from '../../lib/api';
+import type { DeltaResult } from '../../lib/api';
+import { humanizeMetric, scoreBarColor, scoreTextColor } from './scoreUtils';
 
 interface Props {
   projectId: number;
@@ -9,26 +9,26 @@ interface Props {
 }
 
 type LoadState =
-  | { status: "loading" }
-  | { status: "no-baseline" }
-  | { status: "error"; message: string }
-  | { status: "loaded"; data: DeltaResult };
+  | { status: 'loading' }
+  | { status: 'no-baseline' }
+  | { status: 'error'; message: string }
+  | { status: 'loaded'; data: DeltaResult };
 
 export default function ExperimentDelta({ projectId, experimentId }: Props) {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [state, setState] = useState<LoadState>({ status: 'loading' });
 
   const load = useCallback(async () => {
-    setState({ status: "loading" });
+    setState({ status: 'loading' });
     try {
       const data = await fetchExperimentDelta(projectId, experimentId);
-      setState({ status: "loaded", data });
+      setState({ status: 'loaded', data });
     } catch (err) {
       if ((err as ApiError).status === 404) {
-        setState({ status: "no-baseline" });
+        setState({ status: 'no-baseline' });
       } else {
         setState({
-          status: "error",
-          message: (err as Error).message || "Failed to load delta",
+          status: 'error',
+          message: (err as Error).message || 'Failed to load delta',
         });
       }
     }
@@ -39,7 +39,7 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
   }, [load]);
 
   /* ── Loading ── */
-  if (state.status === "loading") {
+  if (state.status === 'loading') {
     return (
       <div className="space-y-3">
         <div className="h-5 w-48 animate-pulse rounded-lg bg-elevated" />
@@ -49,7 +49,7 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
   }
 
   /* ── No baseline (info, not error) ── */
-  if (state.status === "no-baseline") {
+  if (state.status === 'no-baseline') {
     return (
       <div className="space-y-2">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-text-primary">
@@ -57,8 +57,7 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
         </h3>
         <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 px-5 py-4">
           <p className="text-sm text-blue-300/80">
-            This experiment is not an iteration — no baseline to compare
-            against.
+            This experiment is not an iteration — no baseline to compare against.
           </p>
         </div>
       </div>
@@ -66,12 +65,10 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
   }
 
   /* ── Error ── */
-  if (state.status === "error") {
+  if (state.status === 'error') {
     return (
       <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-center">
-        <p className="text-sm font-medium text-red-300">
-          Failed to load delta
-        </p>
+        <p className="text-sm font-medium text-red-300">Failed to load delta</p>
         <p className="mt-1 text-xs text-red-300/70">{state.message}</p>
         <button
           onClick={load}
@@ -90,10 +87,7 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
     <div className="space-y-5">
       {/* Header */}
       <h3 className="text-sm font-semibold uppercase tracking-wide text-text-primary">
-        Delta vs{" "}
-        <span className="normal-case text-accent">
-          {data.baseline_experiment_name}
-        </span>
+        Delta vs <span className="normal-case text-accent">{data.baseline_experiment_name}</span>
       </h3>
 
       {/* Config changes */}
@@ -104,15 +98,9 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border bg-elevated/50">
-                <th className="px-3 py-2 text-left font-medium text-text-secondary">
-                  Field
-                </th>
-                <th className="px-3 py-2 text-left font-medium text-text-secondary">
-                  Baseline
-                </th>
-                <th className="px-3 py-2 text-left font-medium text-text-secondary">
-                  Iteration
-                </th>
+                <th className="px-3 py-2 text-left font-medium text-text-secondary">Field</th>
+                <th className="px-3 py-2 text-left font-medium text-text-secondary">Baseline</th>
+                <th className="px-3 py-2 text-left font-medium text-text-secondary">Iteration</th>
               </tr>
             </thead>
             <tbody>
@@ -122,11 +110,9 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
                     {humanizeMetric(c.field)}
                   </td>
                   <td className="px-3 py-2 font-mono text-text-muted">
-                    {String(c.old_value ?? "—")}
+                    {String(c.old_value ?? '—')}
                   </td>
-                  <td className="px-3 py-2 font-mono text-accent">
-                    {String(c.new_value ?? "—")}
-                  </td>
+                  <td className="px-3 py-2 font-mono text-accent">{String(c.new_value ?? '—')}</td>
                 </tr>
               ))}
             </tbody>
@@ -144,32 +130,28 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
             {metricEntries.map(([name, md]) => (
               <div key={name} className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-text-secondary">
-                    {humanizeMetric(name)}
-                  </span>
+                  <span className="font-medium text-text-secondary">{humanizeMetric(name)}</span>
                   <span className="flex items-center gap-2">
                     {md.baseline !== null && (
-                      <span className="text-text-muted">
-                        {(md.baseline * 100).toFixed(0)}
-                      </span>
+                      <span className="text-text-muted">{(md.baseline * 100).toFixed(0)}</span>
                     )}
                     <span className="text-text-muted">→</span>
                     {md.iteration !== null && (
                       <span
-                        className={`font-semibold ${md.iteration !== null ? scoreTextColor(md.iteration) : ""}`}
+                        className={`font-semibold ${md.iteration !== null ? scoreTextColor(md.iteration) : ''}`}
                       >
                         {(md.iteration * 100).toFixed(0)}
                       </span>
                     )}
                     {md.delta !== null && (
                       <span
-                        className={`font-mono text-micro font-bold ${md.improved === true ? "text-emerald-400" : md.improved === false ? "text-red-400" : "text-text-muted"}`}
+                        className={`font-mono text-micro font-bold ${md.improved === true ? 'text-emerald-400' : md.improved === false ? 'text-red-400' : 'text-text-muted'}`}
                       >
                         {md.improved === true
                           ? `↑+${(md.delta * 100).toFixed(1)}`
                           : md.improved === false
                             ? `↓${(md.delta * 100).toFixed(1)}`
-                            : "—"}
+                            : '—'}
                       </span>
                     )}
                   </span>
@@ -222,19 +204,15 @@ export default function ExperimentDelta({ projectId, experimentId }: Props) {
 
 /* ── Per-question expandable row ── */
 
-import type { QuestionDelta as QD } from "../../lib/api";
+import type { QuestionDelta as QD } from '../../lib/api';
 
 function QuestionDeltaRow({ q }: { q: QD }) {
   const [expanded, setExpanded] = useState(false);
 
   const metricEntries = Object.entries(q.metrics);
   // Average delta for overall indicator
-  const deltas = metricEntries
-    .map(([, m]) => m.delta)
-    .filter((d): d is number => d !== null);
-  const avgDelta = deltas.length > 0
-    ? deltas.reduce((a, b) => a + b, 0) / deltas.length
-    : null;
+  const deltas = metricEntries.map(([, m]) => m.delta).filter((d): d is number => d !== null);
+  const avgDelta = deltas.length > 0 ? deltas.reduce((a, b) => a + b, 0) / deltas.length : null;
 
   return (
     <div className="rounded-lg border border-border/50 bg-elevated/30">
@@ -244,7 +222,7 @@ function QuestionDeltaRow({ q }: { q: QD }) {
         aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
+          if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             setExpanded(!expanded);
           }
@@ -252,30 +230,26 @@ function QuestionDeltaRow({ q }: { q: QD }) {
         className="flex cursor-pointer items-center gap-3 px-3 py-2 text-xs hover:bg-elevated/50"
       >
         <svg
-          className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+          className={`h-3 w-3 shrink-0 text-text-muted transition-transform ${expanded ? 'rotate-90' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
           strokeWidth={2}
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M8.25 4.5l7.5 7.5-7.5 7.5"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
         </svg>
         <span className="min-w-0 flex-1 truncate text-text-primary">
           {q.question ?? `Question #${q.test_question_id}`}
         </span>
         {avgDelta !== null && (
           <span
-            className={`shrink-0 font-mono text-micro font-bold ${avgDelta > 0 ? "text-emerald-400" : avgDelta < 0 ? "text-red-400" : "text-text-muted"}`}
+            className={`shrink-0 font-mono text-micro font-bold ${avgDelta > 0 ? 'text-emerald-400' : avgDelta < 0 ? 'text-red-400' : 'text-text-muted'}`}
           >
             {avgDelta > 0
               ? `↑+${(avgDelta * 100).toFixed(1)}`
               : avgDelta < 0
                 ? `↓${(avgDelta * 100).toFixed(1)}`
-                : "—"}
+                : '—'}
           </span>
         )}
       </div>
@@ -284,32 +258,21 @@ function QuestionDeltaRow({ q }: { q: QD }) {
         <div className="border-t border-border/30 px-3 py-2">
           <div className="space-y-1.5">
             {metricEntries.map(([name, m]) => (
-              <div
-                key={name}
-                className="flex items-center justify-between text-micro"
-              >
-                <span className="text-text-muted">
-                  {humanizeMetric(name)}
-                </span>
+              <div key={name} className="flex items-center justify-between text-micro">
+                <span className="text-text-muted">{humanizeMetric(name)}</span>
                 <span className="flex items-center gap-2">
                   <span className="text-text-muted">
-                    {m.baseline !== null
-                      ? (m.baseline * 100).toFixed(0)
-                      : "—"}
+                    {m.baseline !== null ? (m.baseline * 100).toFixed(0) : '—'}
                   </span>
                   <span className="text-text-muted">→</span>
                   <span className="text-text-primary">
-                    {m.iteration !== null
-                      ? (m.iteration * 100).toFixed(0)
-                      : "—"}
+                    {m.iteration !== null ? (m.iteration * 100).toFixed(0) : '—'}
                   </span>
                   {m.delta !== null && (
                     <span
-                      className={`font-mono font-bold ${m.delta > 0 ? "text-emerald-400" : m.delta < 0 ? "text-red-400" : "text-text-muted"}`}
+                      className={`font-mono font-bold ${m.delta > 0 ? 'text-emerald-400' : m.delta < 0 ? 'text-red-400' : 'text-text-muted'}`}
                     >
-                      {m.delta > 0
-                        ? `+${(m.delta * 100).toFixed(1)}`
-                        : (m.delta * 100).toFixed(1)}
+                      {m.delta > 0 ? `+${(m.delta * 100).toFixed(1)}` : (m.delta * 100).toFixed(1)}
                     </span>
                   )}
                 </span>

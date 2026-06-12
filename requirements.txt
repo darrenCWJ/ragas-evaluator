@@ -24,3 +24,5 @@ rouge_score>=0.1.2
 networkx>=3.0
 psycopg2-binary>=2.9.0
 rapidfuzz>=3.0.0
+argon2-cffi>=23.1.0
+itsdangerous>=2.1.0

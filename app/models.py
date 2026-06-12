@@ -4,23 +4,16 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
-_LLM_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:\-/]{0,127}$")
-
 from config import (
-    ALLOWED_FILE_TYPES,
-    DEFAULT_EXPERIMENT_METRICS,
-    MAX_BASELINE_CSV_SIZE,
-    MAX_BASELINE_ROWS,
-    MAX_CHUNKS_FOR_GENERATION,
-    MAX_UPLOAD_QA_ROWS,
-    MAX_UPLOAD_SIZE,
     VALID_CHUNK_METHODS,
     VALID_CONNECTOR_TYPES,
     VALID_EMBEDDING_TYPES,
+    VALID_QUERY_EXPANSION,
     VALID_RESPONSE_MODES,
     VALID_SEARCH_TYPES,
 )
 
+_LLM_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:\-/]{0,127}$")
 
 # --- Validation sets ---
 
@@ -257,6 +250,34 @@ class RagConfigCreate(BaseModel):
     max_steps: int = 3
     reranker_model: str | None = None
     reranker_top_k: int | None = None
+    query_expansion: str | None = None
+    num_expansions: int | None = None
+    score_threshold: float | None = None
+    mmr_lambda: float | None = None
+    kg_expansion: bool = False
+
+    @field_validator("query_expansion")
+    @classmethod
+    def validate_query_expansion(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_QUERY_EXPANSION:
+            raise ValueError(
+                f"query_expansion must be one of: {', '.join(sorted(VALID_QUERY_EXPANSION))}"
+            )
+        return v
+
+    @field_validator("num_expansions")
+    @classmethod
+    def validate_num_expansions(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > 8):
+            raise ValueError("num_expansions must be between 1 and 8")
+        return v
+
+    @field_validator("mmr_lambda")
+    @classmethod
+    def validate_mmr_lambda(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0.0 or v > 1.0):
+            raise ValueError("mmr_lambda must be between 0.0 and 1.0")
+        return v
 
     @field_validator("llm_model")
     @classmethod
@@ -332,6 +353,11 @@ class RagConfigUpdate(BaseModel):
     max_steps: int | None = None
     reranker_model: str | None = None
     reranker_top_k: int | None = None
+    query_expansion: str | None = None
+    num_expansions: int | None = None
+    score_threshold: float | None = None
+    mmr_lambda: float | None = None
+    kg_expansion: bool | None = None
 
     @field_validator("search_type")
     @classmethod
@@ -340,6 +366,29 @@ class RagConfigUpdate(BaseModel):
             raise ValueError(
                 f"search_type must be one of: {', '.join(sorted(VALID_SEARCH_TYPES))}"
             )
+        return v
+
+    @field_validator("query_expansion")
+    @classmethod
+    def validate_query_expansion(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_QUERY_EXPANSION:
+            raise ValueError(
+                f"query_expansion must be one of: {', '.join(sorted(VALID_QUERY_EXPANSION))}"
+            )
+        return v
+
+    @field_validator("num_expansions")
+    @classmethod
+    def validate_num_expansions(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > 8):
+            raise ValueError("num_expansions must be between 1 and 8")
+        return v
+
+    @field_validator("mmr_lambda")
+    @classmethod
+    def validate_mmr_lambda(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0.0 or v > 1.0):
+            raise ValueError("mmr_lambda must be between 0.0 and 1.0")
         return v
 
     @field_validator("response_mode")
@@ -406,6 +455,73 @@ class ExperimentCreate(BaseModel):
             raise ValueError("Either rag_config_id or bot_config_id must be provided")
         if self.rag_config_id is not None and self.bot_config_id is not None:
             raise ValueError("Provide rag_config_id or bot_config_id, not both")
+
+
+SWEEPABLE_FIELDS = {
+    "top_k",
+    "alpha",
+    "score_threshold",
+    "mmr_lambda",
+    "query_expansion",
+    "num_expansions",
+    "reranker_model",
+    "reranker_top_k",
+    "kg_expansion",
+    "llm_model",
+}
+
+MAX_SWEEP_COMBINATIONS = 36
+
+
+class SweepCreate(BaseModel):
+    """Parameter sweep: a grid of retrieval-parameter values, one experiment
+    per combination, run sequentially with (by default) judge-free metrics."""
+
+    name: str
+    test_set_id: int
+    rag_config_id: int
+    grid: dict[str, list]
+    metrics: list[str] | None = None
+    concurrency: int = 3
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+    @field_validator("grid")
+    @classmethod
+    def validate_grid(cls, v: dict[str, list]) -> dict[str, list]:
+        if not v:
+            raise ValueError("grid must contain at least one parameter")
+        unknown = set(v.keys()) - SWEEPABLE_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Unsweepable fields: {', '.join(sorted(unknown))}. "
+                f"Sweepable: {', '.join(sorted(SWEEPABLE_FIELDS))}"
+            )
+        combos = 1
+        for key, values in v.items():
+            if not isinstance(values, list) or not values:
+                raise ValueError(f"grid['{key}'] must be a non-empty list of values")
+            combos *= len(values)
+        if combos > MAX_SWEEP_COMBINATIONS:
+            raise ValueError(
+                f"Grid expands to {combos} combinations — the limit is {MAX_SWEEP_COMBINATIONS}"
+            )
+        return v
+
+    @field_validator("concurrency")
+    @classmethod
+    def validate_sweep_concurrency(cls, v: int) -> int:
+        if v < 1 or v > 10:
+            raise ValueError("concurrency must be between 1 and 10")
+        return v
 
 
 class ExperimentRunRequest(BaseModel):
@@ -595,6 +711,121 @@ class HumanAnnotationCreate(BaseModel):
         return v
 
 
+class ScheduleCreate(BaseModel):
+    """Recurring regression run against an external agent."""
+
+    name: str
+    bot_config_id: int
+    test_set_id: int
+    interval_minutes: int
+    metrics: list[str] | None = None
+    alert_drop_threshold: float = 0.1
+    webhook_url: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_schedule_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        if len(v) > 200:
+            raise ValueError("name must not exceed 200 characters")
+        return v
+
+    @field_validator("interval_minutes")
+    @classmethod
+    def validate_interval(cls, v: int) -> int:
+        if v < 15 or v > 60 * 24 * 7:
+            raise ValueError("interval_minutes must be between 15 minutes and 7 days")
+        return v
+
+    @field_validator("alert_drop_threshold")
+    @classmethod
+    def validate_threshold(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError("alert_drop_threshold must be between 0.0 and 1.0")
+        return v
+
+
+class ScheduleUpdate(BaseModel):
+    name: str | None = None
+    interval_minutes: int | None = None
+    metrics: list[str] | None = None
+    alert_drop_threshold: float | None = None
+    webhook_url: str | None = None
+    enabled: bool | None = None
+
+    @field_validator("interval_minutes")
+    @classmethod
+    def validate_interval(cls, v: int | None) -> int | None:
+        if v is not None and (v < 15 or v > 60 * 24 * 7):
+            raise ValueError("interval_minutes must be between 15 minutes and 7 days")
+        return v
+
+    @field_validator("alert_drop_threshold")
+    @classmethod
+    def validate_threshold(cls, v: float | None) -> float | None:
+        if v is not None and (v < 0.0 or v > 1.0):
+            raise ValueError("alert_drop_threshold must be between 0.0 and 1.0")
+        return v
+
+
+class HardCaseMineRequest(BaseModel):
+    """Mine harder variants of an experiment's worst-scoring questions."""
+
+    threshold: float = 0.5
+    variants_per_question: int = 2
+    max_questions: int = 20
+    model: str | None = None
+
+    @field_validator("threshold")
+    @classmethod
+    def validate_mine_threshold(cls, v: float) -> float:
+        if v <= 0.0 or v > 1.0:
+            raise ValueError("threshold must be in (0.0, 1.0]")
+        return v
+
+    @field_validator("variants_per_question")
+    @classmethod
+    def validate_variants(cls, v: int) -> int:
+        if v < 1 or v > 5:
+            raise ValueError("variants_per_question must be between 1 and 5")
+        return v
+
+    @field_validator("max_questions")
+    @classmethod
+    def validate_max_questions(cls, v: int) -> int:
+        if v < 1 or v > 50:
+            raise ValueError("max_questions must be between 1 and 50")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_mine_model(cls, v: str | None) -> str | None:
+        if v is not None and not _LLM_MODEL_RE.match(v):
+            raise ValueError(f"invalid model id: {v!r}")
+        return v
+
+
+class JudgeCalibrationApply(BaseModel):
+    """Explicit judge panel, or empty to apply the calibration recommendation."""
+
+    models: list[str] | None = None
+
+    @field_validator("models")
+    @classmethod
+    def validate_models(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None:
+            if not v:
+                raise ValueError("models must not be an empty list (omit it instead)")
+            if len(v) > 10:
+                raise ValueError("at most 10 judge assignments")
+            for m in v:
+                if not _LLM_MODEL_RE.match(m):
+                    raise ValueError(f"invalid judge model id: {m!r}")
+        return v
+
+
 class HumanAnnotationBatch(BaseModel):
     annotations: list[HumanAnnotationCreate]
 
@@ -628,4 +859,60 @@ class BotConfigUpdate(BaseModel):
             raise ValueError(
                 f"connector_type must be one of: {', '.join(sorted(VALID_CONNECTOR_TYPES))}"
             )
+        return v
+
+
+# --- Skill Arena ---
+
+
+class SkillCreate(BaseModel):
+    """Upload/paste a skill file (SKILL.md-style instruction document)."""
+
+    content: str = Field(min_length=20, max_length=200_000)
+    name: str | None = Field(default=None, max_length=120)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must not be empty")
+        return v
+
+
+class SkillTrialCreate(BaseModel):
+    """Run a skill across selected AI models against an approved test set."""
+
+    name: str = Field(min_length=1, max_length=200)
+    skill_id: int
+    test_set_id: int
+    models: list[dict] = Field(min_length=1, max_length=10)
+    include_baseline: bool = True
+
+    @field_validator("models")
+    @classmethod
+    def validate_models(cls, specs: list[dict]) -> list[dict]:
+        for spec in specs:
+            kind = spec.get("kind")
+            if kind == "llm":
+                model = spec.get("model", "")
+                if not isinstance(model, str) or not _LLM_MODEL_RE.match(model):
+                    raise ValueError(f"invalid llm model id: {model!r}")
+            elif kind == "bot":
+                if not isinstance(spec.get("bot_config_id"), int):
+                    raise ValueError("bot entries require an integer bot_config_id")
+            else:
+                raise ValueError("each model entry needs kind 'llm' or 'bot'")
+        return specs
+
+
+class ApplyModelRequest(BaseModel):
+    """Set a trial-winning model as the project's preferred model."""
+
+    model: str = Field(min_length=1, max_length=128)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError("invalid model id")
         return v

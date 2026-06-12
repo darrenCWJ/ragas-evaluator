@@ -5,11 +5,11 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from app.models import CustomMetricCreate, RefinementRequest
-from evaluation.scoring import ALL_METRICS
 import db.init
-from pipeline.llm import chat_completion
+from app.models import CustomMetricCreate, RefinementRequest
 from config import DEFAULT_EVAL_MODEL
+from evaluation.scoring import ALL_METRICS
+from pipeline.llm import chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def refine_metric_description(project_id: int, req: RefinementRequest):
         refined = result["content"].strip()
     except Exception as e:
         logger.error("Failed to refine metric description: %s", e)
-        raise HTTPException(status_code=502, detail="Failed to refine description via LLM")
+        raise HTTPException(status_code=502, detail="Failed to refine description via LLM") from e
 
     return {"refined_prompt": refined}
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from 'react';
 import {
   fetchSuggestions,
   generateSuggestions,
@@ -6,13 +6,19 @@ import {
   fetchChunkConfigs,
   fetchEmbeddingConfigs,
   ApiError,
-} from "../../lib/api";
+} from '../../lib/api';
 import type {
   Suggestion,
+  SuggestionOutcome,
+  SuggestionOutcomeMetric,
   BatchApplyResult,
   ChunkConfig,
   EmbeddingConfig,
-} from "../../lib/api";
+} from '../../lib/api';
+import PromptDoctorPanel from './PromptDoctorPanel';
+import CopyButton from '../ui/CopyButton';
+import TextArea from '../ui/TextArea';
+import { humanizeMetric } from './scoreUtils';
 
 interface Props {
   projectId: number;
@@ -21,64 +27,62 @@ interface Props {
 }
 
 type LoadState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "loaded"; suggestions: Suggestion[] };
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'loaded'; suggestions: Suggestion[] };
 
-const PRIORITY_STYLES: Record<
-  string,
-  { bg: string; text: string; label: string }
-> = {
+const PRIORITY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   high: {
-    bg: "bg-red-500/15",
-    text: "text-red-400",
-    label: "High",
+    bg: 'bg-red-500/15',
+    text: 'text-red-400',
+    label: 'High',
   },
   medium: {
-    bg: "bg-amber-500/15",
-    text: "text-amber-400",
-    label: "Medium",
+    bg: 'bg-amber-500/15',
+    text: 'text-amber-400',
+    label: 'Medium',
   },
   low: {
-    bg: "bg-emerald-500/15",
-    text: "text-emerald-400",
-    label: "Low",
+    bg: 'bg-emerald-500/15',
+    text: 'text-emerald-400',
+    label: 'Low',
   },
 };
 
-const CATEGORY_ORDER = ["retrieval", "generation", "embedding", "chunking"];
+const CATEGORY_ORDER = ['retrieval', 'generation', 'embedding', 'chunking'];
 
 /** Fields that need a dropdown instead of text input */
-const CONFIG_ID_FIELDS = new Set(["chunk_config_id", "embedding_config_id"]);
+const CONFIG_ID_FIELDS = new Set(['chunk_config_id', 'embedding_config_id']);
 
 /** Fields with fixed enum options */
 const ENUM_FIELD_OPTIONS: Record<string, { value: string; label: string }[]> = {
   response_mode: [
-    { value: "single_shot", label: "Single Shot" },
-    { value: "multi_step", label: "Multi Step" },
+    { value: 'single_shot', label: 'Single Shot' },
+    { value: 'multi_step', label: 'Multi Step' },
   ],
   search_type: [
-    { value: "dense", label: "Dense" },
-    { value: "sparse", label: "Sparse" },
-    { value: "hybrid", label: "Hybrid" },
+    { value: 'dense', label: 'Dense' },
+    { value: 'sparse', label: 'Sparse' },
+    { value: 'hybrid', label: 'Hybrid' },
   ],
 };
 
-const DROPDOWN_FIELDS = new Set([
-  ...CONFIG_ID_FIELDS,
-  ...Object.keys(ENUM_FIELD_OPTIONS),
-]);
+const DROPDOWN_FIELDS = new Set([...CONFIG_ID_FIELDS, ...Object.keys(ENUM_FIELD_OPTIONS)]);
+
+/** Fields whose suggested_value is multi-line prompt text */
+const PROMPT_FIELDS = new Set(['system_prompt', 'system_prompt_append']);
 
 /** Friendly display names for raw config field names */
 const FIELD_LABELS: Record<string, string> = {
-  chunk_config_id: "Chunking Config",
-  embedding_config_id: "Embedding Config",
-  top_k: "Top K",
-  alpha: "Alpha",
-  max_steps: "Max Steps",
-  search_type: "Search Type",
-  response_mode: "Response Mode",
-  system_prompt: "System Prompt",
+  chunk_config_id: 'Chunking Config',
+  embedding_config_id: 'Embedding Config',
+  top_k: 'Top K',
+  alpha: 'Alpha',
+  max_steps: 'Max Steps',
+  search_type: 'Search Type',
+  response_mode: 'Response Mode',
+  system_prompt: 'System Prompt',
+  system_prompt_append: 'System Prompt (append)',
 };
 
 function categoryLabel(cat: string): string {
@@ -90,14 +94,12 @@ export default function ExperimentSuggestions({
   experimentId,
   onExperimentCreated,
 }: Props) {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [generating, setGenerating] = useState(false);
 
   // Config options for dropdowns
   const [chunkConfigs, setChunkConfigs] = useState<ChunkConfig[]>([]);
-  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>(
-    [],
-  );
+  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>([]);
 
   // Batch apply state
   const [overrides, setOverrides] = useState<Record<number, string>>({});
@@ -107,23 +109,41 @@ export default function ExperimentSuggestions({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setState({ status: "loading" });
+    setState({ status: 'loading' });
     try {
       const suggestions = await fetchSuggestions(projectId, experimentId);
-      setState({ status: "loaded", suggestions });
+      setState({ status: 'loaded', suggestions });
     } catch (err) {
       setState({
-        status: "error",
-        message: (err as Error).message || "Failed to load suggestions",
+        status: 'error',
+        message: (err as Error).message || 'Failed to load suggestions',
       });
+    }
+  }, [projectId, experimentId]);
+
+  /**
+   * Refresh the list without flashing the loading skeleton — used after the
+   * prompt doctor inserts new rows. Keeps the current list on failure so the
+   * doctor's result panel isn't replaced by an error state.
+   */
+  const refreshSilently = useCallback(async () => {
+    try {
+      const suggestions = await fetchSuggestions(projectId, experimentId);
+      setState({ status: 'loaded', suggestions });
+    } catch {
+      // Non-critical: the doctor already reported success; keep current list
     }
   }, [projectId, experimentId]);
 
   // Load suggestions and config options
   useEffect(() => {
     load();
-    fetchChunkConfigs(projectId).then(setChunkConfigs).catch(() => {});
-    fetchEmbeddingConfigs(projectId).then(setEmbeddingConfigs).catch(() => {});
+    fetchChunkConfigs(projectId)
+      .then(setChunkConfigs)
+      .catch(() => {});
+    fetchEmbeddingConfigs(projectId)
+      .then(setEmbeddingConfigs)
+      .catch(() => {});
   }, [load, projectId]);
 
   // Reset batch state on experiment change
@@ -140,13 +160,13 @@ export default function ExperimentSuggestions({
     setApplyError(null);
     try {
       const result = await generateSuggestions(projectId, experimentId);
-      setState({ status: "loaded", suggestions: result.suggestions });
+      setState({ status: 'loaded', suggestions: result.suggestions });
       setOverrides({});
       setStaged(new Set());
     } catch (err) {
       setState({
-        status: "error",
-        message: (err as Error).message || "Failed to generate suggestions",
+        status: 'error',
+        message: (err as Error).message || 'Failed to generate suggestions',
       });
     } finally {
       setGenerating(false);
@@ -167,7 +187,7 @@ export default function ExperimentSuggestions({
   };
 
   const handleBatchApply = async () => {
-    if (state.status !== "loaded" || staged.size === 0) return;
+    if (state.status !== 'loaded' || staged.size === 0) return;
 
     // Validate that dropdown fields have a selection
     for (const s of state.suggestions) {
@@ -191,33 +211,27 @@ export default function ExperimentSuggestions({
         suggestion_id: id,
         override_value: overrides[id]?.trim() || undefined,
       }));
-      const result: BatchApplyResult = await applySuggestionsBatch(
-        projectId,
-        experimentId,
-        items,
-      );
+      const result: BatchApplyResult = await applySuggestionsBatch(projectId, experimentId, items);
       const appliedIds = new Set(result.suggestions.map((s) => s.id));
       setState({
-        status: "loaded",
+        status: 'loaded',
         suggestions: state.suggestions.map((s) =>
           appliedIds.has(s.id) ? { ...s, implemented: true } : s,
         ),
       });
       setStaged(new Set());
-      setSuccessMsg(
-        `Created iteration experiment: ${result.new_experiment.name}`,
-      );
+      setSuccessMsg(`Created iteration experiment: ${result.new_experiment.name}`);
       onExperimentCreated?.();
     } catch (err) {
       const apiErr = err as ApiError;
-      setApplyError(apiErr.message || "Failed to apply suggestions");
+      setApplyError(apiErr.message || 'Failed to apply suggestions');
     } finally {
       setApplying(false);
     }
   };
 
   /* ── Loading ── */
-  if (state.status === "loading") {
+  if (state.status === 'loading') {
     return (
       <div className="space-y-3">
         <div className="h-5 w-40 animate-pulse rounded-lg bg-elevated" />
@@ -229,12 +243,10 @@ export default function ExperimentSuggestions({
   }
 
   /* ── Error ── */
-  if (state.status === "error") {
+  if (state.status === 'error') {
     return (
       <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-center">
-        <p className="text-sm font-medium text-red-300">
-          Failed to load suggestions
-        </p>
+        <p className="text-sm font-medium text-red-300">Failed to load suggestions</p>
         <p className="mt-1 text-xs text-red-300/70">{state.message}</p>
         <button
           onClick={load}
@@ -248,9 +260,7 @@ export default function ExperimentSuggestions({
 
   const { suggestions } = state;
 
-  const actionable = suggestions.filter(
-    (s) => s.config_field && !s.implemented,
-  );
+  const actionable = suggestions.filter((s) => s.config_field && !s.implemented);
 
   /* Group by category */
   const grouped = new Map<string, Suggestion[]>();
@@ -277,23 +287,28 @@ export default function ExperimentSuggestions({
             disabled={generating}
             className="rounded-lg border border-border/60 px-3 py-1 text-xs font-medium text-text-secondary transition hover:bg-elevated disabled:opacity-40"
           >
-            {generating ? "Regenerating..." : "Regenerate"}
+            {generating ? 'Regenerating...' : 'Regenerate'}
           </button>
         ) : null}
       </div>
 
+      {/* Prompt doctor */}
+      <PromptDoctorPanel
+        projectId={projectId}
+        experimentId={experimentId}
+        onSuggestionsCreated={refreshSilently}
+      />
+
       {/* Empty — no suggestions */}
       {suggestions.length === 0 && !generating && (
         <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
-          <p className="text-sm text-text-muted">
-            No suggestions yet for this experiment.
-          </p>
+          <p className="text-sm text-text-muted">No suggestions yet for this experiment.</p>
           <button
             onClick={handleGenerate}
             disabled={generating}
             className="mt-4 rounded-lg bg-accent/15 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/25 disabled:opacity-40"
           >
-            {generating ? "Generating..." : "Generate Suggestions"}
+            {generating ? 'Generating...' : 'Generate Suggestions'}
           </button>
         </div>
       )}
@@ -302,9 +317,7 @@ export default function ExperimentSuggestions({
       {generating && suggestions.length === 0 && (
         <div className="flex items-center justify-center gap-2 py-8">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <span className="text-sm text-text-secondary">
-            Analyzing metrics...
-          </span>
+          <span className="text-sm text-text-secondary">Analyzing metrics...</span>
         </div>
       )}
 
@@ -312,9 +325,7 @@ export default function ExperimentSuggestions({
       {successMsg && (
         <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
           {successMsg}
-          <span className="ml-1 text-emerald-300/60">
-            (switch to Experiment page to run it)
-          </span>
+          <span className="ml-1 text-emerald-300/60">(switch to Experiment page to run it)</span>
         </div>
       )}
 
@@ -343,7 +354,7 @@ export default function ExperimentSuggestions({
                 key={s.id}
                 suggestion={s}
                 isStaged={staged.has(s.id)}
-                overrideValue={overrides[s.id] ?? ""}
+                overrideValue={overrides[s.id] ?? ''}
                 onToggleStaged={() => toggleStaged(s.id)}
                 onOverrideChange={(v) => setOverride(s.id, v)}
                 chunkConfigs={chunkConfigs}
@@ -359,14 +370,12 @@ export default function ExperimentSuggestions({
         <div className="sticky bottom-0 flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3">
           <span className="text-xs text-text-secondary">
             {staged.size} of {actionable.length} suggestion
-            {actionable.length !== 1 ? "s" : ""} selected
+            {actionable.length !== 1 ? 's' : ''} selected
           </span>
           <div className="flex items-center gap-2">
             {staged.size > 0 && staged.size < actionable.length && (
               <button
-                onClick={() =>
-                  setStaged(new Set(actionable.map((s) => s.id)))
-                }
+                onClick={() => setStaged(new Set(actionable.map((s) => s.id)))}
                 className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition hover:bg-elevated"
               >
                 Select All
@@ -391,7 +400,7 @@ export default function ExperimentSuggestions({
                   Applying...
                 </span>
               ) : (
-                `Apply ${staged.size} Change${staged.size !== 1 ? "s" : ""}`
+                `Apply ${staged.size} Change${staged.size !== 1 ? 's' : ''}`
               )}
             </button>
           </div>
@@ -422,22 +431,26 @@ function SuggestionCard({
   chunkConfigs,
   embeddingConfigs,
 }: CardProps) {
-  const priority = PRIORITY_STYLES[s.priority] ?? PRIORITY_STYLES["low"]!;
+  const priority = PRIORITY_STYLES[s.priority] ?? PRIORITY_STYLES['low']!;
   const isActionable = s.config_field && !s.implemented;
   const hasDropdown = s.config_field && DROPDOWN_FIELDS.has(s.config_field);
+  const isPromptField = s.config_field !== null && PROMPT_FIELDS.has(s.config_field);
 
   // Build dropdown options
   const dropdownOptions: { value: string; label: string }[] =
-    s.config_field === "chunk_config_id"
+    s.config_field === 'chunk_config_id'
       ? chunkConfigs.map((c) => ({ value: String(c.id), label: `${c.name} (${c.method})` }))
-      : s.config_field === "embedding_config_id"
-        ? embeddingConfigs.map((c) => ({ value: String(c.id), label: `${c.name} (${c.model_name})` }))
-        : (s.config_field ? ENUM_FIELD_OPTIONS[s.config_field] : undefined) ?? [];
+      : s.config_field === 'embedding_config_id'
+        ? embeddingConfigs.map((c) => ({
+            value: String(c.id),
+            label: `${c.name} (${c.model_name})`,
+          }))
+        : ((s.config_field ? ENUM_FIELD_OPTIONS[s.config_field] : undefined) ?? []);
 
   return (
     <div
       className={`rounded-xl border px-4 py-3 ${
-        isStaged ? "border-accent/40 bg-accent/5" : "border-border bg-card"
+        isStaged ? 'border-accent/40 bg-accent/5' : 'border-border bg-card'
       }`}
     >
       <div className="flex items-start gap-3">
@@ -447,8 +460,8 @@ function SuggestionCard({
             onClick={onToggleStaged}
             className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition ${
               isStaged
-                ? "border-accent bg-accent text-base"
-                : "border-border bg-base hover:border-text-muted"
+                ? 'border-accent bg-accent text-base'
+                : 'border-border bg-base hover:border-text-muted'
             }`}
           >
             {isStaged && (
@@ -459,11 +472,7 @@ function SuggestionCard({
                 stroke="currentColor"
                 strokeWidth={3}
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4.5 12.75l6 6 9-13.5"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
               </svg>
             )}
           </button>
@@ -487,22 +496,21 @@ function SuggestionCard({
           {/* Status / config info */}
           <div className="mt-2">
             {s.implemented ? (
-              <span className="flex items-center gap-1 text-xs font-medium text-emerald-400">
-                <svg
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M4.5 12.75l6 6 9-13.5"
-                  />
-                </svg>
-                Applied
-              </span>
+              <div className="space-y-2">
+                <span className="flex items-center gap-1 text-xs font-medium text-emerald-400">
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2.5}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
+                  Applied
+                </span>
+                {s.outcome && <SuggestionOutcomeBadge outcome={s.outcome} />}
+              </div>
             ) : s.config_field ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-3 text-xs">
@@ -510,25 +518,29 @@ function SuggestionCard({
                   <span className="font-medium text-text-primary">
                     {FIELD_LABELS[s.config_field!] ?? s.config_field}
                   </span>
-                  {s.suggested_value && (
+                  {s.suggested_value && !isPromptField && (
                     <>
                       <span className="text-text-muted">to</span>
-                      <span className="font-mono text-text-primary">
-                        {s.suggested_value}
-                      </span>
+                      <span className="font-mono text-text-primary">{s.suggested_value}</span>
                     </>
                   )}
                 </div>
+                {/* Multi-line prompt text — collapsed/expandable block */}
+                {s.suggested_value && isPromptField && (
+                  <PromptValueBlock value={s.suggested_value} />
+                )}
                 {/* Input — shown when staged */}
-                {isStaged && (
-                  hasDropdown ? (
+                {isStaged &&
+                  (hasDropdown ? (
                     <select
                       value={overrideValue}
                       onChange={(e) => onOverrideChange(e.target.value)}
                       className="block w-full max-w-xs rounded-lg border border-border bg-base px-3 py-1.5 text-xs text-text-primary focus:border-accent focus:outline-none"
                     >
                       <option value="">
-                        {CONFIG_ID_FIELDS.has(s.config_field!) ? "Select a config..." : "Select an option..."}
+                        {CONFIG_ID_FIELDS.has(s.config_field!)
+                          ? 'Select a config...'
+                          : 'Select an option...'}
                       </option>
                       {dropdownOptions.map((opt) => (
                         <option key={opt.value} value={opt.value}>
@@ -536,6 +548,14 @@ function SuggestionCard({
                         </option>
                       ))}
                     </select>
+                  ) : isPromptField ? (
+                    <TextArea
+                      value={overrideValue}
+                      onChange={(e) => onOverrideChange(e.target.value)}
+                      placeholder="Override prompt text (optional — applies the suggested prompt if empty)"
+                      rows={3}
+                      className="!text-xs font-mono"
+                    />
                   ) : (
                     <input
                       type="text"
@@ -544,21 +564,177 @@ function SuggestionCard({
                       placeholder={
                         s.suggested_value
                           ? `Override (default: ${s.suggested_value})`
-                          : "Enter value"
+                          : 'Enter value'
                       }
                       className="block w-full max-w-xs rounded-lg border border-border bg-base px-3 py-1.5 text-xs text-text-primary placeholder:text-text-muted/50 focus:border-accent focus:outline-none"
                     />
-                  )
-                )}
+                  ))}
               </div>
             ) : (
-              <span className="text-xs italic text-text-muted">
-                Manual review needed
-              </span>
+              <span className="text-xs italic text-text-muted">Manual review needed</span>
             )}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Outcome badge (verification result for an applied suggestion) ── */
+
+const CHIP_BASE = 'inline-flex items-center rounded-full px-2 py-0.5 text-2xs font-medium';
+
+const VERDICT_TEXT: Record<SuggestionOutcomeMetric['verdict'], string> = {
+  improved: 'text-score-high',
+  regressed: 'text-score-low',
+  inconclusive: 'text-text-muted',
+};
+
+const VERDICT_LABEL: Record<SuggestionOutcomeMetric['verdict'], string> = {
+  improved: 'Improved',
+  regressed: 'Regressed',
+  inconclusive: 'Inconclusive',
+};
+
+function formatDelta(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}`;
+}
+
+interface OutcomeChipSpec {
+  label: string;
+  className: string;
+}
+
+function buildOutcomeChip(
+  outcome: SuggestionOutcome,
+  metricEntries: [string, SuggestionOutcomeMetric][],
+): OutcomeChipSpec | null {
+  if (outcome.status === 'pending') {
+    return {
+      label: '⏳ Verifying — iteration running',
+      className: 'bg-elevated text-text-muted',
+    };
+  }
+  if (outcome.status === 'incomparable') {
+    return { label: '~ Not comparable', className: 'bg-elevated text-text-muted' };
+  }
+  switch (outcome.overall) {
+    case 'improved': {
+      const best = metricEntries
+        .filter(([, m]) => m.verdict === 'improved')
+        .sort((a, b) => b[1].delta - a[1].delta)[0];
+      const suffix = best ? ` · ${humanizeMetric(best[0])} ${formatDelta(best[1].delta)}` : '';
+      return {
+        label: `✓ Fix verified${suffix}`,
+        className: 'bg-emerald-500/15 text-emerald-400',
+      };
+    }
+    case 'regressed': {
+      const worst = metricEntries
+        .filter(([, m]) => m.verdict === 'regressed')
+        .sort((a, b) => a[1].delta - b[1].delta)[0];
+      const suffix = worst ? ` · ${humanizeMetric(worst[0])} ${formatDelta(worst[1].delta)}` : '';
+      return {
+        label: `✗ Made things worse${suffix}`,
+        className: 'bg-red-500/15 text-red-400',
+      };
+    }
+    case 'mixed':
+      return { label: '± Mixed results', className: 'bg-amber-500/15 text-amber-400' };
+    case 'inconclusive': {
+      const n =
+        typeof outcome.compared_questions === 'number' ? ` (n=${outcome.compared_questions})` : '';
+      return {
+        label: `~ No significant change${n}`,
+        className: 'bg-elevated text-text-muted',
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function SuggestionOutcomeBadge({ outcome }: { outcome: SuggestionOutcome }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const metricEntries = Object.entries(outcome.metrics ?? {});
+  const chip = buildOutcomeChip(outcome, metricEntries);
+  if (!chip) return null;
+
+  const hasDetail = outcome.status === 'evaluated' && metricEntries.length > 0;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`${CHIP_BASE} ${chip.className}`}>{chip.label}</span>
+        {hasDetail && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="text-2xs font-medium text-text-secondary transition hover:text-text-primary"
+          >
+            {expanded ? 'Hide details' : 'Details'}
+          </button>
+        )}
+      </div>
+      {hasDetail && expanded && (
+        <div className="rounded-lg border border-border bg-base px-3 py-2">
+          <ul className="space-y-1">
+            {metricEntries.map(([name, m]) => (
+              <li key={name} className="flex items-center gap-2 text-2xs">
+                <span className="w-32 shrink-0 truncate text-text-secondary">
+                  {humanizeMetric(name)}
+                </span>
+                <span className={`font-mono font-semibold ${VERDICT_TEXT[m.verdict]}`}>
+                  {formatDelta(m.delta)}
+                </span>
+                {m.lo !== null && m.hi !== null && (
+                  <span className="text-text-muted" title="95% bootstrap confidence interval">
+                    CI {formatDelta(m.lo)} to {formatDelta(m.hi)}
+                  </span>
+                )}
+                <span className={`ml-auto ${VERDICT_TEXT[m.verdict]}`}>
+                  {VERDICT_LABEL[m.verdict]}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {typeof outcome.compared_questions === 'number' && (
+            <p className="mt-1.5 text-2xs text-text-muted">
+              Compared on {outcome.compared_questions} question
+              {outcome.compared_questions !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Multi-line prompt value (collapsed/expandable monospace block) ── */
+
+function PromptValueBlock({ value }: { value: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-border bg-base">
+      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3 py-1">
+        <button
+          type="button"
+          onClick={() => setExpanded((prev) => !prev)}
+          className="text-2xs font-medium text-text-secondary transition hover:text-text-primary"
+        >
+          {expanded ? 'Collapse' : 'Expand'} prompt text
+        </button>
+        <CopyButton text={value} />
+      </div>
+      <pre
+        className={`overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-2xs leading-relaxed text-text-primary ${
+          expanded ? 'max-h-64 overflow-y-auto' : 'max-h-12 overflow-hidden'
+        }`}
+      >
+        {value}
+      </pre>
     </div>
   );
 }

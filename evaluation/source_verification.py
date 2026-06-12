@@ -15,10 +15,9 @@ from typing import Any
 
 import httpx
 
+from config import DEFAULT_EVAL_MODEL, SOURCE_VERIFY_FETCH_TIMEOUT
 from pipeline.bot_connectors.custom import _validate_endpoint_url
 from pipeline.llm import chat_completion
-
-from config import DEFAULT_EVAL_MODEL, SOURCE_VERIFY_FETCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 

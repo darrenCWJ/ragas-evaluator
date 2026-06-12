@@ -1,6 +1,5 @@
 from ragas.metrics import RubricsScore
 
-
 DEFAULT_RUBRICS = {
     "score1_description": "The response is completely incorrect or irrelevant.",
     "score2_description": "The response is partially correct but has significant errors.",

@@ -33,7 +33,7 @@ What each feature does and the idea behind it.
 | `markdown` | Markdown-aware splitting (headers, code blocks) |
 | `token` | Token-level splitting |
 | `fixed_overlap` | Fixed window with configurable overlap |
-| `parent_child` | Large parent chunks with smaller child chunks for retrieval |
+| `parent_child` | Small-to-big: small child chunks are embedded for precise matching; each child stores its parent window, and retrieval swaps matched children for their parents (sibling-deduplicated) |
 | `semantic` | Embedding-based semantic boundary detection |
 
 Supports a **2-step pipeline** where you chain two strategies sequentially (e.g., markdown split then recursive). Post-chunking quality filters (`filter_params`) remove chunks that are too short, too long, or below a minimum token count. Chunks can be previewed before committing.
@@ -67,11 +67,23 @@ Chunks are stored in ChromaDB (dense) or a BM25 index (sparse). Hybrid search co
 - **single_shot** — standard single-turn retrieval + generation
 - **multi_step** — iterative retrieval over multiple rounds; configurable `max_steps`
 
-**Reranker** — an optional cross-encoder reranker applied after retrieval with a configurable `top_k` cutoff. Reranks the initial candidate list before passing context to the LLM.
+**Reranker** — an optional cross-encoder reranker applied after retrieval with a configurable `top_k` cutoff (e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`, `BAAI/bge-reranker-v2-m3`). Reranks the initial candidate list before passing context to the LLM.
 
 Search types: `dense`, `sparse`, `hybrid`.
 
-**Why:** RAG configs encapsulate the entire pipeline so you can test variations systematically. Multi-step mode handles complex queries that need iterative reasoning. Reranking improves precision when the initial retrieval set is noisy.
+**Retrieval quality options** (all per-config, all snapshotted into experiments):
+
+| Option | What it does |
+|---|---|
+| `query_expansion=multi_query` | An LLM rewrites the query N ways (`num_expansions`, 1–8); all variants are retrieved and merged with reciprocal-rank fusion |
+| `query_expansion=hyde` | An LLM drafts a hypothetical answer passage and retrieval matches against it (embedding-space match against answers, not questions) |
+| `score_threshold` | Drops weakly-scored hits instead of blindly keeping top-k (unscored contexts pass through) |
+| `mmr_lambda` | Maximal-marginal-relevance diversity selection over a 3× over-fetched candidate pool — avoids near-duplicate chunks. λ=1 pure relevance, λ=0 pure diversity |
+| `kg_expansion` | Appends 1-hop knowledge-graph neighbours of the retrieved chunks as extra candidates (needs a built chunks-KG; pair with a reranker so the extras get scored) |
+
+Expansion LLM tokens are counted into experiment usage; expansion failures fall back to the plain query so retrieval never dies on a rewrite call.
+
+**Why:** RAG configs encapsulate the entire pipeline so you can test variations systematically. Multi-step mode handles complex queries that need iterative reasoning. Reranking improves precision when the initial retrieval set is noisy. The quality options are individually toggleable so each one's impact can be measured in an experiment (or swept — see Parameter Sweeps).
 
 ---
 
@@ -302,3 +314,151 @@ Suggestions can be applied individually or in batch to create a new experiment c
 **What it does:** Stream knowledge graph nodes and edges via SSE as the KG is built. The frontend renders the graph incrementally using Sigma.js with force-directed layout, allowing you to inspect entities, relationships, and community structure in real time.
 
 **Why:** Understanding what entities and relationships the KG has extracted helps diagnose test generation quality — if the graph misses key concepts, the generated questions will too.
+
+---
+
+## Skill Arena
+
+**What it does:** Tests how well different AI models follow a *skill file* — a SKILL.md-style instruction document injected as system context. Upload a skill, pick the models to compare (any judge-eligible LLM and/or your configured bot connectors), pick an approved test set, and run a matrix:
+
+```
+(skill | no-skill baseline) × (selected models) × (test questions)
+```
+
+On upload the skill is distilled into a checklist of testable directives (behavior / format / prohibition / tone). Every response — including baseline responses — is judged against that checklist by an LLM judge with per-directive pass/fail verdicts; mechanically verifiable format rules (valid JSON, bullet usage, word caps) are checked deterministically and override the judge.
+
+**Scores:**
+
+| Metric | Meaning |
+|---|---|
+| `skill_adherence` | passed ÷ (passed + failed) directives, per response |
+| `format_compliance` | deterministic format checks only |
+| `skill_lift` | per-model adherence delta vs the no-skill baseline — the headline number |
+
+Each matrix cell also records tokens in/out and latency, so "follows the skill best" can be weighed against cost.
+
+**Step tracing:** every trial cell records a span timeline (`prepare → query → judge`) with durations and errors, viewable in the drill-down. Set `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (and `pip install langfuse`) to also export every trace to Langfuse; the built-in timeline works without it.
+
+**Apply the winner:** one click sets the best model as the project's `preferred_model`, which downstream config forms read as their default.
+
+**Why:** Skill files behave differently across models — one model follows format rules religiously but ignores prohibitions, another inverts that. Spot-checking can't quantify this; a judged matrix with a baseline can.
+
+---
+
+## Memory & Storage Controls
+
+**What it does:** Keeps KG builds, test generation, and evaluation inside RAM/disk budgets:
+
+- KG JSON is stored zlib-compressed (`KG_COMPRESSION=false` to disable) — typically 10–25× smaller.
+- `KG_SUBPROCESS_MAX_RSS_MB` caps KG build subprocess memory via RLIMIT_AS (Linux).
+- KG transforms run batched with per-batch checkpoint persistence — a hard kill (OOM, timeout) loses one batch, not the step; resumed builds skip already-processed nodes.
+- Per-batch `gc` + `malloc_trim` returns freed memory to the OS; RSS is logged each step.
+- `POST /api/system/maintenance` reclaims space on demand: WAL checkpoint, optional `VACUUM`, stale progress eviction, and release of cached reranker/sentence-transformer models.
+
+---
+
+## Test Set Transparency
+
+**What it does:** Makes the test set itself auditable, so a bad verdict about the user's agent can't hide behind bad test questions.
+
+- **Quality audit** (`POST .../test-sets/{id}/quality-audit`) — every question (generated or uploaded) is checked deterministically (too short, empty reference, verbatim leakage from source text, missing contexts) and optionally by LLM (reference answer not grounded in sources, not self-contained, trivial). Results persist on each question (`metadata.quality`) and surface as warning chips in the question list.
+- **Coverage report** (`GET .../test-sets/{id}/coverage`) — which documents and chunks the test set actually exercises, with the untested documents listed by name. Generated questions now store provenance (`source_chunk_ids` / `source_document_ids`) linking each question to the exact chunks its reference answer came from.
+- **Refusal testing** — `out_of_knowledge_base` generated questions are tagged `expected_behavior: refusal`, and the `refusal_accuracy` metric judges whether the agent correctly declined (1.0), hedged (0.5), or fabricated an answer (0.0). It returns None on all other questions so aggregates stay clean.
+- **Category breakdown** (`GET .../experiments/{id}/breakdown`) — experiment scores grouped by question category with per-metric averages and the weakest questions per group, sorted worst-first. "Your agent fails multi-hop and refusal questions" instead of one averaged number.
+
+**Why:** The platform's promise is transparency into what went wrong with the user's agent. That requires trustworthy questions (audit), knowing what was never tested (coverage), testing the most common real failure (fabricating answers to out-of-scope questions), and attributing failures to categories rather than averaging them away.
+
+---
+
+## Multi-Turn Conversation Testing
+
+**What it does:** Tests conversational behavior, not just single Q→A. A test question may carry prior *turns* (user messages that set up context — "I'm on the Pro plan", "I pay annually"). The experiment runner plays each turn against the agent, carrying the growing conversation history, then asks the final question. The full transcript is stored with the result.
+
+**Setup:** map a `turns` column when uploading a test set — a JSON array (`["I'm on Pro", "I pay annually"]`) or `|||`-separated user messages. All chat-style connectors support history (OpenAI, Claude, Gemini, DeepSeek, Glean natively; custom HTTP gets a transcript prepend); CSV connectors can't.
+
+**Scoring:** the `conversation_retention` metric judges whether the final answer honors what was established earlier — `retained` (1.0), `partial` (0.5), or `forgot/contradicted` (0.0). It scores only multi-turn questions, so single-turn aggregates stay clean. All standard metrics also run on the final answer.
+
+**Why:** the most common conversational agent failure — forgetting or contradicting context from three turns ago — is invisible to single-turn evaluation.
+
+---
+
+## CI Quality Gate
+
+**What it does:** `GET /api/projects/{id}/experiments/{id}/gate?thresholds=faithfulness:0.7,refusal_accuracy:0.8&strict=true` returns pass/fail per threshold plus an optional `min_overall` check. With `strict=true` a failing gate answers HTTP 412, so a pipeline can gate deploys with one line:
+
+```bash
+curl -f "$TRIBUNAL_URL/api/projects/1/experiments/42/gate?thresholds=faithfulness:0.7&strict=true"
+```
+
+Missing metrics fail the gate — silence never passes CI.
+
+---
+
+## Verified-Fix Loop
+
+**What it does:** Closes the gap between "we suggested a fix" and "the fix worked".
+
+- **Applyable prompt fixes** — suggestions for faithfulness, refusal, noise, and relevancy failures carry the actual guardrail/persona/phase text; Apply appends it to the system prompt (duplicates are rejected). For external agents the text is copyable into the agent's own configuration.
+- **Category-gap rules** — when a question category trails the experiment average by 0.2+, the suggestion names it and proposes the fix for that failure mode (out-of-KB → refusal guardrail, multi-hop → numbered reasoning phases, edge cases → clarify-ambiguity rule).
+- **Prompt Doctor** — one click sends the experiment's worst actual responses to an LLM that diagnoses the failure patterns and drafts a complete revised system prompt, each addition annotated with the observed failure it fixes. Results land in the normal suggestions list.
+- **Outcome verdicts** — applying a suggestion spawns a follow-up experiment; when it completes, per-metric paired bootstrap statistics produce a verdict shown as a badge: `Fix verified` (with the strongest improved metric), `Made things worse`, `Mixed results`, or `No significant change`. Deltas below 0.02 never count as improvement.
+- **Honest numbers everywhere** — aggregate metrics display 95% bootstrap confidence intervals, and `retrieval_hit_rate`/`retrieval_mrr` (computed free from question provenance) separate "retrieval missed the source" from "the model botched the answer".
+
+**Why:** without verification, suggestion engines train users to make random changes. With it, every iteration is evidence.
+
+---
+
+## Parameter Sweeps
+
+**What it does:** Grid-search retrieval parameters without burning judge tokens. Pick a base RAG config, a test set, and a grid over sweepable fields (`top_k`, `alpha`, `score_threshold`, `mmr_lambda`, `query_expansion`, `num_expansions`, `reranker_model`/`top_k`, `kg_expansion`, `llm_model`) — capped at 36 combinations. One experiment is created per combination (standard config snapshot, so results are reproducible) and they run sequentially in the background with judge-free default metrics (BLEU/ROUGE/string similarity + embedding similarity).
+
+The **leaderboard** (`GET .../sweeps/{id}/leaderboard`, or the Experiment-page panel) ranks combinations by `retrieval_hit_rate` (free, provenance-based), then overall score. Cancel stops queued runs; the in-flight experiment finishes.
+
+**Why:** "Which top_k is right?" is an empirical question with a cheap, deterministic answer — retrieval hit rate doesn't need an LLM judge. Sweep judge-free, then spend judge tokens only on the one or two finalists.
+
+---
+
+## Scheduled Regression Runs
+
+**What it does:** Re-run a bot-connector test set on an interval (15 minutes to 7 days). Each run's aggregate metrics are compared to the previous scheduled run; any shared metric dropping more than the configured threshold raises an **alert** — stored in-app (badge + per-metric drop detail + acknowledge) and optionally POSTed to a webhook (validated with the same SSRF guard as custom bot endpoints). A "Run now" button triggers an immediate check.
+
+**Why:** External agents change underneath you — model upgrades, prompt edits, index rebuilds. A scheduled regression run with drop alerts catches "the bot got worse last Tuesday" without anyone remembering to re-test.
+
+---
+
+## Judge Calibration
+
+**What it does:** Every multi-LLM-judge evaluation records which model produced it. The calibration report (`GET .../judge-calibration`, or the Analyze-page panel) pairs human annotations with per-model judge scores project-wide and ranks judge models by bucket agreement (accurate / partially accurate / inaccurate) and mean absolute error. Models need 5+ human-paired evaluations and ≥50% agreement to be recommended; one click applies the top models as the project's default judge panel.
+
+**Why:** "Which LLM should judge my domain?" shouldn't be a guess. The human annotations you're already collecting (20% samples) answer it empirically — and the panel that agrees with *your* humans is the right panel for *your* project.
+
+---
+
+## Log Import & Hard-Case Mining
+
+**Log import** (`POST .../test-sets/import-logs`, or the Test-page panel) turns raw production query logs (`.txt` one-per-line, `.csv`, `.jsonl`) into a reference-free test set: trivial (<8 char) and duplicate queries are dropped, the query column is auto-detected, and at most 1000 queries are imported. Score these sets with reference-free metrics (faithfulness, answer relevancy, context metrics).
+
+**Hard-case mining** (`POST .../experiments/{id}/mine-hard-cases`, or the Analyze-page panel) takes a completed experiment's worst-scoring questions (mean metric score below a threshold) and has an LLM write 1–5 harder variants of each — different vocabulary, indirect phrasing, distractors — while the original reference answer stays correct. Variants land in a new test set inheriting reference answers, contexts, and `source_chunk_ids` provenance, so retrieval diagnostics keep working on the mined set.
+
+**Why:** Generated test sets drift from how users actually talk; logs are ground truth for phrasing. And the questions your agent already failed are the best seeds for the next round of tests — mining them closes the evaluation loop on real weaknesses.
+
+---
+
+## User Accounts & Roles
+
+**What it does:** Multi-user logins with per-user project isolation and a global admin role.
+
+- **Bootstrap:** the first account to register becomes **admin** and activates login enforcement. Before that, the app runs in open mode (single-user self-hosting works with zero setup).
+- **Regular users** see only projects they own or were added to. Owners add members by email (Setup page → Project members).
+- **Admins** see and manage every project and get a user-accounts panel (Workers page) for promoting/demoting roles; the last admin can't be demoted.
+- **Machine token:** `RAGAS_API_KEY` keeps working as a Bearer token with admin access — CI gates and scripts are unaffected by user logins.
+- **Security:** argon2id hashing, signed httponly session cookies (set `SESSION_SECRET` in production, `SESSION_COOKIE_SECURE=true` behind HTTPS), per-IP login rate limiting, no account enumeration. `ALLOW_REGISTRATION=false` restricts signups.
+- **No self-service password reset yet** — an admin assists locked-out users.
+
+---
+
+## Guided Flow & Reports
+
+- **Start page** — the landing route shows two paths ("Test an external AI agent" vs "Build & evaluate a RAG pipeline") with live per-step completion ticks and a "What's next" button that deep-links to the first incomplete step.
+- **Metric presets** — Recommended / Free only / Everything one-click selections, cost-clarity group labels (LLM judge vs free/instant), and plain-language hover descriptions for every metric.
+- **Shareable HTML report** — `GET /api/projects/{id}/experiments/{id}/report` renders a self-contained HTML file (no JS, inline styles): aggregates with confidence intervals, the per-category breakdown with weakest questions, and suggestions with verified outcomes and prompt text. Save and send to anyone.

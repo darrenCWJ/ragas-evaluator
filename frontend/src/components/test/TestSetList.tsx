@@ -1,6 +1,6 @@
-import { useState } from "react";
-import type { TestSet } from "../../lib/api";
-import { deleteTestSet, resumeTestSet, ApiError } from "../../lib/api";
+import { useState } from 'react';
+import type { TestSet } from '../../lib/api';
+import { deleteTestSet, resumeTestSet, ApiError } from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -27,7 +27,7 @@ export default function TestSetList({
       await resumeTestSet(projectId, ts.id);
       onTestSetsChanged();
     } catch (err) {
-      setDeleteError((err as Error).message || "Resume failed");
+      setDeleteError((err as Error).message || 'Resume failed');
     } finally {
       setResuming(null);
     }
@@ -42,9 +42,9 @@ export default function TestSetList({
       onTestSetsChanged();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setDeleteError("Cannot delete — this test set is used by experiments.");
+        setDeleteError('Cannot delete — this test set is used by experiments.');
       } else {
-        setDeleteError((err as Error).message || "Delete failed");
+        setDeleteError((err as Error).message || 'Delete failed');
       }
     } finally {
       setDeleting(false);
@@ -54,9 +54,7 @@ export default function TestSetList({
   if (testSets.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-card/50 p-8 text-center">
-        <p className="text-sm text-text-muted">
-          No test sets yet. Generate one above.
-        </p>
+        <p className="text-sm text-text-muted">No test sets yet. Generate one above.</p>
       </div>
     );
   }
@@ -75,19 +73,12 @@ export default function TestSetList({
 
       <div className="space-y-2">
         {testSets.map((ts) => (
-          <div
-            key={ts.id}
-            className="rounded-xl border border-border bg-card px-4 py-3"
-          >
+          <div key={ts.id} className="rounded-xl border border-border bg-card px-4 py-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <p className="truncate font-medium text-text-primary">
-                  {ts.name}
-                </p>
+                <p className="truncate font-medium text-text-primary">{ts.name}</p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
-                  <span className="text-text-secondary">
-                    {ts.total_questions} questions
-                  </span>
+                  <span className="text-text-secondary">{ts.total_questions} questions</span>
                   <span className="text-text-muted">·</span>
                   {ts.pending_count > 0 && (
                     <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-yellow-300">
@@ -108,11 +99,14 @@ export default function TestSetList({
                   <span className="text-text-muted">
                     {new Date(ts.created_at).toLocaleDateString()}
                   </span>
-                  {ts.generation_status === "failed" && (
+                  {ts.generation_status === 'failed' && (
                     <>
                       <span className="text-text-muted">·</span>
                       <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-red-300">
-                        Failed{ts.total_questions > 0 ? ` (${ts.total_questions}/${ts.generation_config?.testset_size ?? "?"} saved)` : ""}
+                        Failed
+                        {ts.total_questions > 0
+                          ? ` (${ts.total_questions}/${ts.generation_config?.testset_size ?? '?'} saved)`
+                          : ''}
                       </span>
                     </>
                   )}
@@ -120,13 +114,13 @@ export default function TestSetList({
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
-                {ts.generation_status === "failed" && (
+                {ts.generation_status === 'failed' && (
                   <button
                     onClick={() => handleResume(ts)}
                     disabled={resuming === ts.id}
                     className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/20 disabled:opacity-40"
                   >
-                    {resuming === ts.id ? "Resuming..." : "Resume"}
+                    {resuming === ts.id ? 'Resuming...' : 'Resume'}
                   </button>
                 )}
                 <button
@@ -143,7 +137,7 @@ export default function TestSetList({
                       disabled={deleting}
                       className="rounded-lg bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-300 transition hover:bg-red-500/30 disabled:opacity-40"
                     >
-                      {deleting ? "…" : "Confirm"}
+                      {deleting ? '…' : 'Confirm'}
                     </button>
                     <button
                       onClick={() => {

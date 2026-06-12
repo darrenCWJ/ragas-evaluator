@@ -1,6 +1,6 @@
-import { useState } from "react";
-import type { ChunkConfig, EmbedResult } from "../../lib/api";
-import { embedChunks } from "../../lib/api";
+import { useState } from 'react';
+import type { ChunkConfig, EmbedResult } from '../../lib/api';
+import { embedChunks } from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -15,9 +15,9 @@ export default function EmbedAction({
   chunkConfigs,
   onEmbedComplete,
 }: Props) {
-  const [selectedChunkConfigId, setSelectedChunkConfigId] = useState<
-    number | null
-  >(chunkConfigs.length > 0 ? chunkConfigs[0]!.id : null);
+  const [selectedChunkConfigId, setSelectedChunkConfigId] = useState<number | null>(
+    chunkConfigs.length > 0 ? chunkConfigs[0]!.id : null,
+  );
   const [useContextualPrefix, setUseContextualPrefix] = useState(false);
   const [embedding, setEmbedding] = useState(false);
   const [result, setResult] = useState<EmbedResult | null>(null);
@@ -46,7 +46,7 @@ export default function EmbedAction({
       setResult(res);
       onEmbedComplete?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Embedding failed");
+      setError(err instanceof Error ? err.message : 'Embedding failed');
     } finally {
       setEmbedding(false);
     }
@@ -55,11 +55,9 @@ export default function EmbedAction({
   return (
     <div className="space-y-3">
       <label className="block">
-        <span className="mb-1 block text-xs text-text-secondary">
-          Chunk Config
-        </span>
+        <span className="mb-1 block text-xs text-text-secondary">Chunk Config</span>
         <select
-          value={selectedChunkConfigId ?? ""}
+          value={selectedChunkConfigId ?? ''}
           onChange={(e) => setSelectedChunkConfigId(Number(e.target.value))}
           disabled={embedding}
           className="w-full rounded-lg border border-border bg-input px-3 py-1.5 text-sm text-text-primary focus:border-border-focus focus:outline-none disabled:opacity-50"
@@ -81,13 +79,10 @@ export default function EmbedAction({
           className="mt-0.5 h-4 w-4 rounded border-border bg-input text-accent accent-accent"
         />
         <div>
-          <span className="text-xs text-text-secondary">
-            Contextual embeddings
-          </span>
+          <span className="text-xs text-text-secondary">Contextual embeddings</span>
           <p className="text-xs text-text-muted">
-            Prepends document name to each chunk before embedding, giving the
-            model broader context about where each chunk comes from. Edit
-            document labels in the Documents panel.
+            Prepends document name to each chunk before embedding, giving the model broader context
+            about where each chunk comes from. Edit document labels in the Documents panel.
           </p>
         </div>
       </label>
@@ -99,11 +94,7 @@ export default function EmbedAction({
       >
         {embedding ? (
           <span className="flex items-center gap-2">
-            <svg
-              className="h-3.5 w-3.5 animate-spin"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
+            <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle
                 className="opacity-25"
                 cx="12"
@@ -121,34 +112,22 @@ export default function EmbedAction({
             Embedding...
           </span>
         ) : (
-          "Embed Chunks"
+          'Embed Chunks'
         )}
       </button>
 
       {result && (
         <div className="rounded-lg bg-score-high/10 px-3 py-2 text-xs text-score-high">
-          Embedded{" "}
-          <span className="font-mono font-bold">{result.total_embedded}</span>{" "}
-          chunks
+          Embedded <span className="font-mono font-bold">{result.total_embedded}</span> chunks
           {result.collection && (
-            <span className="text-text-muted">
-              {" "}
-              &rarr; collection: {result.collection}
-            </span>
+            <span className="text-text-muted"> &rarr; collection: {result.collection}</span>
           )}
-          {result.index && (
-            <span className="text-text-muted">
-              {" "}
-              &rarr; index: {result.index}
-            </span>
-          )}
+          {result.index && <span className="text-text-muted"> &rarr; index: {result.index}</span>}
         </div>
       )}
 
       {error && (
-        <p className="rounded-lg bg-score-low/10 px-3 py-2 text-xs text-score-low">
-          {error}
-        </p>
+        <p className="rounded-lg bg-score-low/10 px-3 py-2 text-xs text-score-low">{error}</p>
       )}
     </div>
   );

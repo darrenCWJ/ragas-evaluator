@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,34 +14,42 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.routes import (
-    health,
-    projects,
-    documents,
-    chunks,
-    embeddings,
-    rag,
-    testsets,
-    experiments,
     analyze,
-    bot_configs,
     annotations,
-    reports,
+    auth,
+    bot_configs,
+    chunks,
     custom_metrics,
-    personas,
+    documents,
+    embeddings,
+    experiments,
+    health,
+    insights,
+    mining,
     multi_llm_judge,
+    personas,
+    projects,
+    rag,
+    reports,
+    schedules,
+    skills,
+    sweeps,
+    system,
+    testsets,
 )
+from app.services.request_context import RequestIDMiddleware
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    from db.init import init_db
-
     import asyncio
 
+    import db.init as _dbi
+
     try:
-        init_db()
+        _dbi.init_db()
         from config import DATABASE_PATH
         logger.info("Database initialized at %s", DATABASE_PATH)
     except Exception as e:
@@ -49,14 +58,12 @@ async def lifespan(application: FastAPI):
 
     # Background task: monitor worker-delegated experiments for liveness
     async def _monitor_worker_experiments():
-        from app.routes.experiments import (
-            _experiment_worker, _experiment_worker_lock, _experiment_progress,
-        )
+        from app.services.progress import experiment_runs
+
         consecutive_failures: dict[int, int] = {}
         while True:
             await asyncio.sleep(30)
-            with _experiment_worker_lock:
-                entries = dict(_experiment_worker)
+            entries = experiment_runs.delegated()
             if not entries:
                 continue
             import httpx
@@ -68,9 +75,7 @@ async def lifespan(application: FastAPI):
                     if resp.status_code == 200:
                         data = resp.json()
                         if not data.get("active", True):
-                            with _experiment_worker_lock:
-                                _experiment_worker.pop(eid, None)
-                            _experiment_progress.pop(eid, None)
+                            experiment_runs.release(eid)
                 except Exception:
                     consecutive_failures[eid] = consecutive_failures.get(eid, 0) + 1
                     if consecutive_failures[eid] >= 3:
@@ -90,24 +95,26 @@ async def lifespan(application: FastAPI):
                                 conn.commit()
                         except Exception as _db_err:
                             logger.warning("Failed to mark experiment %d as failed: %s", eid, _db_err)
-                        with _experiment_worker_lock:
-                            _experiment_worker.pop(eid, None)
-                        _experiment_progress.pop(eid, None)
+                        experiment_runs.release(eid)
                         consecutive_failures.pop(eid, None)
 
     monitor_task = asyncio.create_task(_monitor_worker_experiments())
 
+    from app.services.schedule_service import schedule_loop
+    schedule_task = asyncio.create_task(schedule_loop())
+
     yield
 
-    monitor_task.cancel()
-    try:
-        await monitor_task
-    except asyncio.CancelledError:
-        pass
+    for task in (monitor_task, schedule_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # expected: we cancelled the task ourselves on shutdown
     # Cleanup: close shared HTTP clients to avoid "Event loop is closed" warnings
     from evaluation.metrics.testgen import close_openai_clients
-    from pipeline.llm import close_openai_client, close_anthropic_client, close_gemini_client
     from pipeline.embedding import close_openai_embed_client
+    from pipeline.llm import close_anthropic_client, close_gemini_client, close_openai_client
     await close_openai_clients()
     await close_openai_client()
     await close_anthropic_client()
@@ -117,32 +124,83 @@ async def lifespan(application: FastAPI):
 
 _RAGAS_API_KEY = os.environ.get("RAGAS_API_KEY", "")
 
-_AUTH_EXEMPT_PREFIXES = ("/app/", "/health")
+_AUTH_EXEMPT_PREFIXES = ("/app/", "/health", "/api/auth/")
+
+# /api/projects/{id}/...  → per-project access enforcement
+_PROJECT_PATH_RE = re.compile(r"^/api/projects/(\d+)(?:/|$)")
+
+# Login enforcement activates once any user exists. The check flips exactly
+# once (users are never all deleted in normal operation), so cache the True.
+_auth_active_cache = False
 
 
-class _ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Enforce Bearer token auth when RAGAS_API_KEY is set in the environment.
+def _auth_is_active() -> bool:
+    global _auth_active_cache
+    if _auth_active_cache:
+        return True
+    try:
+        import db.init as _db
+        from app.services.auth import any_users_exist
 
-    Absent key = dev/open mode (all requests pass through).
-    Present key = all non-exempt paths require `Authorization: Bearer <key>`.
+        if any_users_exist(_db.get_db()):
+            _auth_active_cache = True
+    except Exception:
+        logger.warning("Auth-active check failed — treating as inactive", exc_info=True)
+    return _auth_active_cache
+
+
+class _AuthMiddleware(BaseHTTPMiddleware):
+    """Two-layer auth.
+
+    Open mode (no registered users): legacy behavior — everything passes,
+    unless RAGAS_API_KEY is set, in which case it is required as a Bearer
+    token (the original deployment story).
+
+    User mode (≥1 registered user): every non-exempt request needs a valid
+    session cookie or the machine Bearer token. Project-scoped paths
+    additionally require ownership/membership — admins (and the machine
+    token) can access every project.
     """
 
     async def dispatch(self, request: Request, call_next):
-        if not _RAGAS_API_KEY:
-            return await call_next(request)
         path = request.url.path
         if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES) or path == "/":
             return await call_next(request)
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[len("Bearer "):] != _RAGAS_API_KEY:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+        if not _auth_is_active():
+            # Legacy open mode (optionally gated by the shared machine key)
+            if _RAGAS_API_KEY:
+                auth = request.headers.get("Authorization", "")
+                if not auth.startswith("Bearer ") or auth[len("Bearer "):] != _RAGAS_API_KEY:
+                    return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            return await call_next(request)
+
+        import db.init as _db
+        from app.services.auth import resolve_request_user, user_can_access_project
+
+        conn = _db.get_db()
+        user = resolve_request_user(conn, request)
+        if user is None:
+            return JSONResponse(status_code=401, content={"detail": "Not signed in"})
+
+        match = _PROJECT_PATH_RE.match(path)
+        if match and not user_can_access_project(conn, user, int(match.group(1))):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "You don't have access to this project"},
+            )
+
+        request.state.user = user
         return await call_next(request)
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Ragas Evaluator", version="0.4.1-alpha", lifespan=lifespan)
+    application = FastAPI(title="Tribunal — RAG Evaluator", version="0.4.1-alpha", lifespan=lifespan)
 
-    application.add_middleware(_ApiKeyMiddleware)
+    # Middleware execution order is the reverse of registration: RequestID is
+    # registered last so it runs OUTERMOST — even auth-rejected and CORS
+    # responses carry a correlatable X-Request-ID.
+    application.add_middleware(_AuthMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=os.environ.get(
@@ -151,9 +209,11 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
     )
+    application.add_middleware(RequestIDMiddleware)
 
     # Register routers
     application.include_router(health.router)
+    application.include_router(auth.router)
     application.include_router(projects.router)
     application.include_router(documents.router)
     application.include_router(chunks.router)
@@ -168,6 +228,12 @@ def create_app() -> FastAPI:
     application.include_router(custom_metrics.router)
     application.include_router(personas.router)
     application.include_router(multi_llm_judge.router)
+    application.include_router(skills.router)
+    application.include_router(sweeps.router)
+    application.include_router(schedules.router)
+    application.include_router(mining.router)
+    application.include_router(insights.router)
+    application.include_router(system.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")

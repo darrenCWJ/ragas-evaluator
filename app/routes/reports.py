@@ -6,8 +6,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.routes.experiments import _sanitize_nan
 import db.init
+from app.services.experiment_runner import sanitize_nan
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def _aggregate_metrics(result_rows: list[dict]) -> dict[str, float | None]:
     totals: dict[str, float] = {}
     counts: dict[str, int] = {}
     for rr in result_rows:
-        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
+        metrics = sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
         for name, value in metrics.items():
             if value is not None:
                 totals[name] = totals.get(name, 0.0) + value
@@ -89,7 +89,7 @@ def _evaluator_reliability(conn, experiment_id: int) -> dict | None:
     scorable = 0
 
     for r in rows:
-        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
+        metrics = sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
         values = [metrics[m] for m in correctness_metrics if m in metrics and metrics[m] is not None]
         if not values:
             continue
@@ -275,7 +275,7 @@ async def get_project_report(project_id: int):
 
     # Per-bot summary
     bot_summary = []
-    for bid, acc in bot_accum.items():
+    for _bid, acc in bot_accum.items():
         agg = _aggregate_metrics(acc["result_rows"])
         bot_summary.append({
             "bot_config_id": acc["bot_config_id"],

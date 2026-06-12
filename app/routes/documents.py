@@ -3,10 +3,11 @@
 import io
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from app.models import ALLOWED_FILE_TYPES, MAX_UPLOAD_SIZE, DocumentContextUpdate
 import db.init
+from app.models import DocumentContextUpdate
+from config import ALLOWED_FILE_TYPES, MAX_UPLOAD_SIZE
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -42,7 +43,7 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
             reader = PdfReader(io.BytesIO(content_bytes))
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}")
+            raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}") from e
     elif ext == ".docx":
         try:
             from docx import Document
@@ -50,7 +51,7 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
             doc = Document(io.BytesIO(content_bytes))
             text = "\n".join(para.text for para in doc.paragraphs)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not read DOCX: {e}")
+            raise HTTPException(status_code=400, detail=f"Could not read DOCX: {e}") from e
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 

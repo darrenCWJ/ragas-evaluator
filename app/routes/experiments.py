@@ -5,46 +5,61 @@ import csv
 import io
 import json
 import logging
-import math
-import threading
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+import db.init
 from app.models import (
     ExperimentCreate,
     ExperimentRunRequest,
-    DEFAULT_EXPERIMENT_METRICS,
 )
-from dataclasses import asdict
-
-from evaluation.scoring import ALL_METRICS, setup_scorers, evaluate_experiment_row
-from evaluation.metrics.custom_metric import CustomMetricConfig
-from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
-from evaluation.source_verification import verify_all_citations
-import db.init
-from config import BOT_QUERY_TIMEOUT, DEFAULT_EVAL_MODEL
-from pipeline.bot_connectors.factory import create_connector
 from app.routes.bot_configs import bot_config_returns_contexts
 from app.routes.projects import _sanitize_csv_value
-from pipeline.rag import single_shot_query, multi_step_query
+from app.services.experiment_runner import (
+    aggregate_rows,
+    compute_aggregates,
+    compute_token_usage,
+    parse_experiment_row,
+    run_experiment_background,
+    sanitize_nan,
+)
+from app.services.progress import experiment_runs
+from config import DEFAULT_EVAL_MODEL, DEFAULT_EXPERIMENT_METRICS
+from evaluation.scoring import ALL_METRICS
+from evaluation.source_verification import verify_all_citations
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["experiments"])
 
-# Track cancellation signals per experiment id
-_cancel_events: dict[int, asyncio.Event] = {}
+# SSE streaming guards
+_STREAM_STALL_SECONDS = 30 * 60
+_SSE_HEARTBEAT_SECONDS = 15
 
-# Track progress for running experiments so SSE observers can reconnect
-_experiment_progress: dict[int, dict] = {}
-# Track background tasks so we know which experiments are truly alive
-_background_tasks: dict[int, asyncio.Task] = {}
 
-# Track experiments delegated to workers: experiment_id -> worker_url
-_experiment_worker: dict[int, str] = {}
-_experiment_worker_lock = threading.Lock()
+def _trusted_worker_url(experiment_id: int) -> str | None:
+    """Worker base URL for a delegated experiment, re-validated against the
+    configured allowlist.
+
+    Outbound requests must only ever use a URL drawn from KG_WORKER_URLS —
+    never a value read back from mutable run state (CodeQL py/partial-ssrf).
+    """
+    from config import KG_WORKER_URLS
+
+    stored = experiment_runs.get_worker(experiment_id)
+    if not stored:
+        return None
+    for trusted in KG_WORKER_URLS:
+        if trusted == stored:
+            return trusted
+    logger.warning(
+        "Experiment %d: stored worker URL is not in KG_WORKER_URLS — ignoring it",
+        experiment_id,
+    )
+    return None
 
 
 def _reap_stale_experiments(conn) -> int:
@@ -55,6 +70,7 @@ def _reap_stale_experiments(conn) -> int:
     restarted, connection dropped, etc.).  No time limit is applied because
     experiments with many questions can legitimately run for hours.
     """
+    experiment_runs.evict_stale()
     rows = conn.execute(
         "SELECT id FROM experiments WHERE status = 'running'"
     ).fetchall()
@@ -62,10 +78,9 @@ def _reap_stale_experiments(conn) -> int:
     now = datetime.now()
     for row in rows:
         eid = row["id"]
-        if eid not in _cancel_events and eid not in _background_tasks:
-            with _experiment_worker_lock:
-                if eid in _experiment_worker:
-                    continue  # delegated to a worker — don't reap
+        if not experiment_runs.is_alive(eid):
+            if experiment_runs.get_worker(eid):
+                continue  # delegated to a worker — don't reap
             conn.execute(
                 "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
                 (now.isoformat(), eid),
@@ -75,122 +90,6 @@ def _reap_stale_experiments(conn) -> int:
     if reaped:
         conn.commit()
     return reaped
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse_experiment_row(row) -> dict:
-    """Convert a DB experiment row into a serialisable dict."""
-    return {
-        "id": row["id"],
-        "project_id": row["project_id"],
-        "test_set_id": row["test_set_id"],
-        "name": row["name"],
-        "model": row["model"],
-        "model_params": json.loads(row["model_params_json"]) if row["model_params_json"] else None,
-        "retrieval_config": json.loads(row["retrieval_config_json"]) if row["retrieval_config_json"] else None,
-        "chunk_config_id": row["chunk_config_id"],
-        "embedding_config_id": row["embedding_config_id"],
-        "rag_config_id": row["rag_config_id"],
-        "bot_config_id": row["bot_config_id"],
-        "baseline_experiment_id": row["baseline_experiment_id"],
-        "status": row["status"],
-        "started_at": row["started_at"],
-        "completed_at": row["completed_at"],
-        "created_at": row["created_at"],
-    }
-
-
-def _build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
-    """Build a dict satisfying the rag_config_row interface for RAG query functions."""
-    retrieval_config = (
-        json.loads(experiment_row["retrieval_config_json"])
-        if experiment_row["retrieval_config_json"]
-        else {}
-    )
-    return {
-        "project_id": project_id,
-        "llm_model": experiment_row["model"],
-        "llm_params_json": experiment_row["model_params_json"],
-        "chunk_config_id": experiment_row["chunk_config_id"],
-        "embedding_config_id": experiment_row["embedding_config_id"],
-        "search_type": retrieval_config.get("search_type", "dense"),
-        "sparse_config_id": retrieval_config.get("sparse_config_id"),
-        "alpha": retrieval_config.get("alpha"),
-        "top_k": retrieval_config.get("top_k", 5),
-        "system_prompt": retrieval_config.get("system_prompt"),
-        "response_mode": retrieval_config.get("response_mode", "single_shot"),
-        "max_steps": retrieval_config.get("max_steps", 3),
-        "reranker_model": retrieval_config.get("reranker_model"),
-        "reranker_top_k": retrieval_config.get("reranker_top_k"),
-    }
-
-
-
-def _sanitize_nan(obj):
-    """Replace NaN/Inf floats with None so JSON serialization produces valid output."""
-    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-        return None
-    if isinstance(obj, dict):
-        return {k: _sanitize_nan(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_nan(v) for v in obj]
-    return obj
-
-
-def _compute_aggregates(conn, exp_id: int) -> dict:
-    """Compute per-metric averages for a completed experiment."""
-    result_rows = conn.execute(
-        "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
-        (exp_id,),
-    ).fetchall()
-    totals: dict[str, float] = {}
-    counts: dict[str, int] = {}
-    for rr in result_rows:
-        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
-        for metric_name, value in metrics.items():
-            if value is not None:
-                totals[metric_name] = totals.get(metric_name, 0.0) + value
-                counts[metric_name] = counts.get(metric_name, 0) + 1
-            else:
-                if metric_name not in totals:
-                    totals[metric_name] = 0.0
-                if metric_name not in counts:
-                    counts[metric_name] = 0
-    aggregate: dict[str, float | None] = {}
-    for mn in totals:
-        cnt = counts[mn]
-        aggregate[mn] = round(totals[mn] / cnt, 4) if cnt > 0 else None
-    return aggregate
-
-
-def _aggregate_rows(result_rows) -> tuple[dict | None, float | None, int]:
-    """Aggregate metric scores from experiment_results rows.
-
-    Returns (aggregate_metrics, overall_score, result_count).
-    Metrics with all-null values are omitted (unlike _compute_aggregates).
-    """
-    n = len(result_rows)
-    if not result_rows:
-        return None, None, 0
-    totals: dict[str, float] = {}
-    counts: dict[str, int] = {}
-    for rr in result_rows:
-        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
-        for metric_name, value in metrics.items():
-            if value is not None:
-                totals[metric_name] = totals.get(metric_name, 0.0) + value
-                counts[metric_name] = counts.get(metric_name, 0) + 1
-    aggregate: dict[str, float | None] = {}
-    for mn in totals:
-        cnt = counts[mn]
-        aggregate[mn] = round(totals[mn] / cnt, 4) if cnt > 0 else None
-    valid_scores = [v for v in aggregate.values() if v is not None]
-    overall = round(sum(valid_scores) / len(valid_scores), 4) if valid_scores else None
-    return aggregate, overall, n
 
 
 # RAG config fields to compare for delta
@@ -307,7 +206,7 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
         row = conn.execute(
             "SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
-        return _parse_experiment_row(row)
+        return parse_experiment_row(row)
 
     # --- RAG config path (internal RAG pipeline, legacy) ---
     if req.test_set_id is None:
@@ -357,6 +256,13 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
         "system_prompt": rag_config["system_prompt"],
         "response_mode": rag_config["response_mode"],
         "max_steps": rag_config["max_steps"],
+        "reranker_model": rag_config["reranker_model"],
+        "reranker_top_k": rag_config["reranker_top_k"],
+        "query_expansion": rag_config["query_expansion"],
+        "num_expansions": rag_config["num_expansions"],
+        "score_threshold": rag_config["score_threshold"],
+        "mmr_lambda": rag_config["mmr_lambda"],
+        "kg_expansion": rag_config["kg_expansion"],
     })
 
     cursor = conn.execute(
@@ -381,11 +287,15 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
     row = conn.execute(
         "SELECT * FROM experiments WHERE id = ?", (cursor.lastrowid,)
     ).fetchone()
-    return _parse_experiment_row(row)
+    return parse_experiment_row(row)
 
 
 @router.get("/projects/{project_id}/experiments")
-async def list_experiments(project_id: int):
+async def list_experiments(
+    project_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
     conn = db.init.get_db()
 
     # Auto-detect and clean up stale "running" experiments
@@ -398,8 +308,8 @@ async def list_experiments(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     rows = conn.execute(
-        "SELECT * FROM experiments WHERE project_id = ? ORDER BY created_at DESC",
-        (project_id,),
+        "SELECT * FROM experiments WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (project_id, limit, offset),
     ).fetchall()
 
     if not rows:
@@ -445,7 +355,7 @@ async def list_experiments(project_id: int):
 
     experiments = []
     for row in rows:
-        exp = _parse_experiment_row(row)
+        exp = parse_experiment_row(row)
         ts_id = row["test_set_id"]
         stats = q_stats_by_ts.get(ts_id)
         exp["approved_question_count"] = stats["approved_count"] if stats else 0
@@ -482,8 +392,8 @@ async def compare_experiments(
     raw_parts = ids.split(",")
     try:
         experiment_ids = [int(p.strip()) for p in raw_parts if p.strip()]
-    except ValueError:
-        raise HTTPException(status_code=400, detail="All experiment IDs must be numeric")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="All experiment IDs must be numeric") from exc
 
     if len(experiment_ids) < 2 or len(experiment_ids) > 5:
         raise HTTPException(status_code=400, detail="Provide between 2 and 5 experiment IDs")
@@ -530,7 +440,7 @@ async def compare_experiments(
     # Build experiment metadata
     experiments_meta = []
     for row in rows:
-        exp = _parse_experiment_row(row)
+        exp = parse_experiment_row(row)
 
         ts = conn.execute(
             "SELECT name FROM test_sets WHERE id = ?", (row["test_set_id"],)
@@ -553,25 +463,27 @@ async def compare_experiments(
         exp["result_count"] = len(result_rows)
 
         if result_rows:
-            exp["aggregate_metrics"] = _compute_aggregates(conn, row["id"])
+            exp["aggregate_metrics"] = compute_aggregates(conn, row["id"])
         else:
             exp["aggregate_metrics"] = None
 
         experiments_meta.append(exp)
 
-    # Fetch all results for all experiments
+    # Fetch all results for all experiments (bounded — the guard below
+    # rejects anything that hits the cap instead of loading it all)
     all_results = conn.execute(
         f"""SELECT er.*, tq.question, tq.reference_answer, tq.user_edited_answer,
                    tq.question_type, tq.persona
             FROM experiment_results er
             JOIN test_questions tq ON er.test_question_id = tq.id
             WHERE er.experiment_id IN ({placeholders})
-            ORDER BY tq.id""",
+            ORDER BY tq.id
+            LIMIT 2501""",
         tuple(experiment_ids),
     ).fetchall()
 
     # Guard: payload size limit
-    if len(all_results) > 2500:
+    if len(all_results) >= 2501:
         raise HTTPException(
             status_code=413,
             detail="Too many results for comparison. Reduce experiment count or use experiments with smaller test sets.",
@@ -594,7 +506,7 @@ async def compare_experiments(
 
         questions_map[qid]["experiments"][r["experiment_id"]] = {
             "response": r["response"],
-            "metrics": _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {},
+            "metrics": sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {},
             "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
             "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
         }
@@ -646,9 +558,9 @@ async def get_experiment_history(project_id: int):
 
     experiments = []
     for row in rows:
-        exp = _parse_experiment_row(row)
+        exp = parse_experiment_row(row)
         exp["rag_config_name"] = rc_name_by_id.get(row["rag_config_id"])
-        agg, overall, n = _aggregate_rows(results_by_exp[row["id"]])
+        agg, overall, n = aggregate_rows(results_by_exp[row["id"]])
         exp["result_count"] = n
         exp["aggregate_metrics"] = agg
         exp["overall_score"] = overall
@@ -679,7 +591,7 @@ async def get_experiment(project_id: int, experiment_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
-    exp = _parse_experiment_row(row)
+    exp = parse_experiment_row(row)
 
     # Include test_set name and rag_config name for display
     ts = conn.execute(
@@ -711,9 +623,24 @@ async def get_experiment(project_id: int, experiment_id: int):
     exp["result_count"] = len(result_rows)
 
     if result_rows:
-        exp["aggregate_metrics"] = _compute_aggregates(conn, experiment_id)
+        exp["aggregate_metrics"] = compute_aggregates(conn, experiment_id)
+        # Bootstrap CIs so small test sets don't present noise as signal
+        from evaluation.stats import bootstrap_ci
+
+        values_by_metric: dict[str, list[float]] = {}
+        for rr in result_rows:
+            metrics = sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
+            for mn, v in metrics.items():
+                if v is not None:
+                    values_by_metric.setdefault(mn, []).append(v)
+        exp["aggregate_ci"] = {
+            mn: bootstrap_ci(vals) for mn, vals in values_by_metric.items()
+        }
     else:
         exp["aggregate_metrics"] = None
+        exp["aggregate_ci"] = None
+
+    exp["token_usage"] = compute_token_usage(conn, experiment_id)
 
     return exp
 
@@ -757,7 +684,7 @@ async def get_experiment_results(project_id: int, experiment_id: int):
             "persona": r["persona"],
             "response": r["response"],
             "retrieved_contexts": json.loads(r["retrieved_contexts"]) if r["retrieved_contexts"] else [],
-            "metrics": _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {},
+            "metrics": sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {},
             "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
             "created_at": r["created_at"],
         })
@@ -849,13 +776,16 @@ async def run_experiment(
     if cursor.rowcount != 1:
         raise HTTPException(status_code=409, detail="Experiment already claimed by another request")
 
-    # Clean up partial results from a prior failed run (if any)
+    # Clean up partial results from a prior failed run (if any).
+    # ALWAYS commit: even a zero-row DELETE opens a write transaction on this
+    # shared connection, and leaving it open blocks the background task's
+    # connection ("database is locked") until something else commits.
     deleted = conn.execute(
         "DELETE FROM experiment_results WHERE experiment_id = ?",
         (experiment_id,),
     )
+    conn.commit()
     if deleted.rowcount > 0:
-        conn.commit()
         logger.info(
             "Experiment %d re-run: deleted %d partial results from prior attempt",
             experiment_id,
@@ -883,8 +813,7 @@ async def run_experiment(
                 try:
                     resp = await client.post(f"{worker_url}/run-experiment", json=payload)
                     if resp.status_code == 202:
-                        with _experiment_worker_lock:
-                            _experiment_worker[experiment_id] = worker_url
+                        experiment_runs.set_worker(experiment_id, worker_url)
                         logger.info("Experiment %d delegated to worker: %s", experiment_id, worker_url)
                         delegated = True
                         break
@@ -896,11 +825,11 @@ async def run_experiment(
                     logger.warning("Worker %s unreachable for experiment: %s", worker_url, e)
 
         if delegated:
-            _experiment_progress[experiment_id] = {
+            experiment_runs.set_progress(experiment_id, {
                 "phase": "starting", "current": 0, "total": 0,
                 "question": "", "error": None, "result_count": 0,
                 "delegated_to_worker": True,
-            }
+            })
             return {
                 "experiment_id": experiment_id,
                 "status": "started",
@@ -911,650 +840,25 @@ async def run_experiment(
 
     # --- Launch local background task ---
     cancel_event = asyncio.Event()
-    _cancel_events[experiment_id] = cancel_event
-    _experiment_progress[experiment_id] = {
+    experiment_runs.set_cancel_event(experiment_id, cancel_event)
+    experiment_runs.set_progress(experiment_id, {
         "phase": "starting", "current": 0, "total": 0,
         "question": "", "error": None, "result_count": 0,
         "completed_items": [], "in_flight": [], "scoring_metrics": [],
-    }
+    })
 
-    async def _run_background():
-        run_conn = db.init.get_thread_db()
-        completed_count = 0
-        tasks: list[asyncio.Task] = []
-
-        try:
-            # Fetch approved/edited test questions
-            questions = run_conn.execute(
-                "SELECT * FROM test_questions WHERE test_set_id = ? AND status IN ('approved', 'edited') ORDER BY id",
-                (experiment["test_set_id"],),
-            ).fetchall()
-
-            total = len(questions)
-            _experiment_progress[experiment_id] = {
-                "phase": "setup", "current": 0, "total": total,
-                "question": "", "error": None, "result_count": 0,
-                "completed_items": [],
-                "in_flight": [],
-                "in_flight_details": {},
-                "setup_step": "Loading metric scorers...",
-            }
-
-            # Yield control so the SSE stream can send the setup phase
-            await asyncio.sleep(0)
-
-            # Resolve judge model assignments:
-            # 1. Use request's judge_model_assignments if provided
-            # 2. Otherwise fall back to project-level defaults
-            judge_assignments = req.judge_model_assignments or None
-            if not judge_assignments:
-                proj_row = run_conn.execute(
-                    "SELECT judge_model_assignments_json FROM projects WHERE id = ?",
-                    (project_id,),
-                ).fetchone()
-                if proj_row and proj_row["judge_model_assignments_json"]:
-                    judge_assignments = json.loads(proj_row["judge_model_assignments_json"])
-            if not judge_assignments:
-                from config import MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS
-                judge_assignments = MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS
-
-            # Validate judge model API key availability before starting
-            judge_is_selected = (
-                "multi_llm_judge" in selected_metrics
-                or any(
-                    cr["metric_type"] in ("criteria_judge", "reference_judge") and cr["name"] in selected_metrics
-                    for cr in all_custom_rows
-                )
-            )
-            if judge_is_selected and judge_assignments:
-                from pipeline.llm import get_available_judge_models
-                known_models = {m["id"]: m for m in await get_available_judge_models()}
-                _PROVIDER_KEY = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY"}
-                unknown, missing_key = [], []
-                for mid in dict.fromkeys(judge_assignments):  # deduplicate, preserve order
-                    if mid not in known_models:
-                        unknown.append(mid)
-                    elif not known_models[mid]["available"]:
-                        provider = known_models[mid].get("provider", "unknown")
-                        key_name = _PROVIDER_KEY.get(provider, f"{provider.upper()}_API_KEY")
-                        missing_key.append(f"{mid} (needs {key_name})")
-                errors = []
-                if unknown:
-                    errors.append(f"Unrecognised judge models: {', '.join(unknown)}")
-                if missing_key:
-                    errors.append(f"Missing API keys for judge models: {', '.join(missing_key)}")
-                if errors:
-                    raise HTTPException(status_code=400, detail=" | ".join(errors))
-
-            # Load custom metrics for this project
-            custom_rows = all_custom_rows
-            custom_configs = []
-            criteria_judge_configs = []
-            reference_judge_configs = []
-            for cr in custom_rows:
-                cm_name = cr["name"]
-                if cm_name not in selected_metrics:
-                    continue
-                if cr["metric_type"] == "criteria_judge":
-                    refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
-                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr.keys() and cr["few_shot_examples_json"] else None
-                    if refined:
-                        criteria_judge_configs.append(
-                            _multi_llm_judge_module.CriteriaJudgeConfig(
-                                metric_name=cm_name,
-                                refined_prompt=refined,
-                                num_evaluators=len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators,
-                                model_assignments=judge_assignments,
-                                temperature_assignments=req.judge_temperature_assignments,
-                                few_shot_examples=few_shot,
-                            )
-                        )
-                elif cr["metric_type"] == "reference_judge":
-                    refined = cr["refined_prompt"] if "refined_prompt" in cr.keys() else None
-                    few_shot = json.loads(cr["few_shot_examples_json"]) if "few_shot_examples_json" in cr.keys() and cr["few_shot_examples_json"] else None
-                    if refined:
-                        reference_judge_configs.append(
-                            _multi_llm_judge_module.ReferenceJudgeConfig(
-                                metric_name=cm_name,
-                                refined_prompt=refined,
-                                num_evaluators=len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators,
-                                model_assignments=judge_assignments,
-                                temperature_assignments=req.judge_temperature_assignments,
-                                few_shot_examples=few_shot,
-                            )
-                        )
-                else:
-                    custom_configs.append(CustomMetricConfig(
-                        name=cm_name,
-                        metric_type=cr["metric_type"],
-                        prompt=cr["prompt"],
-                        rubrics=json.loads(cr["rubrics_json"]) if cr["rubrics_json"] else None,
-                        min_score=cr["min_score"],
-                        max_score=cr["max_score"],
-                    ))
-
-            # Filter selected_metrics to only built-in ones for setup_scorers
-            # multi_llm_judge, criteria_judge, and reference_judge metrics are excluded
-            # from setup_scorers — handled separately below.
-            criteria_names = {cfg.metric_name for cfg in criteria_judge_configs}
-            reference_names = {cfg.metric_name for cfg in reference_judge_configs}
-            judge_custom_names = criteria_names | reference_names
-            builtin_selected = [
-                m for m in selected_metrics
-                if m in ALL_METRICS and m != "multi_llm_judge"
-            ]
-
-            # Setup multi-llm-judge config if selected
-            judge_config = None
-            if "multi_llm_judge" in selected_metrics:
-                n_evaluators = len(judge_assignments) if judge_assignments else req.multi_llm_judge_evaluators
-                judge_config = _multi_llm_judge_module.MultiLLMJudgeConfig(
-                    num_evaluators=n_evaluators,
-                    model_assignments=judge_assignments,
-                    temperature_assignments=req.judge_temperature_assignments,
-                )
-                logger.info(
-                    "Experiment %d: multi_llm_judge enabled with %d evaluators (assignments: %s)",
-                    experiment_id, n_evaluators, judge_assignments,
-                )
-
-            # Setup scorers — skip entirely when no built-in or custom metrics
-            # are selected (e.g. only multi_llm_judge). Calling setup_scorers([])
-            # or setup_scorers(None) falls back to ALL_METRICS inside that
-            # function, so we must guard the call here instead.
-            logger.info("Experiment %d: setting up scorers for %s", experiment_id, builtin_selected)
-            scorers, custom_scorers, llm = setup_scorers(
-                builtin_selected,   # [] → no built-in metrics (fixed in scoring.py)
-                custom_configs,
-                rubrics=req.rubrics,
-            )
-            logger.info("Experiment %d: scorers ready (%d built-in, %d custom)", experiment_id, len(scorers), len(custom_scorers or {}))
-
-            # Transition from setup → running
-            _experiment_progress[experiment_id] = {
-                "phase": "running", "current": 0, "total": total,
-                "question": "", "error": None, "result_count": 0,
-                "completed_items": [],
-                "in_flight": [],
-                "in_flight_details": {},
-            }
-
-            # Determine execution mode: external bot or internal RAG
-            use_bot = experiment["bot_config_id"] is not None
-            is_csv = False
-            connector = None
-            virtual_config = None
-            csv_answer_lookup: dict[str, dict] = {}
-
-            if use_bot:
-                bot_cfg = run_conn.execute(
-                    "SELECT * FROM bot_configs WHERE id = ?",
-                    (experiment["bot_config_id"],),
-                ).fetchone()
-                if bot_cfg is None:
-                    _experiment_progress[experiment_id] = {
-                        "phase": "error", "current": 0, "total": total,
-                        "question": "", "error": "Bot config not found", "result_count": 0,
-                    }
-                    return
-                is_csv = bot_cfg["connector_type"] == "csv"
-                if is_csv:
-                    # Pre-load bot answers from external_baselines for direct lookup
-                    bl_rows = run_conn.execute(
-                        "SELECT question, answer, sources FROM external_baselines WHERE bot_config_id = ?",
-                        (experiment["bot_config_id"],),
-                    ).fetchall()
-                    for bl in bl_rows:
-                        csv_answer_lookup[bl["question"].strip().lower()] = {
-                            "answer": bl["answer"],
-                            "sources": bl["sources"] or "",
-                        }
-                else:
-                    bot_config_dict = json.loads(bot_cfg["config_json"]) if bot_cfg["config_json"] else {}
-                    connector = create_connector(
-                        bot_cfg["connector_type"],
-                        bot_config_dict,
-                        prompt_for_sources=bool(bot_cfg["prompt_for_sources"]),
-                    )
-            else:
-                virtual_config = _build_virtual_rag_config_row(experiment, project_id)
-
-            # --- Concurrent question processing ---
-            semaphore = asyncio.Semaphore(req.concurrency)
-            progress_queue: asyncio.Queue = asyncio.Queue()
-
-            async def _process_question(idx: int, q_row):
-                """Process a single question under the semaphore."""
-                question_text = q_row["question"]
-                qid = q_row["id"]
-
-                async with semaphore:
-                    if cancel_event.is_set():
-                        return  # skip if cancelled
-
-                    # Track in-flight question with detail
-                    prog = _experiment_progress.get(experiment_id)
-                    if prog is not None:
-                        prog["in_flight"] = [*prog["in_flight"], question_text[:120]]
-                        all_metric_names = list(scorers.keys()) + list((custom_scorers or {}).keys())
-                        prog["in_flight_details"][qid] = {
-                            "question": question_text[:200],
-                            "phase": "scoring" if is_csv else "querying",
-                            "metrics_done": [],
-                            "metrics_active": [],
-                            "metrics_pending": all_metric_names[:],
-                        }
-
-                    try:
-                        if is_csv:
-                            # Look up the bot's actual answer from external_baselines;
-                            # reference_answer (ground truth) comes from test_questions.
-                            logger.info("CSV experiment %d: processing q%d '%s'", experiment_id, qid, question_text[:60])
-                            csv_match = csv_answer_lookup.get(question_text.strip().lower())
-                            if csv_match:
-                                generated_answer = csv_match["answer"]
-                                source_text = csv_match["sources"]
-                            else:
-                                generated_answer = (
-                                    q_row["user_edited_answer"]
-                                    if q_row["user_edited_answer"]
-                                    else q_row["reference_answer"]
-                                ) or ""
-                                source_text = ""
-                            raw_contexts = json.loads(q_row["reference_contexts"]) if q_row["reference_contexts"] else []
-                            full_context_dicts = [
-                                {"content": c, "source": "csv_upload"} if isinstance(c, str)
-                                else c
-                                for c in raw_contexts
-                            ]
-                            context_strings = [
-                                c if isinstance(c, str) else c.get("content", "")
-                                for c in raw_contexts
-                            ]
-                            usage_info = {"source": "csv_preloaded"}
-                        elif use_bot:
-                            bot_response = await asyncio.wait_for(
-                                connector.query(question_text), timeout=BOT_QUERY_TIMEOUT
-                            )
-                            generated_answer = bot_response.answer
-                            citations_data = [asdict(c) for c in bot_response.citations]
-
-                            # Build context dicts from citations so RAGAS
-                            # metrics (faithfulness, context_precision, etc.)
-                            # can evaluate against the bot's retrieved sources.
-                            full_context_dicts = [
-                                {
-                                    "content": c.snippet,
-                                    "source": c.url or c.title or "unknown",
-                                    "datasource": c.datasource,
-                                    "container": c.container,
-                                }
-                                for c in bot_response.citations
-                                if c.snippet
-                            ]
-                            citation_contexts = [d["content"] for d in full_context_dicts]
-
-                            usage_info = {
-                                "source": "bot_connector",
-                                "citations": citations_data,
-                                "raw_response": bot_response.raw_response,
-                            }
-                            # Use the bot's actual retrieved contexts for
-                            # scoring — these are what RAGAS metrics should
-                            # evaluate (retrieval quality, faithfulness, etc.).
-                            context_strings = citation_contexts
-                        else:
-                            response_mode = virtual_config["response_mode"]
-                            if response_mode == "multi_step":
-                                query_result = await multi_step_query(
-                                    question_text, virtual_config, run_conn
-                                )
-                            else:
-                                query_result = await single_shot_query(
-                                    question_text, virtual_config, run_conn
-                                )
-                            generated_answer = query_result["answer"]
-                            full_context_dicts = query_result["contexts"]
-                            usage_info = query_result.get("usage", {})
-                            context_strings = [c["content"] for c in full_context_dicts]
-
-                        # Update phase to scoring
-                        prog = _experiment_progress.get(experiment_id)
-                        if prog is not None and qid in prog["in_flight_details"]:
-                            prog["in_flight_details"][qid]["phase"] = "scoring"
-
-                        ref_answer = (
-                            q_row["user_edited_answer"]
-                            if q_row["user_edited_answer"]
-                            else q_row["reference_answer"]
-                        )
-                        q_metadata = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else None
-
-                        def _on_metric_start(metric_name):
-                            prog = _experiment_progress.get(experiment_id)
-                            if prog is not None:
-                                active = set(prog.get("scoring_metrics", []))
-                                active.add(metric_name)
-                                prog["scoring_metrics"] = sorted(active)
-                                # Per-question tracking
-                                detail = prog.get("in_flight_details", {}).get(qid)
-                                if detail is not None:
-                                    if metric_name in detail["metrics_pending"]:
-                                        detail["metrics_pending"] = [m for m in detail["metrics_pending"] if m != metric_name]
-                                    if metric_name not in detail["metrics_active"]:
-                                        detail["metrics_active"] = [*detail["metrics_active"], metric_name]
-
-                        def _on_metric_done(metric_name):
-                            prog = _experiment_progress.get(experiment_id)
-                            if prog is not None:
-                                active = set(prog.get("scoring_metrics", []))
-                                active.discard(metric_name)
-                                prog["scoring_metrics"] = sorted(active)
-                                # Per-question tracking
-                                detail = prog.get("in_flight_details", {}).get(qid)
-                                if detail is not None:
-                                    detail["metrics_active"] = [m for m in detail["metrics_active"] if m != metric_name]
-                                    if metric_name not in detail["metrics_done"]:
-                                        detail["metrics_done"] = [*detail["metrics_done"], metric_name]
-
-                        metrics_result = await evaluate_experiment_row(
-                            scorers,
-                            question_text,
-                            generated_answer,
-                            ref_answer,
-                            context_strings,
-                            custom_scorers=custom_scorers,
-                            llm=llm,
-                            on_metric_start=_on_metric_start,
-                            on_metric_done=_on_metric_done,
-                            rubrics=req.rubrics,
-                            metadata=q_metadata,
-                        )
-
-                        await progress_queue.put({
-                            "idx": idx, "qid": qid, "question_text": question_text,
-                            "generated_answer": generated_answer,
-                            "reference_answer": ref_answer,
-                            "full_context_dicts": full_context_dicts,
-                            "metrics_result": metrics_result,
-                            "usage_info": usage_info,
-                            "error": None,
-                        })
-
-                    except Exception as e:
-                        logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, e)
-                        await progress_queue.put({
-                            "idx": idx, "qid": qid, "question_text": question_text,
-                            "generated_answer": None,
-                            "full_context_dicts": [],
-                            "metrics_result": {},
-                            "usage_info": {"error": str(e), "question_id": qid},
-                            "error": str(e),
-                        })
-
-            # Launch all question tasks concurrently (semaphore limits actual parallelism)
-            tasks = [
-                asyncio.create_task(_process_question(i, q_row))
-                for i, q_row in enumerate(questions, 1)
-            ]
-
-            # Collect results as they complete
-            finished = 0
-            while finished < total:
-                if cancel_event.is_set():
-                    break
-                try:
-                    result = await asyncio.wait_for(progress_queue.get(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    continue
-                finished += 1
-                qid = result["qid"]
-                question_text = result["question_text"]
-
-                if result["error"] is None:
-                    run_conn = db.init.reconnect_if_needed(run_conn)
-                    cur = run_conn.execute(
-                        """INSERT INTO experiment_results
-                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (
-                            experiment_id, qid,
-                            result["generated_answer"],
-                            json.dumps(result["full_context_dicts"]),
-                            json.dumps(_sanitize_nan(result["metrics_result"])),
-                            json.dumps(result["usage_info"]),
-                        ),
-                    )
-                    result_row_id = cur.lastrowid
-
-                    # --- Multi-LLM Judge (isolated block — no impact on normal metrics) ---
-                    if judge_config is not None:
-                        try:
-                            judge_evals = await _multi_llm_judge_module.run_judge(
-                                judge_config,
-                                result["question_text"],
-                                result["generated_answer"] or "",
-                                result["full_context_dicts"],
-                            )
-                            if judge_evals:
-                                for ev in judge_evals:
-                                    run_conn.execute(
-                                        """INSERT INTO multi_llm_evaluations
-                                           (experiment_result_id, evaluator_index, verdict, score, claims_json, reasoning)
-                                           VALUES (?, ?, ?, ?, ?, ?)""",
-                                        (
-                                            result_row_id,
-                                            ev["evaluator_index"],
-                                            ev["verdict"],
-                                            ev["score"],
-                                            json.dumps(ev["claims"]),
-                                            ev.get("reasoning") or None,
-                                        ),
-                                    )
-                                agg = _multi_llm_judge_module.aggregate_score(judge_evals)
-                                result["metrics_result"]["multi_llm_judge"] = agg
-                                run_conn.execute(
-                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
-                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
-                                )
-                        except Exception as _judge_err:
-                            logger.warning(
-                                "Experiment %d: multi_llm_judge failed for result %d: %s",
-                                experiment_id, result_row_id, _judge_err,
-                                exc_info=True,
-                            )
-                    # --- End Multi-LLM Judge block ---
-
-                    # --- Criteria Judges (one per custom criteria_judge metric) ---
-                    for cj_config in criteria_judge_configs:
-                        try:
-                            cj_evals = await _multi_llm_judge_module.run_criteria_judge(
-                                cj_config,
-                                result["question_text"],
-                                result["generated_answer"] or "",
-                                result["full_context_dicts"],
-                            )
-                            if cj_evals:
-                                for ev in cj_evals:
-                                    run_conn.execute(
-                                        """INSERT INTO multi_llm_evaluations
-                                           (experiment_result_id, evaluator_index, verdict, score,
-                                            claims_json, custom_metric_name)
-                                           VALUES (?, ?, ?, ?, ?, ?)""",
-                                        (
-                                            result_row_id,
-                                            ev["evaluator_index"],
-                                            ev["verdict"],
-                                            ev["score"],
-                                            json.dumps(ev["highlights"]),
-                                            cj_config.metric_name,
-                                        ),
-                                    )
-                                agg = _multi_llm_judge_module.aggregate_criteria_score(cj_evals)
-                                result["metrics_result"][cj_config.metric_name] = agg
-                                run_conn.execute(
-                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
-                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
-                                )
-                        except Exception as _cj_err:
-                            logger.warning(
-                                "Experiment %d: criteria_judge '%s' failed for result %d: %s",
-                                experiment_id, cj_config.metric_name, result_row_id, _cj_err,
-                                exc_info=True,
-                            )
-                    # --- End Criteria Judges block ---
-
-                    # --- Reference Judges (one per custom reference_judge metric) ---
-                    for rj_config in reference_judge_configs:
-                        try:
-                            rj_evals = await _multi_llm_judge_module.run_reference_judge(
-                                rj_config,
-                                result["question_text"],
-                                result["reference_answer"] or "",
-                                result["generated_answer"] or "",
-                                result["full_context_dicts"],
-                            )
-                            if rj_evals:
-                                for ev in rj_evals:
-                                    run_conn.execute(
-                                        """INSERT INTO multi_llm_evaluations
-                                           (experiment_result_id, evaluator_index, verdict, score,
-                                            claims_json, custom_metric_name)
-                                           VALUES (?, ?, ?, ?, ?, ?)""",
-                                        (
-                                            result_row_id,
-                                            ev["evaluator_index"],
-                                            ev["verdict"],
-                                            ev["score"],
-                                            json.dumps(ev["highlights"]),
-                                            rj_config.metric_name,
-                                        ),
-                                    )
-                                agg = _multi_llm_judge_module.aggregate_criteria_score(rj_evals)
-                                result["metrics_result"][rj_config.metric_name] = agg
-                                run_conn.execute(
-                                    "UPDATE experiment_results SET metrics_json = ? WHERE id = ?",
-                                    (json.dumps(_sanitize_nan(result["metrics_result"])), result_row_id),
-                                )
-                        except Exception as _rj_err:
-                            logger.warning(
-                                "Experiment %d: reference_judge '%s' failed for result %d: %s",
-                                experiment_id, rj_config.metric_name, result_row_id, _rj_err,
-                                exc_info=True,
-                            )
-                    # --- End Reference Judges block ---
-                else:
-                    run_conn = db.init.reconnect_if_needed(run_conn)
-                    run_conn.execute(
-                        """INSERT INTO experiment_results
-                           (experiment_id, test_question_id, response, retrieved_contexts, metrics_json, metadata_json)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (experiment_id, qid, None, "[]", "{}", json.dumps(result["usage_info"])),
-                    )
-                run_conn.commit()
-                completed_count += 1
-
-                # Update shared progress state (preserve accumulated lists)
-                prog = _experiment_progress.get(experiment_id, {})
-                completed_items = prog.get("completed_items", [])
-                in_flight = prog.get("in_flight", [])
-
-                # Add to completed log (keep last 50 to bound memory)
-                completed_items = [*completed_items[-49:], {
-                    "question": question_text[:200],
-                    "response": (result["generated_answer"] or "")[:300] if result["generated_answer"] else None,
-                    "error": result["error"],
-                    "metrics": result["metrics_result"] if result["error"] is None else {},
-                }]
-
-                # Remove from in-flight
-                q_short = question_text[:120]
-                in_flight = [q for q in in_flight if q != q_short]
-
-                # Remove from in_flight_details
-                in_flight_details = dict(prog.get("in_flight_details", {}))
-                in_flight_details.pop(qid, None)
-
-                _experiment_progress[experiment_id] = {
-                    "phase": "running", "current": finished, "total": total,
-                    "question": question_text[:100],
-                    "error": result["error"],
-                    "result_count": completed_count,
-                    "completed_items": completed_items,
-                    "in_flight": in_flight,
-                    "in_flight_details": in_flight_details,
-                    "scoring_metrics": prog.get("scoring_metrics", []),
-                }
-
-            # Cancel pending tasks immediately if we broke out early
-            if cancel_event.is_set():
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-            if cancel_event.is_set():
-                run_conn.execute(
-                    "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
-                    (datetime.now().isoformat(), experiment_id),
-                )
-                run_conn.commit()
-                _experiment_progress[experiment_id] = {
-                    "phase": "cancelled", "current": finished, "total": total,
-                    "question": "", "error": None, "result_count": completed_count,
-                }
-            else:
-                # All questions processed -- mark completed
-                run_conn.execute(
-                    "UPDATE experiments SET status = 'completed', completed_at = ? WHERE id = ?",
-                    (datetime.now().isoformat(), experiment_id),
-                )
-                run_conn.commit()
-                _experiment_progress[experiment_id] = {
-                    "phase": "completed", "current": finished, "total": total,
-                    "question": "", "error": None, "result_count": completed_count,
-                }
-
-        except Exception as e:
-            import traceback
-            logger.error("Experiment %d fatal error: %s\n%s", experiment_id, e, traceback.format_exc())
-            _experiment_progress[experiment_id] = {
-                "phase": "error", "current": 0, "total": 0,
-                "question": "", "error": str(e), "result_count": 0,
-            }
-
-        finally:
-            _cancel_events.pop(experiment_id, None)
-            _background_tasks.pop(experiment_id, None)
-            # Cancel any in-flight question tasks to avoid zombie coroutines
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Cleanup guarantee: if still "running", set to "failed"
-            try:
-                row = run_conn.execute(
-                    "SELECT status FROM experiments WHERE id = ?",
-                    (experiment_id,),
-                ).fetchone()
-                if row and row["status"] == "running":
-                    run_conn.execute(
-                        "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
-                        (datetime.now().isoformat(), experiment_id),
-                    )
-                    run_conn.commit()
-            except Exception as _cleanup_err:
-                logger.warning(
-                    "Experiment %d: cleanup status-update failed: %s",
-                    experiment_id, _cleanup_err,
-                )
-            finally:
-                run_conn.close()
-
-    task = asyncio.create_task(_run_background())
-    _background_tasks[experiment_id] = task
+    task = asyncio.create_task(
+        run_experiment_background(
+            experiment_id=experiment_id,
+            project_id=project_id,
+            experiment=experiment,
+            selected_metrics=selected_metrics,
+            all_custom_rows=all_custom_rows,
+            req=req,
+            cancel_event=cancel_event,
+        )
+    )
+    experiment_runs.set_task(experiment_id, task)
 
     # Return JSON immediately — the frontend should use GET /progress to observe
     return {
@@ -1575,13 +879,12 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
     the SSE stream sends its first event, avoiding the 'Initializing...' flicker.
     """
     # Check if delegated to a worker
-    with _experiment_worker_lock:
-        worker_url = _experiment_worker.get(experiment_id)
+    worker_url = _trusted_worker_url(experiment_id)
     if worker_url:
         import httpx
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{worker_url}/experiment-progress/{experiment_id}")
+                resp = await client.get(f"{worker_url}/experiment-progress/{int(experiment_id)}")
                 if resp.status_code == 200:
                     data = resp.json()
                     return {
@@ -1596,9 +899,12 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
                         "result_count": data.get("result_count", 0),
                     }
         except Exception:
-            pass
+            logger.warning(
+                "Experiment %d: worker progress-snapshot fetch failed, falling back to local state",
+                experiment_id, exc_info=True,
+            )
 
-    progress = _experiment_progress.get(experiment_id)
+    progress = experiment_runs.snapshot_progress(experiment_id)
     if progress is None:
         raise HTTPException(status_code=404, detail="No active progress for this experiment")
     return {
@@ -1624,11 +930,10 @@ async def experiment_progress(project_id: int, experiment_id: int):
     This is separate from /run so that the frontend can navigate away and
     reconnect later without affecting the background task.
     """
-    # Check if delegated to a worker
-    with _experiment_worker_lock:
-        worker_url = _experiment_worker.get(experiment_id)
+    # Check if delegated to a worker (allowlist-validated URL)
+    worker_url = _trusted_worker_url(experiment_id)
 
-    progress = _experiment_progress.get(experiment_id)
+    progress = experiment_runs.snapshot_progress(experiment_id)
     if progress is None and worker_url is None:
         conn = db.init.get_db()
         exp = conn.execute(
@@ -1652,124 +957,171 @@ async def experiment_progress(project_id: int, experiment_id: int):
     obs_test_set = obs_meta["test_set_name"] if obs_meta else ""
 
     async def _observe():
-        prev_current = -1
         prev_items_sent = 0
         sent_started = False
+        last_change = time.monotonic()
+        last_seen: tuple | None = None
+        last_beat = time.monotonic()
 
-        # If delegated to a worker, proxy progress via HTTP polling
-        if worker_url:
-            import httpx
-            async with httpx.AsyncClient(timeout=10) as client:
-                while True:
-                    try:
-                        resp = await client.get(f"{worker_url}/experiment-progress/{experiment_id}")
-                        if resp.status_code != 200:
-                            yield f"event: error\ndata: {json.dumps({'message': 'Worker unreachable'})}\n\n"
+        try:
+            # If delegated to a worker, proxy progress via HTTP polling
+            if worker_url:
+                import httpx
+                async with httpx.AsyncClient(timeout=10) as client:
+                    while True:
+                        # Heartbeat so proxies don't kill an idle connection
+                        if time.monotonic() - last_beat >= _SSE_HEARTBEAT_SECONDS:
+                            yield ": keepalive\n\n"
+                            last_beat = time.monotonic()
+
+                        try:
+                            resp = await client.get(f"{worker_url}/experiment-progress/{int(experiment_id)}")
+                            if resp.status_code != 200:
+                                yield f"event: error\ndata: {json.dumps({'message': 'Worker unreachable'})}\n\n"
+                                break
+                            prog = resp.json()
+                        except Exception:
+                            logger.warning(
+                                "Experiment %d: lost connection to the worker while streaming progress",
+                                experiment_id, exc_info=True,
+                            )
+                            yield f"event: error\ndata: {json.dumps({'message': 'Worker connection lost'})}\n\n"
                             break
-                        prog = resp.json()
-                    except Exception:
-                        yield f"event: error\ndata: {json.dumps({'message': 'Worker connection lost'})}\n\n"
-                        break
 
-                    phase = prog.get("phase", "starting")
+                        phase = prog.get("phase", "starting")
 
-                    if phase == "starting":
+                        # Stall guard: no phase/current change for too long
+                        seen = (phase, prog.get("current"))
+                        if seen != last_seen:
+                            last_seen = seen
+                            last_change = time.monotonic()
+                        elif time.monotonic() - last_change > _STREAM_STALL_SECONDS:
+                            logger.warning(
+                                "Experiment %d: worker progress stream stalled for %d seconds — closing",
+                                experiment_id, _STREAM_STALL_SECONDS,
+                            )
+                            yield f"data: {json.dumps({'phase': 'error', 'error': 'no progress for 30 minutes — stream closed, reconnect to resume', 'recoverable': True})}\n\n"
+                            break
+
+                        if phase == "starting":
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        if phase == "setup":
+                            if not sent_started and prog.get("total", 0) > 0:
+                                sent_started = True
+                                yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+                            yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog.get('total', 0), 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        if phase == "running":
+                            if not sent_started and prog.get("total", 0) > 0:
+                                sent_started = True
+                                yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+
+                            completed_items = prog.get("completed_items", [])
+                            new_items = completed_items[prev_items_sent:]
+                            prev_items_sent = len(completed_items)
+                            details_list = list(prog.get("in_flight_details", {}).values())
+
+                            yield f"event: progress\ndata: {json.dumps({'current': prog.get('current', 0), 'total': prog.get('total', 0), 'question': prog.get('question', ''), 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        if phase == "completed":
+                            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
+                            break
+
+                        if phase == "cancelled":
+                            yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog.get('result_count', 0)})}\n\n"
+                            break
+
+                        if phase == "error":
+                            yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
+                            break
+
+                        if not prog.get("active", True):
+                            yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
+                            break
+
                         await asyncio.sleep(0.5)
-                        continue
 
-                    if phase == "setup":
-                        if not sent_started and prog.get("total", 0) > 0:
-                            sent_started = True
-                            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
-                        yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog.get('total', 0), 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
-                        await asyncio.sleep(0.5)
-                        continue
+                experiment_runs.release(experiment_id)
+                return
 
-                    if phase == "running":
-                        if not sent_started and prog.get("total", 0) > 0:
-                            sent_started = True
-                            yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+            # Local experiment progress observation
+            while True:
+                # Heartbeat so proxies don't kill an idle connection
+                if time.monotonic() - last_beat >= _SSE_HEARTBEAT_SECONDS:
+                    yield ": keepalive\n\n"
+                    last_beat = time.monotonic()
 
-                        completed_items = prog.get("completed_items", [])
-                        new_items = completed_items[prev_items_sent:]
-                        prev_items_sent = len(completed_items)
-                        details_list = list(prog.get("in_flight_details", {}).values())
+                prog = experiment_runs.snapshot_progress(experiment_id)
+                if prog is None:
+                    break
 
-                        yield f"event: progress\ndata: {json.dumps({'current': prog.get('current', 0), 'total': prog.get('total', 0), 'question': prog.get('question', ''), 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
-                        await asyncio.sleep(0.5)
-                        continue
+                phase = prog["phase"]
 
-                    if phase == "completed":
-                        yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
-                        break
+                # Stall guard: no phase/current change for too long
+                seen = (phase, prog.get("current"))
+                if seen != last_seen:
+                    last_seen = seen
+                    last_change = time.monotonic()
+                elif time.monotonic() - last_change > _STREAM_STALL_SECONDS:
+                    logger.warning(
+                        "Experiment %d: progress stream stalled for %d seconds — closing",
+                        experiment_id, _STREAM_STALL_SECONDS,
+                    )
+                    yield f"data: {json.dumps({'phase': 'error', 'error': 'no progress for 30 minutes — stream closed, reconnect to resume', 'recoverable': True})}\n\n"
+                    break
 
-                    if phase == "cancelled":
-                        yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog.get('result_count', 0)})}\n\n"
-                        break
-
-                    if phase == "error":
-                        yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
-                        break
-
-                    if not prog.get("active", True):
-                        yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog.get('result_count', 0)})}\n\n"
-                        break
-
+                if phase == "starting":
                     await asyncio.sleep(0.5)
+                    continue
 
-            with _experiment_worker_lock:
-                _experiment_worker.pop(experiment_id, None)
-            _experiment_progress.pop(experiment_id, None)
-            return
+                if phase == "setup":
+                    if not sent_started and prog["total"] > 0:
+                        sent_started = True
+                        yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
+                    yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog['total'], 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
+                    await asyncio.sleep(0.5)
+                    continue
 
-        # Local experiment progress observation
-        while True:
-            prog = _experiment_progress.get(experiment_id)
-            if prog is None:
-                break
+                if phase == "running":
+                    if not sent_started and prog["total"] > 0:
+                        sent_started = True
+                        yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
 
-            phase = prog["phase"]
+                    completed_items = prog.get("completed_items", [])
+                    new_items = completed_items[prev_items_sent:]
+                    prev_items_sent = len(completed_items)
 
-            if phase == "starting":
+                    details_list = list(prog.get("in_flight_details", {}).values())
+
+                    yield f"event: progress\ndata: {json.dumps({'current': prog['current'], 'total': prog['total'], 'question': prog['question'], 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if phase == "completed":
+                    yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog['result_count']})}\n\n"
+                    break
+
+                if phase == "cancelled":
+                    yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog['result_count']})}\n\n"
+                    break
+
+                if phase == "error":
+                    yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
+                    break
+
                 await asyncio.sleep(0.5)
-                continue
 
-            if phase == "setup":
-                if not sent_started and prog["total"] > 0:
-                    sent_started = True
-                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
-                yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': prog['total'], 'question': prog.get('setup_step', 'Setting up...'), 'error': None, 'in_flight': [], 'new_completions': [], 'scoring_metrics': [], 'in_flight_details': []})}\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "running":
-                if not sent_started and prog["total"] > 0:
-                    sent_started = True
-                    yield f"event: started\ndata: {json.dumps({'experiment_id': experiment_id, 'total_questions': prog['total'], 'metrics': [], 'experiment_name': obs_exp_name, 'model': obs_model, 'test_set_name': obs_test_set})}\n\n"
-
-                completed_items = prog.get("completed_items", [])
-                new_items = completed_items[prev_items_sent:]
-                prev_items_sent = len(completed_items)
-
-                details_list = list(prog.get("in_flight_details", {}).values())
-
-                yield f"event: progress\ndata: {json.dumps({'current': prog['current'], 'total': prog['total'], 'question': prog['question'], 'error': prog.get('error'), 'in_flight': prog.get('in_flight', []), 'new_completions': new_items, 'scoring_metrics': prog.get('scoring_metrics', []), 'in_flight_details': details_list})}\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            if phase == "completed":
-                yield f"event: completed\ndata: {json.dumps({'experiment_id': experiment_id, 'result_count': prog['result_count']})}\n\n"
-                break
-
-            if phase == "cancelled":
-                yield f"event: cancelled\ndata: {json.dumps({'experiment_id': experiment_id, 'completed': prog['result_count']})}\n\n"
-                break
-
-            if phase == "error":
-                yield f"event: error\ndata: {json.dumps({'message': prog.get('error', 'Unknown error')})}\n\n"
-                break
-
-            await asyncio.sleep(0.5)
+        except Exception:
+            # Details stay in the server log — exception text can carry
+            # internal paths/stack info (CodeQL py/stack-trace-exposure).
+            logger.exception("Experiment %d: progress stream failed", experiment_id)
+            yield f"data: {json.dumps({'phase': 'error', 'error': 'stream failure — see server logs', 'recoverable': True})}\n\n"
 
     return StreamingResponse(_observe(), media_type="text/event-stream")
 
@@ -1844,28 +1196,28 @@ async def cancel_experiment(project_id: int, experiment_id: int):
         raise HTTPException(status_code=409, detail="Experiment is not running")
 
     # Check if delegated to a worker
-    with _experiment_worker_lock:
-        worker_url = _experiment_worker.get(experiment_id)
+    worker_url = _trusted_worker_url(experiment_id)
     if worker_url:
         import httpx
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(f"{worker_url}/cancel-experiment/{experiment_id}")
+                resp = await client.post(f"{worker_url}/cancel-experiment/{int(experiment_id)}")
                 if resp.status_code == 200:
                     return {"status": "cancelling", "experiment_id": experiment_id}
         except Exception:
-            pass
+            logger.warning(
+                "Experiment %d: cancel request to the worker failed — marking failed locally",
+                experiment_id, exc_info=True,
+            )
         conn.execute(
             "UPDATE experiments SET status = 'failed', completed_at = ? WHERE id = ?",
             (datetime.now().isoformat(), experiment_id),
         )
         conn.commit()
-        with _experiment_worker_lock:
-            _experiment_worker.pop(experiment_id, None)
-        _experiment_progress.pop(experiment_id, None)
+        experiment_runs.release(experiment_id)
         return {"status": "cancelled", "experiment_id": experiment_id}
 
-    event = _cancel_events.get(experiment_id)
+    event = experiment_runs.get_cancel_event(experiment_id)
     if event:
         event.set()
     else:
@@ -1961,8 +1313,8 @@ async def get_experiment_delta(project_id: int, experiment_id: int):
                 })
 
     # Compute aggregate metric deltas
-    baseline_agg = _compute_aggregates(conn, baseline["id"])
-    iteration_agg = _compute_aggregates(conn, experiment["id"])
+    baseline_agg = compute_aggregates(conn, baseline["id"])
+    iteration_agg = compute_aggregates(conn, experiment["id"])
 
     all_metric_names = set(baseline_agg.keys()) | set(iteration_agg.keys())
     metric_deltas: dict[str, dict] = {}
@@ -2004,8 +1356,8 @@ async def get_experiment_delta(project_id: int, experiment_id: int):
     for qid in all_q_ids:
         b_row = baseline_by_q.get(qid)
         i_row = iteration_by_q.get(qid)
-        b_metrics = _sanitize_nan(json.loads(b_row["metrics_json"])) if b_row and b_row["metrics_json"] else {}
-        i_metrics = _sanitize_nan(json.loads(i_row["metrics_json"])) if i_row and i_row["metrics_json"] else {}
+        b_metrics = sanitize_nan(json.loads(b_row["metrics_json"])) if b_row and b_row["metrics_json"] else {}
+        i_metrics = sanitize_nan(json.loads(i_row["metrics_json"])) if i_row and i_row["metrics_json"] else {}
         question_text = b_row["question"] if b_row else None
 
         q_metrics: dict[str, dict] = {}
@@ -2095,7 +1447,7 @@ async def export_experiment(
     parsed_rows: list[dict] = []
     for r in rows:
         ref_answer = r["user_edited_answer"] if r["user_edited_answer"] else r["reference_answer"]
-        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
+        metrics = sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
         all_metric_names.update(metrics.keys())
         parsed_rows.append({
             "question": r["question"],

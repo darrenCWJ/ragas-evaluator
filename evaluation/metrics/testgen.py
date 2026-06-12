@@ -11,6 +11,8 @@ Supports:
 - Parallel batch generation for large test sets
 """
 
+import base64
+import gc
 import hashlib
 import json as _json
 import logging
@@ -21,18 +23,29 @@ import signal
 import sys
 import tempfile
 import threading
+import zlib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 
+try:
+    import resource  # Unix only — used for RSS memory logging
+except ImportError:  # Windows
+    resource = None
+
 from openai import AsyncOpenAI, OpenAI
-from ragas.llms import llm_factory
 from ragas.embeddings import embedding_factory
+from ragas.llms import llm_factory
 from ragas.testset import TestsetGenerator
-from ragas.testset.persona import Persona, generate_personas_from_kg
 from ragas.testset.graph import KnowledgeGraph, Node, NodeType
+from ragas.testset.persona import Persona, generate_personas_from_kg
+from ragas.testset.synthesizers.multi_hop import (
+    MultiHopAbstractQuerySynthesizer,
+    MultiHopSpecificQuerySynthesizer,
+)
+from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
 from ragas.testset.transforms import (
-    apply_transforms,
     CosineSimilarityBuilder,
     EmbeddingExtractor,
     HeadlinesExtractor,
@@ -40,13 +53,9 @@ from ragas.testset.transforms import (
     KeyphrasesExtractor,
     OverlapScoreBuilder,
     SummaryExtractor,
+    apply_transforms,
 )
 from ragas.testset.transforms.default import CustomNodeFilter, NERExtractor, ThemesExtractor
-from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
-from ragas.testset.synthesizers.multi_hop import (
-    MultiHopAbstractQuerySynthesizer,
-    MultiHopSpecificQuerySynthesizer,
-)
 
 from config import (
     DEFAULT_EVAL_EMBEDDING,
@@ -58,9 +67,8 @@ from config import (
     TESTGEN_QUESTION_TEMPERATURE,
     TESTGEN_TOPIC_TEMPERATURE,
 )
-from db.init import get_db, NOW_SQL
+from db.init import NOW_SQL, get_db
 from evaluation.metrics.multi_llm_judge import _extract_json
-
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +99,39 @@ def _register_shutdown_handler() -> None:
 # ---------------------------------------------------------------------------
 # Progress tracking — in-memory, keyed by (project_id, kg_source).
 # Use kg_source="testset" for test-set generation progress.
+# When KG_PROGRESS_PIPE is set (subprocess builds), progress is ALSO printed
+# as JSON lines on stdout so the parent process can relay it — without the
+# prints, subprocess builds appear stuck on "Initializing" forever.
 # ---------------------------------------------------------------------------
+
+
+def _log_memory(label: str = "") -> float:
+    """Log current RSS memory in MB. Returns MB value (0.0 where unsupported)."""
+    if resource is None:  # Windows — resource module unavailable
+        return 0.0
+    try:
+        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            rss_mb = rss_bytes / (1024 * 1024)
+        else:
+            rss_mb = rss_bytes / 1024
+        logger.info("Memory [%s]: %.1f MB RSS", label, rss_mb)
+        return rss_mb
+    except Exception:
+        return 0.0
+
+
+def _release_memory() -> None:
+    """Force garbage collection and release freed memory back to the OS."""
+    gc.collect()
+    if sys.platform == "linux":
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+        except Exception:
+            pass  # malloc_trim is glibc-specific, best-effort only
+
 
 _progress_lock = threading.Lock()
 _progress: dict[tuple[int, str], dict] = {}
@@ -101,7 +141,7 @@ def set_progress(project_id: int, data: dict, kg_source: str = "chunks") -> None
     with _progress_lock:
         _progress[(project_id, kg_source)] = data
     if os.environ.get("KG_PROGRESS_PIPE"):
-        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **data}), flush=True)
+        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **data}), flush=True)  # noqa: T201
 
 
 def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> None:
@@ -113,7 +153,7 @@ def update_progress(project_id: int, kg_source: str = "chunks", **fields) -> Non
         else:
             snapshot = fields
     if os.environ.get("KG_PROGRESS_PIPE"):
-        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **snapshot}), flush=True)
+        print(_json.dumps({"_progress": True, "project_id": project_id, "kg_source": kg_source, **snapshot}), flush=True)  # noqa: T201
 
 
 def get_progress(project_id: int, kg_source: str = "chunks") -> dict | None:
@@ -166,6 +206,29 @@ def is_cancelled(project_id: int | None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# KG JSON compression — stored KG JSONs reach tens of MB per project, so they
+# are zlib-compressed (base64-wrapped) transparently at the DB boundary.
+# ---------------------------------------------------------------------------
+
+_KG_COMPRESS_PREFIX = "zlib64:"
+
+
+def _encode_kg_json(text: str) -> str:
+    """Compress KG JSON for storage (base64-wrapped zlib, ~5-10x smaller)."""
+    if os.environ.get("KG_COMPRESSION", "true").lower() in ("0", "false", "no"):
+        return text
+    compressed = base64.b64encode(zlib.compress(text.encode("utf-8"), level=6)).decode("ascii")
+    return _KG_COMPRESS_PREFIX + compressed
+
+
+def decode_kg_json(text: str | None) -> str | None:
+    """Decode stored KG JSON; passes legacy uncompressed rows through."""
+    if text is None or not text.startswith(_KG_COMPRESS_PREFIX):
+        return text
+    return zlib.decompress(base64.b64decode(text[len(_KG_COMPRESS_PREFIX):])).decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
 # KG helpers — load full KG without hash check, and sample nodes from JSON
 # ---------------------------------------------------------------------------
 
@@ -183,7 +246,7 @@ def load_full_kg_json(project_id: int, kg_source: str = "chunks") -> str | None:
         "ORDER BY created_at DESC LIMIT 1",
         (project_id, kg_source),
     ).fetchone()
-    return row["kg_json"] if row is not None else None
+    return decode_kg_json(row["kg_json"]) if row is not None else None
 
 
 def _load_kg_from_json_str(kg_json: str) -> KnowledgeGraph:
@@ -225,6 +288,7 @@ class CombinedNodeExtractor:
 
     def generate_execution_plan(self, kg: "KnowledgeGraph") -> list:  # type: ignore[return]
         from ragas.testset.graph import KnowledgeGraph as _KG  # noqa: F401
+
         from pipeline.llm import chat_completion
 
         async def _process(node) -> None:
@@ -545,7 +609,7 @@ def load_cached_kg(
         project_id,
     )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
-        f.write(row["kg_json"])
+        f.write(decode_kg_json(row["kg_json"]))
         tmp_path = f.name
     try:
         kg = _load_kg_safe(tmp_path)
@@ -578,6 +642,8 @@ def save_kg_to_db(
         kg_json = Path(tmp_path).read_text(encoding="utf-8")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+
+    kg_json = _encode_kg_json(kg_json)
 
     import db.init as _db
     conn = _db.get_thread_db()
@@ -665,6 +731,30 @@ def get_kg_info(project_id: int, kg_source: str = "chunks") -> dict | None:
 _KG_BATCH_SIZE = KG_BATCH_SIZE  # max chunks per apply_transforms call to avoid Ragas deadlock
 
 
+def _get_done_property(transform) -> str | None:
+    """Return the node property that indicates this transform already ran on a node.
+
+    Used to skip already-processed nodes when resuming from a sub-checkpoint.
+    Returns None for transforms that don't write a per-node property (e.g. filters,
+    splitters, relationship builders).
+    """
+    if isinstance(transform, EmbeddingExtractor):
+        return getattr(transform, "property_name", "summary_embedding")
+    if isinstance(transform, CombinedNodeExtractor):
+        return "keyphrases"
+    if isinstance(transform, KeyphrasesExtractor):
+        return getattr(transform, "property_name", "keyphrases")
+    if isinstance(transform, SummaryExtractor):
+        return getattr(transform, "property_name", "summary")
+    if isinstance(transform, HeadlinesExtractor):
+        return getattr(transform, "property_name", "headlines")
+    if isinstance(transform, ThemesExtractor):
+        return getattr(transform, "property_name", "themes")
+    if isinstance(transform, NERExtractor):
+        return getattr(transform, "property_name", "entities")
+    return None
+
+
 def _apply_transform_batched(
     kg: KnowledgeGraph,
     transform,
@@ -673,6 +763,7 @@ def _apply_transform_batched(
     stage_name: str | None = None,
     overlap_max_nodes: int | None = 500,
     kg_source: str = "chunks",
+    save_partial_fn=None,
 ) -> None:
     """Apply a transform to a KG in batches to work around Ragas hanging
     when the number of nodes is large (>~100).
@@ -711,15 +802,52 @@ def _apply_transform_batched(
             kg.relationships.append(rel)
         return
 
+    # Determine the "done marker" property for this transform so we can skip
+    # nodes that were already processed in a previous (killed) run.
+    _done_prop = _get_done_property(transform)
+
     if not needs_llm or len(kg.nodes) <= batch_size:
+        # For per-node extractors, skip nodes that already have the output property.
+        if _done_prop:
+            already_done = [n for n in kg.nodes if n.properties.get(_done_prop) is not None]
+            pending = [n for n in kg.nodes if n.properties.get(_done_prop) is None]
+            if already_done and pending:
+                logger.info(
+                    "  Sub-checkpoint resume (single-batch, prop=%s): %d done, %d remaining",
+                    _done_prop, len(already_done), len(pending),
+                )
+                mini_kg = KnowledgeGraph()
+                mini_kg.nodes = pending
+                apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+                kg.nodes = already_done + mini_kg.nodes
+                return
+            if already_done and not pending:
+                logger.info("  All %d nodes already have '%s' — skipping transform", len(already_done), _done_prop)
+                return
         apply_transforms(kg, transforms=[transform], run_config=RunConfig(max_workers=16))
         return
 
     # Process in batches — build a mini KG per batch, apply, collect nodes.
     all_nodes = list(kg.nodes)
     total_nodes = len(all_nodes)
-    total_batches = (total_nodes + batch_size - 1) // batch_size
     result_nodes = []
+
+    # Skip nodes that already carry the output property from a partial checkpoint.
+    if _done_prop:
+        already_done = [n for n in all_nodes if n.properties.get(_done_prop) is not None]
+        all_nodes = [n for n in all_nodes if n.properties.get(_done_prop) is None]
+        if already_done:
+            logger.info(
+                "  Sub-checkpoint resume (prop=%s): %d/%d nodes done, processing %d remaining",
+                _done_prop, len(already_done), total_nodes, len(all_nodes),
+            )
+        result_nodes = already_done
+        total_nodes = len(all_nodes)
+        if total_nodes == 0:
+            kg.nodes = result_nodes
+            return
+
+    total_batches = (total_nodes + batch_size - 1) // batch_size
     for batch_idx, start in enumerate(range(0, total_nodes, batch_size)):
         batch_nodes = all_nodes[start : start + batch_size]
         mini_kg = KnowledgeGraph()
@@ -743,8 +871,24 @@ def _apply_transform_batched(
                 nodes_total=total_nodes,
             )
             update_heartbeat(project_id)
-        apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=16))
+        # Use fewer workers for embedding to avoid saturating per-minute rate limits.
+        _workers = 2 if isinstance(transform, EmbeddingExtractor) else 16
+        apply_transforms(mini_kg, transforms=[transform], run_config=RunConfig(max_workers=_workers))
         result_nodes.extend(mini_kg.nodes)
+        # Keep kg.nodes current after every batch so that if an exception
+        # propagates (e.g. daily API quota exceeded) the exception handler in
+        # build_knowledge_graph saves a checkpoint that includes the embeddings
+        # computed so far.  On the next run _apply_transform_batched will detect
+        # the already-embedded nodes above and skip them.
+        kg.nodes = result_nodes + all_nodes[start + batch_size :]
+        # Actively persist after each batch so a hard process kill (not just a
+        # Python exception) also survives — the next run picks up from here.
+        if save_partial_fn is not None:
+            save_partial_fn(kg)
+        # Free batch temporaries and release memory back to OS.
+        del mini_kg
+        _release_memory()
+        _log_memory(f"{stage_name} batch {batch_idx + 1}/{total_batches}")
 
     # Final update showing all nodes processed
     if project_id is not None and stage_name:
@@ -902,9 +1046,21 @@ def build_knowledge_graph(
                 total_steps=len(transform_steps),
             )
             update_heartbeat(project_id, kg_source=kg_source)
+        _log_memory(f"before {stage_name}")
         logger.info("KG transform: %s (%d nodes)", stage_name, len(kg.nodes))
         try:
-            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes, kg_source=kg_source)
+            # Save partial KG after each batch so a hard kill (OOM, timeout)
+            # doesn't lose the entire step — only the current batch is lost.
+            _save_partial_fn = None
+            if project_id is not None:
+                _curr_steps = completed_steps
+                _chunks_ref = chunks
+                _cid_ref = chunk_config_id
+                _src_ref = kg_source
+                _total_ref = len(transform_steps)
+                def _save_partial_fn(partial_kg, *, _pid=project_id, _cs=_curr_steps, _ch=_chunks_ref, _cid=_cid_ref, _src=_src_ref, _tot=_total_ref):
+                    save_kg_to_db(partial_kg, _pid, _ch, is_complete=False, completed_steps=_cs, total_steps=_tot, chunk_config_id=_cid, kg_source=_src)
+            _apply_transform_batched(kg, transform, project_id=project_id, stage_name=stage_name, overlap_max_nodes=overlap_max_nodes, kg_source=kg_source, save_partial_fn=_save_partial_fn)
             # Fast mode: after combined extraction, filter nodes marked keep=False
             if fast_mode and stage_name == "kg_combined_extraction":
                 before_filter = len(kg.nodes)
@@ -950,6 +1106,8 @@ def build_knowledge_graph(
                         "Saved checkpoint after step %d/%d for project %d",
                         completed_steps, len(transform_steps), project_id,
                     )
+            _release_memory()
+            _log_memory(f"after step {completed_steps}/{len(transform_steps)}")
         except Exception:
             logger.exception(
                 "KG transform '%s' failed after %d/%d steps — saving partial KG",
@@ -993,7 +1151,7 @@ def build_kg_standalone(
     ).fetchall()
     chunks = [r["content"] for r in rows]
     if not chunks:
-        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+        raise ValueError(f"No chunks found for chunk_config_id={chunk_config_id}")
 
     set_progress(project_id, {
         "stage": "building_knowledge_graph",
@@ -1039,7 +1197,7 @@ def build_kg_standalone_from_documents(
     """
     doc_texts = _fetch_document_texts(project_id)
     if not doc_texts:
-        raise ValueError("No documents found for project_id=%d" % project_id)
+        raise ValueError(f"No documents found for project_id={project_id}")
 
     set_progress(project_id, {
         "stage": "building_knowledge_graph",
@@ -1075,7 +1233,6 @@ def rebuild_kg_links(
     Much faster than a full rebuild since it skips headline and keyphrase
     extraction (the expensive LLM steps).
     """
-    from ragas.run_config import RunConfig
 
     db = get_db()
     row = db.execute(
@@ -1099,7 +1256,7 @@ def rebuild_kg_links(
     try:
         # Load KG from DB
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            f.write(row["kg_json"])
+            f.write(decode_kg_json(row["kg_json"]))
             tmp_path = f.name
         try:
             kg = _load_kg_safe(tmp_path)
@@ -1235,8 +1392,8 @@ def incremental_update_kg(
 
     Designed to run in a background thread.
     """
+
     import db.init as _db
-    from ragas.run_config import RunConfig
 
     conn = _db.get_thread_db()
 
@@ -1247,7 +1404,7 @@ def incremental_update_kg(
     ).fetchall()
     new_chunks = [r["content"] for r in chunk_rows]
     if not new_chunks:
-        raise ValueError("No chunks found for chunk_config_id=%d" % chunk_config_id)
+        raise ValueError(f"No chunks found for chunk_config_id={chunk_config_id}")
 
     # Load existing KG
     row = conn.execute(
@@ -1268,7 +1425,7 @@ def incremental_update_kg(
     # Reconstruct old chunks from the stored hash by loading from the DB
     # We need the actual old chunks to diff. The KG stores chunk content in node properties.
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
-        f.write(row["kg_json"])
+        f.write(decode_kg_json(row["kg_json"]))
         tmp_path = f.name
     try:
         kg = _load_kg_safe(tmp_path)
@@ -1356,7 +1513,7 @@ def incremental_update_kg(
             new_chunk_indices = [i for i in range(len(new_chunks)) if i not in matched_new_indices]
 
             new_kg = KnowledgeGraph()
-            for idx, chunk in zip(new_chunk_indices, added_chunks):
+            for idx, chunk in zip(new_chunk_indices, added_chunks, strict=False):
                 new_kg.nodes.append(
                     Node(
                         type=NodeType.DOCUMENT,
@@ -1661,38 +1818,16 @@ def generate_personas(
 
     llm, embeddings, _ = _build_llm_and_embeddings()
 
-    # Reuse an existing completed KG if available (avoids rebuilding).
-    # Try exact hash match first, then any completed KG for the project.
+    # Reuse an existing completed KG if available (avoids clobbering the main KG).
     kg = None
     if project_id is not None:
         cached = load_cached_kg(project_id, chunks, allow_partial=False, kg_source="chunks")
-        if cached is None:
-            db_conn = get_db()
-            for source in ("chunks", "documents"):
-                row = db_conn.execute(
-                    "SELECT kg_json, is_complete FROM knowledge_graphs "
-                    "WHERE project_id = ? AND kg_source = ? AND is_complete = TRUE",
-                    (project_id, source),
-                ).fetchone()
-                if row is not None:
-                    logger.info("Reusing completed KG (source=%s) for persona generation (project %d)", source, project_id)
-                    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8", errors="replace") as f:
-                        f.write(row["kg_json"])
-                        tmp_path = f.name
-                    try:
-                        cached = _load_kg_safe(tmp_path)
-                    finally:
-                        Path(tmp_path).unlink(missing_ok=True)
-                    break
         if cached is not None:
             logger.info("Reusing existing KG for persona generation (project %d)", project_id)
             kg = cached
 
     if kg is None:
-        raise RuntimeError(
-            "No completed knowledge graph found for this project. "
-            "Build one first from the Test page before using Full persona generation."
-        )
+        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, kg_source="personas")
 
     # Ragas generate_personas_from_kg requires summary + summary_embedding
     # properties that our 4-step KG pipeline doesn't produce.  Check if the
@@ -1873,20 +2008,10 @@ def generate_testset_with_personas(
             "Using pre-sampled KG (%d nodes) — skipping KG build", len(kg.nodes)
         )
     else:
+        logger.info("Building knowledge graph from %d chunks...", len(chunks))
         if project_id is not None:
-            kg_json = load_full_kg_json(project_id, kg_source="chunks")
-            if kg_json is None:
-                kg_json = load_full_kg_json(project_id, kg_source="documents")
-            if kg_json is not None:
-                logger.info("Loading existing KG for test generation (project %d)", project_id)
-                kg = _load_kg_from_json_str(kg_json)
-            else:
-                raise RuntimeError(
-                    "No completed knowledge graph found for this project. "
-                    "Build one first from the Test page before generating test sets."
-                )
-        else:
-            raise RuntimeError("project_id is required for test set generation with personas.")
+            update_progress(project_id, kg_source="testset", stage="building_knowledge_graph")
+        kg = build_knowledge_graph(chunks, llm=llm, embeddings=embeddings, project_id=project_id, fast_mode=fast_mode)
 
     if project_id is not None:
         update_progress(project_id, kg_source="testset", stage="generating_personas")
@@ -2048,12 +2173,17 @@ def _generate_category_questions_via_llm(
 
         results = []
         for item in items[:count]:
-            results.append({
+            entry = {
                 "user_input": item.get("question", ""),
                 "reference": item.get("reference_answer", ""),
                 "reference_contexts": [],
                 "synthesizer_name": category,
-            })
+            }
+            if category == "out_of_knowledge_base":
+                # Tag so refusal_accuracy scores these and reference-based
+                # metrics can be interpreted per-category in breakdowns.
+                entry["metadata"] = {"expected_behavior": "refusal"}
+            results.append(entry)
         return results
     except Exception:
         logger.exception("Failed to generate %s questions via LLM", category)
@@ -2103,8 +2233,9 @@ def _generate_bridge_questions(
     if count <= 0:
         return []
 
-    import networkx as nx
     import random
+
+    import networkx as nx
 
     G, node_lookup = _get_kg_graph(kg)
     if len(G.nodes) < 4:
@@ -2497,7 +2628,7 @@ def _generate_project_testset_inner(
     # the full chunk list because those questions rely on graph-wide
     # connectivity — sampling would degrade quality.
     # ---------------------------------------------------------------------------
-    prebuilt_kg: "KnowledgeGraph | None" = None
+    prebuilt_kg: KnowledgeGraph | None = None
     effective_chunks = chunks
 
     if node_sample_size > 0:

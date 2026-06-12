@@ -23,6 +23,13 @@ def _get_cross_encoder(model_name: str):
     return _ce_models[model_name]
 
 
+def release_models() -> int:
+    """Drop all cached cross-encoder models. Returns the number released."""
+    count = len(_ce_models)
+    _ce_models.clear()
+    return count
+
+
 async def rerank(
     query: str,
     contexts: list[dict],
@@ -43,7 +50,9 @@ async def rerank(
     if not contexts:
         return []
 
-    model = _get_cross_encoder(model_name)
+    # First call downloads/loads the cross-encoder (seconds of blocking I/O) —
+    # keep it off the event loop along with predict().
+    model = await asyncio.to_thread(_get_cross_encoder, model_name)
     pairs = [(query, ctx["content"]) for ctx in contexts]
 
     loop = asyncio.get_running_loop()
@@ -53,7 +62,7 @@ async def rerank(
     )
 
     reranked = []
-    for ctx, score in zip(contexts, scores):
+    for ctx, score in zip(contexts, scores, strict=False):
         reranked.append({**ctx, "score": float(score)})
 
     reranked.sort(key=lambda x: x["score"], reverse=True)

@@ -1,4 +1,4 @@
-from ragas.metrics.collections import AgentGoalAccuracyWithReference, AgentGoalAccuracyWithoutReference
+from ragas.metrics.collections import AgentGoalAccuracyWithoutReference, AgentGoalAccuracyWithReference
 
 
 def create_scorer_with_reference(llm):

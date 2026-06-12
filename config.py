@@ -11,10 +11,21 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Storage paths
 # ---------------------------------------------------------------------------
+# Relative storage paths resolve against the repo root (this file's directory),
+# not the process CWD — running pytest or uvicorn from a subdirectory must not
+# silently create a second data/ tree.
+_REPO_ROOT = Path(__file__).resolve().parent
+
+
+def _resolve_path(env_var: str, default: str) -> Path:
+    raw = Path(os.environ.get(env_var, default))
+    return raw if raw.is_absolute() else _REPO_ROOT / raw
+
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "")  # Neon/PostgreSQL connection string; empty = SQLite
-DATABASE_PATH = Path(os.environ.get("DATABASE_PATH", "data/ragas.db"))
-CHROMADB_PATH = os.environ.get("CHROMADB_PATH", "data/chromadb")
-BM25_PATH = os.environ.get("BM25_PATH", "data/bm25")
+DATABASE_PATH = _resolve_path("DATABASE_PATH", "data/ragas.db")
+CHROMADB_PATH = str(_resolve_path("CHROMADB_PATH", "data/chromadb"))
+BM25_PATH = str(_resolve_path("BM25_PATH", "data/bm25"))
 
 # ---------------------------------------------------------------------------
 # Default LLM models (used by evaluation, test generation, source verification)
@@ -55,6 +66,7 @@ PERSONA_SUBPROCESS_TIMEOUT = int(os.environ.get("PERSONA_SUBPROCESS_TIMEOUT", "3
 # Default 24 h. Set KG_SUBPROCESS_TIMEOUT=0 in .env to disable the timeout.
 _kg_timeout_raw = os.environ.get("KG_SUBPROCESS_TIMEOUT", "86400")
 KG_SUBPROCESS_TIMEOUT: "int | None" = None if _kg_timeout_raw == "0" else int(_kg_timeout_raw)
+KG_SUBPROCESS_MAX_RSS_MB = int(os.environ.get("KG_SUBPROCESS_MAX_RSS_MB", "0"))  # 0 = no limit; Linux only
 SOURCE_VERIFY_FETCH_TIMEOUT = int(os.environ.get("SOURCE_VERIFY_FETCH_TIMEOUT", "15"))
 
 # ---------------------------------------------------------------------------
@@ -72,6 +84,12 @@ ALLOWED_FILE_TYPES = {".txt", ".pdf", ".docx"}
 TESTGEN_TOPIC_TEMPERATURE: float = 0.0
 TESTGEN_PERSONA_TEMPERATURE: float = 0.7
 TESTGEN_QUESTION_TEMPERATURE: float = 0.8
+
+# ---------------------------------------------------------------------------
+# KG build concurrency (worker service)
+# ---------------------------------------------------------------------------
+MAX_CONCURRENT_KG_BUILDS = int(os.environ.get("MAX_CONCURRENT_KG_BUILDS", "1"))
+MAX_CONCURRENT_PERSONA_BUILDS = int(os.environ.get("MAX_CONCURRENT_PERSONA_BUILDS", "2"))
 
 # ---------------------------------------------------------------------------
 # Batch sizes
@@ -119,12 +137,26 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
 # ---------------------------------------------------------------------------
+# User authentication (sessions)
+# ---------------------------------------------------------------------------
+# Secret for signing session cookies. REQUIRED for stable logins across
+# restarts — when unset, a random per-process secret is generated and all
+# sessions are invalidated on restart (a warning is logged).
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", str(14 * 24 * 3600)))  # 14 days
+# Set true when serving over HTTPS so session cookies are marked Secure.
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+# Login attempts per IP per minute before throttling.
+LOGIN_RATE_LIMIT = int(os.environ.get("LOGIN_RATE_LIMIT", "5"))
+
+# ---------------------------------------------------------------------------
 # Validation sets (shared across routes and models)
 # ---------------------------------------------------------------------------
 VALID_CHUNK_METHODS = {"recursive", "parent_child", "semantic", "fixed_overlap", "markdown", "token"}
 VALID_EMBEDDING_TYPES = {"dense_openai", "dense_sentence_transformers", "bm25_sparse"}
 VALID_SEARCH_TYPES = {"dense", "sparse", "hybrid"}
 VALID_RESPONSE_MODES = {"single_shot", "multi_step"}
+VALID_QUERY_EXPANSION = {"multi_query", "hyde"}
 MAX_CHUNKS_FOR_GENERATION = int(os.environ.get("MAX_CHUNKS_FOR_GENERATION", "0"))
 
 # ---------------------------------------------------------------------------

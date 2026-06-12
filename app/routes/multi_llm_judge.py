@@ -17,12 +17,12 @@ import random
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models import ClaimAnnotationRequest
 import db.init
-from db.init import NOW_SQL
-from config import MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
-from evaluation.metrics.multi_llm_judge import aggregate_score, aggregate_criteria_score
+from app.models import ClaimAnnotationRequest
 from app.routes.annotations import _validate_experiment
+from config import MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD
+from db.init import NOW_SQL
+from evaluation.metrics.multi_llm_judge import aggregate_criteria_score, aggregate_score
 
 logger = logging.getLogger(__name__)
 

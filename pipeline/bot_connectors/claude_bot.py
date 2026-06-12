@@ -11,11 +11,11 @@ from typing import Any
 
 import anthropic
 
+from config import BOT_QUERY_TIMEOUT, CONNECTOR_DEFAULT_MODELS
 from pipeline.bot_connectors.base import (
     SOURCE_PROMPT_SUFFIX,
     BotResponse,
 )
-from config import CONNECTOR_DEFAULT_MODELS, BOT_QUERY_TIMEOUT
 from pipeline.bot_connectors.openai_bot import _parse_inline_citations
 
 
@@ -35,15 +35,21 @@ class ClaudeBotConnector:
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources
 
-    async def query(self, question: str) -> BotResponse:
-        system = self._system_prompt
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse:
+        system = f"{system_context}\n\n{self._system_prompt}" if system_context else self._system_prompt
         if self._prompt_for_sources:
             system += SOURCE_PROMPT_SUFFIX
 
         kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": 4096,
-            "messages": [{"role": "user", "content": question}],
+            "messages": [*(history or []), {"role": "user", "content": question}],
         }
         if system:
             kwargs["system"] = system

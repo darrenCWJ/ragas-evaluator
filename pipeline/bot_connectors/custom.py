@@ -15,7 +15,6 @@ import json
 import logging
 import re
 import socket
-from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -71,15 +70,15 @@ def _validate_endpoint_url(url: str) -> None:
         # Resolve DNS now to block private-IP targets and DNS rebinding attacks
         try:
             resolved = socket.getaddrinfo(hostname, None)
-        except OSError:
-            raise ValueError(f"Hostname {hostname!r} could not be resolved")
+        except OSError as exc:
+            raise ValueError(f"Hostname {hostname!r} could not be resolved") from exc
         for *_, sockaddr in resolved:
             resolved_ip = ipaddress.ip_address(sockaddr[0])
             for net in _PRIVATE_NETWORKS:
                 if resolved_ip in net:
                     raise ValueError(
                         f"Hostname {hostname!r} resolves to private address {resolved_ip}"
-                    )
+                    ) from e
 
 
 class CustomBotConnector:
@@ -107,7 +106,24 @@ class CustomBotConnector:
         )
         self._timeout = timeout
 
-    async def query(self, question: str) -> BotResponse:
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse:
+        # Custom HTTP bots have no system/history channel — prepend both to the
+        # question so skill trials and conversation tests still work against
+        # arbitrary endpoints.
+        if history:
+            from pipeline.bot_connectors.base import history_as_transcript
+
+            question = (
+                f"Conversation so far:\n{history_as_transcript(history)}\n\nUser: {question}"
+            )
+        if system_context:
+            question = f"{system_context}\n\n---\n\n{question}"
         body_str = _PLACEHOLDER_RE.sub(_escape_json_value(question), self._body_template)
         body = json.loads(body_str)
 

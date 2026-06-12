@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from 'react';
 import {
   fetchJudgeEvaluations,
   annotateJudgeClaim,
   type JudgeEvaluation,
   type JudgeClaim,
   type ClaimAnnotation,
-} from "../../lib/api";
+} from '../../lib/api';
 
 interface Props {
   projectId: number;
@@ -23,22 +23,21 @@ interface Props {
 type AnnotationMap = Record<number, Record<number, ClaimAnnotation>>;
 
 const VERDICT_STYLES: Record<string, string> = {
-  positive: "bg-score-high/10 text-score-high border-score-high/30",
-  mixed: "bg-score-mid/10 text-score-mid border-score-mid/30",
-  critical: "bg-score-low/10 text-score-low border-score-low/30",
+  positive: 'bg-score-high/10 text-score-high border-score-high/30',
+  mixed: 'bg-score-mid/10 text-score-mid border-score-mid/30',
+  critical: 'bg-score-low/10 text-score-low border-score-low/30',
 };
 
 const VERDICT_LABELS: Record<string, string> = {
-  positive: "Positive",
-  mixed: "Mixed",
-  critical: "Critical",
+  positive: 'Positive',
+  mixed: 'Mixed',
+  critical: 'Critical',
 };
 
 const CLAIM_BADGE: Record<string, string> = {
-  praise: "bg-score-high/15 text-score-high",
-  critique: "bg-score-low/15 text-score-low",
+  praise: 'bg-score-high/15 text-score-high',
+  critique: 'bg-score-low/15 text-score-low',
 };
-
 
 /** Highlight occurrences of `quote` inside `text` using a mark span. */
 function HighlightedText({
@@ -79,7 +78,11 @@ function ClaimCard({
   claimIndex: number;
   annotation: ClaimAnnotation | undefined;
   highlightClass: string;
-  onAnnotate: (evalId: number, claimIdx: number, status: "accurate" | "inaccurate" | "unsure") => void;
+  onAnnotate: (
+    evalId: number,
+    claimIdx: number,
+    status: 'accurate' | 'inaccurate' | 'unsure',
+  ) => void;
   saving: boolean;
 }) {
   const [commentOpen, setCommentOpen] = useState(false);
@@ -88,20 +91,26 @@ function ClaimCard({
     <div className="rounded-lg border border-border/60 bg-elevated/40 p-3 space-y-2">
       {/* Claim type badge */}
       <div className="flex items-center gap-2">
-        <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${CLAIM_BADGE[claim.type] ?? ""}`}>
-          {claim.type === "praise" ? "✓ Praise" : "✗ Critique"}
+        <span
+          className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${CLAIM_BADGE[claim.type] ?? ''}`}
+        >
+          {claim.type === 'praise' ? '✓ Praise' : '✗ Critique'}
         </span>
         {annotation && (
           <span
             className={`rounded-full px-2 py-0.5 text-2xs font-medium border ${
-              annotation.status === "accurate"
-                ? "bg-score-high/10 text-score-high border-score-high/30"
-                : annotation.status === "inaccurate"
-                ? "bg-score-low/10 text-score-low border-score-low/30"
-                : "bg-text-muted/10 text-text-muted border-text-muted/30"
+              annotation.status === 'accurate'
+                ? 'bg-score-high/10 text-score-high border-score-high/30'
+                : annotation.status === 'inaccurate'
+                  ? 'bg-score-low/10 text-score-low border-score-low/30'
+                  : 'bg-text-muted/10 text-text-muted border-text-muted/30'
             }`}
           >
-            {annotation.status === "accurate" ? "Human: Accurate" : annotation.status === "inaccurate" ? "Human: Wrong" : "Human: Unsure"}
+            {annotation.status === 'accurate'
+              ? 'Human: Accurate'
+              : annotation.status === 'inaccurate'
+                ? 'Human: Wrong'
+                : 'Human: Unsure'}
           </span>
         )}
       </div>
@@ -109,7 +118,9 @@ function ClaimCard({
       {/* Response quote */}
       {claim.response_quote && (
         <div>
-          <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-text-muted">Response</p>
+          <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-text-muted">
+            Response
+          </p>
           <p className="rounded bg-elevated px-2 py-1.5 text-xs text-text-primary leading-relaxed">
             <HighlightedText
               text={claim.response_quote}
@@ -138,22 +149,22 @@ function ClaimCard({
       {/* Annotation controls */}
       <div className="flex items-center gap-2 pt-1">
         <span className="text-2xs text-text-muted">Rate this claim:</span>
-        {(["accurate", "inaccurate", "unsure"] as const).map((s) => (
+        {(['accurate', 'inaccurate', 'unsure'] as const).map((s) => (
           <button
             key={s}
             disabled={saving}
             onClick={() => onAnnotate(evalId, claimIndex, s)}
             className={`rounded-full px-2.5 py-0.5 text-2xs font-medium transition border ${
               annotation?.status === s
-                ? s === "accurate"
-                  ? "bg-score-high text-white border-score-high"
-                  : s === "inaccurate"
-                  ? "bg-score-low text-white border-score-low"
-                  : "bg-text-muted text-white border-text-muted"
-                : "border-border text-text-muted hover:border-accent hover:text-accent"
-            } ${saving ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                ? s === 'accurate'
+                  ? 'bg-score-high text-white border-score-high'
+                  : s === 'inaccurate'
+                    ? 'bg-score-low text-white border-score-low'
+                    : 'bg-text-muted text-white border-text-muted'
+                : 'border-border text-text-muted hover:border-accent hover:text-accent'
+            } ${saving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
-            {s === "accurate" ? "✓ Accurate" : s === "inaccurate" ? "✗ Wrong" : "? Unsure"}
+            {s === 'accurate' ? '✓ Accurate' : s === 'inaccurate' ? '✗ Wrong' : '? Unsure'}
           </button>
         ))}
         {annotation && (
@@ -161,7 +172,7 @@ function ClaimCard({
             onClick={() => setCommentOpen((p) => !p)}
             className="ml-auto text-2xs text-accent underline"
           >
-            {commentOpen ? "hide note" : annotation.comment ? "edit note" : "+ note"}
+            {commentOpen ? 'hide note' : annotation.comment ? 'edit note' : '+ note'}
           </button>
         )}
       </div>
@@ -182,7 +193,11 @@ function EvaluatorCard({
   evaluation: JudgeEvaluation;
   annotations: Record<number, ClaimAnnotation>;
   excluded: boolean;
-  onAnnotate: (evalId: number, claimIdx: number, status: "accurate" | "inaccurate" | "unsure") => void;
+  onAnnotate: (
+    evalId: number,
+    claimIdx: number,
+    status: 'accurate' | 'inaccurate' | 'unsure',
+  ) => void;
   savingKey: string | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -190,9 +205,7 @@ function EvaluatorCard({
   return (
     <div
       className={`rounded-xl border transition ${
-        excluded
-          ? "border-border/40 bg-elevated/30 opacity-50"
-          : "border-border bg-card"
+        excluded ? 'border-border/40 bg-elevated/30 opacity-50' : 'border-border bg-card'
       }`}
     >
       {/* Header */}
@@ -201,8 +214,11 @@ function EvaluatorCard({
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
       >
         <svg
-          className={`h-3.5 w-3.5 shrink-0 text-text-muted transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          className={`h-3.5 w-3.5 shrink-0 text-text-muted transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
@@ -214,7 +230,7 @@ function EvaluatorCard({
         {/* Verdict badge */}
         <span
           className={`rounded-full border px-2 py-0.5 text-2xs font-medium ${
-            VERDICT_STYLES[evaluation.verdict] ?? "bg-elevated text-text-muted border-border"
+            VERDICT_STYLES[evaluation.verdict] ?? 'bg-elevated text-text-muted border-border'
           }`}
         >
           {VERDICT_LABELS[evaluation.verdict] ?? evaluation.verdict}
@@ -229,7 +245,7 @@ function EvaluatorCard({
 
       {/* Claims */}
       <div
-        className={`grid transition-[grid-template-rows] duration-200 ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-200 ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
       >
         <div className="overflow-hidden">
           <div className="border-t border-border/60 px-4 py-3 space-y-3">
@@ -244,7 +260,9 @@ function EvaluatorCard({
               </div>
             )}
             {evaluation.claims.length === 0 ? (
-              <p className="text-xs text-text-muted italic">No claims produced by this evaluator.</p>
+              <p className="text-xs text-text-muted italic">
+                No claims produced by this evaluator.
+              </p>
             ) : (
               evaluation.claims.map((claim, idx) => (
                 <ClaimCard
@@ -254,9 +272,9 @@ function EvaluatorCard({
                   claimIndex={idx}
                   annotation={annotations[idx]}
                   highlightClass={
-                    claim.type === "praise"
-                      ? "bg-score-high/25 text-score-high"
-                      : "bg-score-low/20 text-score-low"
+                    claim.type === 'praise'
+                      ? 'bg-score-high/25 text-score-high'
+                      : 'bg-score-low/20 text-score-low'
                   }
                   onAnnotate={onAnnotate}
                   saving={savingKey === `${evaluation.id}-${idx}`}
@@ -311,7 +329,7 @@ export default function MultiLLMJudgePanel({
   }, [projectId, experimentId, resultId, preloadedEvaluations, metricName]);
 
   const handleAnnotate = useCallback(
-    async (evalId: number, claimIdx: number, status: "accurate" | "inaccurate" | "unsure") => {
+    async (evalId: number, claimIdx: number, status: 'accurate' | 'inaccurate' | 'unsure') => {
       const key = `${evalId}-${claimIdx}`;
       setSavingKey(key);
       try {
@@ -352,9 +370,7 @@ export default function MultiLLMJudgePanel({
 
   if (evaluations.length === 0) {
     return (
-      <p className="text-xs text-text-muted italic">
-        No evaluator data found for this result.
-      </p>
+      <p className="text-xs text-text-muted italic">No evaluator data found for this result.</p>
     );
   }
 

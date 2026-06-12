@@ -31,9 +31,54 @@ class BotResponse:
 
 
 class BotConnector(Protocol):
-    """Interface every bot connector must satisfy."""
+    """Interface every bot connector must satisfy.
 
-    async def query(self, question: str) -> BotResponse: ...
+    ``system_context`` carries per-call system instructions (e.g. a skill
+    file under test) and is prepended to any connector-configured system
+    prompt. ``history`` carries prior conversation turns for multi-turn
+    tests as ``[{"role": "user" | "assistant", "content": str}, ...]``.
+    Connectors without the relevant channel (CSV, Glean) raise
+    ``SystemContextUnsupported`` / ``ConversationUnsupported``.
+    """
+
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse: ...
+
+
+class SystemContextUnsupported(RuntimeError):
+    """Raised when a connector cannot carry per-call system instructions."""
+
+    def __init__(self, connector_type: str) -> None:
+        super().__init__(
+            f"The '{connector_type}' connector does not support system context "
+            "(skill injection requires a chat-style connector)."
+        )
+
+
+class ConversationUnsupported(RuntimeError):
+    """Raised when a connector cannot carry multi-turn conversation history."""
+
+    def __init__(self, connector_type: str) -> None:
+        super().__init__(
+            f"The '{connector_type}' connector does not support multi-turn "
+            "conversations (history requires a chat-style connector)."
+        )
+
+
+def history_as_transcript(history: list[dict] | None) -> str:
+    """Render history as a plain-text transcript for non-chat channels."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        speaker = "User" if turn.get("role") == "user" else "Assistant"
+        lines.append(f"{speaker}: {turn.get('content', '')}")
+    return "\n".join(lines)
 
 
 # Instruction appended to the system prompt when the user opts in to

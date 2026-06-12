@@ -1,6 +1,6 @@
-import { useState } from "react";
-import type { ExperimentResult } from "../../lib/api";
-import MultiLLMJudgePanel from "./MultiLLMJudgePanel";
+import { useState } from 'react';
+import type { ExperimentResult } from '../../lib/api';
+import MultiLLMJudgePanel from './MultiLLMJudgePanel';
 
 interface Props {
   result: ExperimentResult;
@@ -13,28 +13,33 @@ interface Props {
 /** Humanize snake_case → Title Case */
 function humanize(name: string): string {
   return name
-    .split("_")
+    .split('_')
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+    .join(' ');
 }
 
 function barColor(v: number): string {
-  if (v >= 0.8) return "bg-score-high";
-  if (v >= 0.5) return "bg-score-mid";
-  return "bg-score-low";
+  if (v >= 0.8) return 'bg-score-high';
+  if (v >= 0.5) return 'bg-score-mid';
+  return 'bg-score-low';
 }
 
 function textColor(v: number): string {
-  if (v >= 0.8) return "text-score-high";
-  if (v >= 0.5) return "text-score-mid";
-  return "text-score-low";
+  if (v >= 0.8) return 'text-score-high';
+  if (v >= 0.5) return 'text-score-mid';
+  return 'text-score-low';
 }
 
-export default function QuestionResultRow({ result, projectId, experimentId, criteriaMetricNames = [] }: Props) {
+export default function QuestionResultRow({
+  result,
+  projectId,
+  experimentId,
+  criteriaMetricNames = [],
+}: Props) {
   const [open, setOpen] = useState(false);
   const [judgeOpen, setJudgeOpen] = useState(false);
   const [openCriteriaPanels, setOpenCriteriaPanels] = useState<Set<string>>(new Set());
-  const hasJudge = "multi_llm_judge" in result.metrics;
+  const hasJudge = 'multi_llm_judge' in result.metrics;
   const criteriaMetricsInResult = criteriaMetricNames.filter((n) => n in result.metrics);
 
   const toggleCriteriaPanel = (metricName: string) => {
@@ -50,13 +55,13 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
   };
 
   const metrics = Object.entries(result.metrics).filter(
-    (e): e is [string, number] => typeof e[1] === "number",
+    (e): e is [string, number] => typeof e[1] === 'number',
   );
 
   const handleToggle = () => setOpen((prev) => !prev);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       handleToggle();
     }
@@ -75,23 +80,17 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
       >
         {/* Chevron */}
         <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-200 ${open ? "rotate-90" : ""}`}
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
           strokeWidth={2}
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M9 5l7 7-7 7"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
 
         {/* Question text */}
-        <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
-          {result.question}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-text-primary">{result.question}</span>
 
         {/* Question type badge */}
         <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-2xs font-medium text-accent">
@@ -112,9 +111,7 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
                   style={{ width: `${Math.max(value * 100, 2)}%` }}
                 />
               </div>
-              <span
-                className={`w-7 text-right font-mono text-2xs ${textColor(value)}`}
-              >
+              <span className={`w-7 text-right font-mono text-2xs ${textColor(value)}`}>
                 {(value * 100).toFixed(0)}
               </span>
             </div>
@@ -124,7 +121,7 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
 
       {/* ── Expanded detail ── */}
       <div
-        className={`grid transition-[grid-template-rows] duration-200 ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-200 ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
       >
         <div className="overflow-hidden">
           <div className="border-t border-border px-4 py-4 space-y-4">
@@ -143,9 +140,7 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
             {/* Model response */}
             <DetailBlock label="Model Response">
               {result.response ? (
-                <p className="text-sm text-text-primary whitespace-pre-wrap">
-                  {result.response}
-                </p>
+                <p className="text-sm text-text-primary whitespace-pre-wrap">{result.response}</p>
               ) : (
                 <p className="text-sm italic text-text-muted">No response</p>
               )}
@@ -202,10 +197,20 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
                   }}
                   className="flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/10"
                 >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 001.5 2.122V15m-6.75 0h6.75m0 0v1.125A2.25 2.25 0 0113.5 18.375H10.5A2.25 2.25 0 018.25 16.5V15m0 0h6.75" />
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 001.5 2.122V15m-6.75 0h6.75m0 0v1.125A2.25 2.25 0 0113.5 18.375H10.5A2.25 2.25 0 018.25 16.5V15m0 0h6.75"
+                    />
                   </svg>
-                  {judgeOpen ? "Hide" : "Show"} LLM Evaluator Feedback
+                  {judgeOpen ? 'Hide' : 'Show'} LLM Evaluator Feedback
                 </button>
                 {judgeOpen && (
                   <div className="mt-3">
@@ -229,10 +234,21 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
                   }}
                   className="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/5 px-3 py-1.5 text-xs font-medium text-purple-300 transition hover:bg-purple-500/10"
                 >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 001.5 2.122V15m-6.75 0h6.75m0 0v1.125A2.25 2.25 0 0113.5 18.375H10.5A2.25 2.25 0 018.25 16.5V15m0 0h6.75" />
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 001.5 2.122V15m-6.75 0h6.75m0 0v1.125A2.25 2.25 0 0113.5 18.375H10.5A2.25 2.25 0 018.25 16.5V15m0 0h6.75"
+                    />
                   </svg>
-                  {openCriteriaPanels.has(metricName) ? "Hide" : "Show"} {metricName.replace(/_/g, " ")} Evaluations
+                  {openCriteriaPanels.has(metricName) ? 'Hide' : 'Show'}{' '}
+                  {metricName.replace(/_/g, ' ')} Evaluations
                 </button>
                 {openCriteriaPanels.has(metricName) && (
                   <div className="mt-3">
@@ -255,13 +271,7 @@ export default function QuestionResultRow({ result, projectId, experimentId, cri
 
 /* ── Sub-components ── */
 
-function DetailBlock({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function DetailBlock({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wider text-text-muted">
@@ -274,7 +284,7 @@ function DetailBlock({
 
 function ContextBlock({ index, content }: { index: number; content: string }) {
   const [open, setOpen] = useState(false);
-  const preview = content.length > 200 ? content.slice(0, 200) + "..." : content;
+  const preview = content.length > 200 ? content.slice(0, 200) + '...' : content;
 
   return (
     <div className="rounded-lg border border-border/60 bg-elevated/50 px-3 py-2">
@@ -293,17 +303,13 @@ function ContextBlock({ index, content }: { index: number; content: string }) {
         </span>
         {content.length > 200 && (
           <svg
-            className={`h-3 w-3 shrink-0 text-text-muted transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+            className={`h-3 w-3 shrink-0 text-text-muted transition-transform duration-150 ${open ? 'rotate-90' : ''}`}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
             strokeWidth={2}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M9 5l7 7-7 7"
-            />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
         )}
       </button>

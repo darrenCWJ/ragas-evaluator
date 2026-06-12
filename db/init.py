@@ -194,6 +194,11 @@ CREATE TABLE IF NOT EXISTS rag_configs (
     max_steps INTEGER NOT NULL DEFAULT 3,
     reranker_model TEXT,
     reranker_top_k INTEGER,
+    query_expansion TEXT,
+    num_expansions INTEGER,
+    score_threshold REAL,
+    mmr_lambda REAL,
+    kg_expansion INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -342,6 +347,54 @@ CREATE TABLE IF NOT EXISTS custom_metrics (
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    bot_config_id INTEGER NOT NULL REFERENCES bot_configs(id),
+    test_set_id INTEGER NOT NULL REFERENCES test_sets(id),
+    metrics_json TEXT NOT NULL,
+    interval_minutes INTEGER NOT NULL,
+    alert_drop_threshold REAL NOT NULL DEFAULT 0.1,
+    webhook_url TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_run_at TIMESTAMP,
+    last_experiment_id INTEGER REFERENCES experiments(id),
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS schedule_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    experiment_id INTEGER REFERENCES experiments(id),
+    baseline_experiment_id INTEGER REFERENCES experiments(id),
+    drops_json TEXT NOT NULL,
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS sweeps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    test_set_id INTEGER NOT NULL REFERENCES test_sets(id),
+    base_rag_config_id INTEGER NOT NULL REFERENCES rag_configs(id),
+    grid_json TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS sweep_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sweep_id INTEGER NOT NULL REFERENCES sweeps(id) ON DELETE CASCADE,
+    experiment_id INTEGER REFERENCES experiments(id),
+    params_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_graphs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -367,6 +420,7 @@ CREATE TABLE IF NOT EXISTS multi_llm_evaluations (
     score REAL NOT NULL,
     claims_json TEXT NOT NULL,
     custom_metric_name TEXT,
+    model TEXT,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -378,6 +432,66 @@ CREATE TABLE IF NOT EXISTS evaluator_claim_annotations (
     comment TEXT,
     annotated_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
     UNIQUE(evaluation_id, claim_index)
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    content TEXT NOT NULL,
+    parsed_directives_json TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(project_id, name, version)
+);
+
+CREATE TABLE IF NOT EXISTS skill_trials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    skill_id INTEGER REFERENCES skills(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    test_set_id INTEGER NOT NULL REFERENCES test_sets(id),
+    models_json TEXT NOT NULL,
+    include_baseline INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    completed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS project_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(project_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS skill_trial_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trial_id INTEGER NOT NULL REFERENCES skill_trials(id) ON DELETE CASCADE,
+    skill_id INTEGER REFERENCES skills(id),
+    model TEXT NOT NULL,
+    test_question_id INTEGER NOT NULL REFERENCES test_questions(id),
+    response TEXT,
+    scores_json TEXT,
+    directive_results_json TEXT,
+    trace_json TEXT,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    latency_ms INTEGER,
+    error TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
 """
 
@@ -491,6 +605,16 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN judge_model_assignments_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
     _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN few_shot_examples_json TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN preferred_model TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN applied_experiment_id INTEGER REFERENCES experiments(id)")
+    _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN outcome_json TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN owner_id INTEGER REFERENCES users(id)")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN query_expansion TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN num_expansions INTEGER")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN score_threshold REAL")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN mmr_lambda REAL")
+    _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN kg_expansion INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN model TEXT")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:

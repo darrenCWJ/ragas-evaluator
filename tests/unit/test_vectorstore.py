@@ -1,13 +1,14 @@
 """Unit tests for embedding/vectorstore.py."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from pipeline.vectorstore import (
-    get_or_create_collection,
-    upsert_embeddings,
-    search,
     delete_collection,
+    get_or_create_collection,
+    search,
+    upsert_embeddings,
 )
 
 
@@ -29,9 +30,11 @@ def mock_chromadb():
     mock_client.get_or_create_collection.return_value = mock_collection
     mock_client.get_collection.return_value = mock_collection
 
-    with patch("pipeline.vectorstore.chromadb.PersistentClient", return_value=mock_client):
-        with patch("pipeline.vectorstore.Path.mkdir"):
-            yield mock_client, mock_collection
+    with (
+        patch("pipeline.vectorstore.chromadb.PersistentClient", return_value=mock_client),
+        patch("pipeline.vectorstore.Path.mkdir"),
+    ):
+        yield mock_client, mock_collection
 
 
 class TestGetOrCreateCollection:

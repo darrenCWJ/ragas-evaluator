@@ -1,23 +1,18 @@
-import { useState, useEffect, useCallback } from "react";
-import { useProject } from "../contexts/ProjectContext";
+import { useState, useEffect, useCallback } from 'react';
+import { useProject } from '../contexts/ProjectContext';
 import {
   fetchDocuments,
   fetchChunkConfigs,
   fetchEmbeddingConfigs,
   fetchRagConfigs,
-} from "../lib/api";
-import type {
-  Document as Doc,
-  ChunkConfig,
-  EmbeddingConfig,
-  RagConfig,
-} from "../lib/api";
-import DocumentUpload from "../components/build/DocumentUpload";
-import DocumentList from "../components/build/DocumentList";
-import ChunkConfigPanel from "../components/build/ChunkConfigPanel";
-import EmbeddingConfigPanel from "../components/build/EmbeddingConfigPanel";
-import RagConfigPanel from "../components/build/RagConfigPanel";
-import PipelineStatus from "../components/build/PipelineStatus";
+} from '../lib/api';
+import type { Document as Doc, ChunkConfig, EmbeddingConfig, RagConfig } from '../lib/api';
+import DocumentUpload from '../components/build/DocumentUpload';
+import DocumentList from '../components/build/DocumentList';
+import ChunkConfigPanel from '../components/build/ChunkConfigPanel';
+import EmbeddingConfigPanel from '../components/build/EmbeddingConfigPanel';
+import RagConfigPanel from '../components/build/RagConfigPanel';
+import PipelineStatus from '../components/build/PipelineStatus';
 
 export default function BuildPage() {
   const { project } = useProject();
@@ -26,9 +21,7 @@ export default function BuildPage() {
   const [docsError, setDocsError] = useState<string | null>(null);
 
   const [chunkConfigs, setChunkConfigs] = useState<ChunkConfig[]>([]);
-  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>(
-    [],
-  );
+  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>([]);
   const [ragConfigs, setRagConfigs] = useState<RagConfig[]>([]);
 
   const loadDocuments = useCallback(async () => {
@@ -39,9 +32,7 @@ export default function BuildPage() {
       const data = await fetchDocuments(project.id);
       setDocuments(data);
     } catch (err) {
-      setDocsError(
-        err instanceof Error ? err.message : "Failed to load documents",
-      );
+      setDocsError(err instanceof Error ? err.message : 'Failed to load documents');
     } finally {
       setDocsLoading(false);
     }
@@ -132,10 +123,7 @@ export default function BuildPage() {
             <p className="mb-4 text-xs text-text-muted">
               Upload PDF or TXT files for your project.
             </p>
-            <DocumentUpload
-              projectId={project.id}
-              onUploaded={loadDocuments}
-            />
+            <DocumentUpload projectId={project.id} onUploaded={loadDocuments} />
           </div>
 
           <DocumentList

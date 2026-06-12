@@ -1,11 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { compareExperiments, ApiError } from "../../lib/api";
-import type { CompareResult, CompareQuestionData } from "../../lib/api";
-import {
-  humanizeMetric,
-  scoreBarColor,
-  scoreTextColor,
-} from "./scoreUtils";
+import { useState, useEffect, useCallback } from 'react';
+import { compareExperiments, ApiError } from '../../lib/api';
+import type { CompareResult, CompareQuestionData } from '../../lib/api';
+import { humanizeMetric, scoreBarColor, scoreTextColor } from './scoreUtils';
 
 interface Props {
   projectId: number;
@@ -14,41 +10,36 @@ interface Props {
 }
 
 type LoadState =
-  | { status: "loading" }
-  | { status: "error"; message: string; httpStatus?: number }
-  | { status: "loaded"; data: CompareResult };
+  | { status: 'loading' }
+  | { status: 'error'; message: string; httpStatus?: number }
+  | { status: 'loaded'; data: CompareResult };
 
 /** Experiment color palette for distinguishing bars */
 const EXP_COLORS = [
-  { bar: "bg-indigo-400", text: "text-indigo-300", dot: "bg-indigo-400" },
-  { bar: "bg-emerald-400", text: "text-emerald-300", dot: "bg-emerald-400" },
-  { bar: "bg-amber-400", text: "text-amber-300", dot: "bg-amber-400" },
-  { bar: "bg-rose-400", text: "text-rose-300", dot: "bg-rose-400" },
-  { bar: "bg-cyan-400", text: "text-cyan-300", dot: "bg-cyan-400" },
+  { bar: 'bg-indigo-400', text: 'text-indigo-300', dot: 'bg-indigo-400' },
+  { bar: 'bg-emerald-400', text: 'text-emerald-300', dot: 'bg-emerald-400' },
+  { bar: 'bg-amber-400', text: 'text-amber-300', dot: 'bg-amber-400' },
+  { bar: 'bg-rose-400', text: 'text-rose-300', dot: 'bg-rose-400' },
+  { bar: 'bg-cyan-400', text: 'text-cyan-300', dot: 'bg-cyan-400' },
 ] as const;
 
 function expColor(i: number) {
   return EXP_COLORS[i % EXP_COLORS.length]!;
 }
 
-export default function ExperimentCompare({
-  projectId,
-  experimentIds,
-  onClose,
-}: Props) {
-  const [state, setState] = useState<LoadState>({ status: "loading" });
+export default function ExperimentCompare({ projectId, experimentIds, onClose }: Props) {
+  const [state, setState] = useState<LoadState>({ status: 'loading' });
 
   const load = useCallback(async () => {
-    setState({ status: "loading" });
+    setState({ status: 'loading' });
     try {
       const data = await compareExperiments(projectId, experimentIds);
-      setState({ status: "loaded", data });
+      setState({ status: 'loaded', data });
     } catch (err) {
-      const httpStatus =
-        err instanceof ApiError ? err.status : undefined;
+      const httpStatus = err instanceof ApiError ? err.status : undefined;
       setState({
-        status: "error",
-        message: (err as Error).message || "Failed to load comparison",
+        status: 'error',
+        message: (err as Error).message || 'Failed to load comparison',
         httpStatus,
       });
     }
@@ -59,16 +50,13 @@ export default function ExperimentCompare({
   }, [load]);
 
   /* ── Loading ── */
-  if (state.status === "loading") {
+  if (state.status === 'loading') {
     return (
       <div className="space-y-4">
         <div className="h-6 w-56 animate-pulse rounded-lg bg-elevated" />
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-20 animate-pulse rounded-xl bg-elevated"
-            />
+            <div key={i} className="h-20 animate-pulse rounded-xl bg-elevated" />
           ))}
         </div>
       </div>
@@ -76,22 +64,21 @@ export default function ExperimentCompare({
   }
 
   /* ── Error state with audit-added differentiation ── */
-  if (state.status === "error") {
-    const isNonRetryable =
-      state.httpStatus === 409 || state.httpStatus === 413;
+  if (state.status === 'error') {
+    const isNonRetryable = state.httpStatus === 409 || state.httpStatus === 413;
 
     return (
       <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-center">
         <p className="text-sm font-medium text-red-300">
           {state.httpStatus === 409
-            ? "Comparison Failed"
+            ? 'Comparison Failed'
             : state.httpStatus === 413
-              ? "Too Many Results"
-              : "Failed to load comparison"}
+              ? 'Too Many Results'
+              : 'Failed to load comparison'}
         </p>
         <p className="mt-1 text-xs text-red-300/70">
           {state.httpStatus === 413
-            ? "Too many results \u2014 select fewer experiments."
+            ? 'Too many results \u2014 select fewer experiments.'
             : state.message}
         </p>
         <div className="mt-3 flex items-center justify-center gap-2">
@@ -139,9 +126,7 @@ export default function ExperimentCompare({
           <div className="mt-2 flex flex-wrap gap-3">
             {experiments.map((exp, i) => (
               <div key={exp.id} className="flex items-center gap-1.5">
-                <span
-                  className={`inline-block h-2.5 w-2.5 rounded-full ${expColor(i).dot}`}
-                />
+                <span className={`inline-block h-2.5 w-2.5 rounded-full ${expColor(i).dot}`} />
                 <span className="text-xs text-text-secondary">{exp.name}</span>
               </div>
             ))}
@@ -158,9 +143,7 @@ export default function ExperimentCompare({
       {/* ── Aggregate metrics comparison ── */}
       {metricNames.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-6 text-center">
-          <p className="text-sm text-text-muted">
-            No comparison data available.
-          </p>
+          <p className="text-sm text-text-muted">No comparison data available.</p>
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-card p-5 space-y-5">
@@ -177,9 +160,7 @@ export default function ExperimentCompare({
               (s): s is typeof s & { value: number } => s.value !== null,
             );
             const bestValue =
-              validScores.length > 0
-                ? Math.max(...validScores.map((s) => s.value))
-                : null;
+              validScores.length > 0 ? Math.max(...validScores.map((s) => s.value)) : null;
 
             return (
               <div key={metricName}>
@@ -188,13 +169,9 @@ export default function ExperimentCompare({
                 </p>
                 <div className="space-y-1.5">
                   {scores.map((score, i) => {
-                    const isBest =
-                      bestValue !== null && score.value === bestValue;
+                    const isBest = bestValue !== null && score.value === bestValue;
                     return (
-                      <div
-                        key={score.id}
-                        className="flex items-center gap-3"
-                      >
+                      <div key={score.id} className="flex items-center gap-3">
                         <span
                           className={`inline-block h-2 w-2 shrink-0 rounded-full ${expColor(i).dot}`}
                         />
@@ -204,7 +181,7 @@ export default function ExperimentCompare({
                         <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-elevated">
                           {score.value !== null && (
                             <div
-                              className={`h-full rounded-full transition-all duration-500 ${expColor(i).bar} ${isBest ? "opacity-100" : "opacity-60"}`}
+                              className={`h-full rounded-full transition-all duration-500 ${expColor(i).bar} ${isBest ? 'opacity-100' : 'opacity-60'}`}
                               style={{
                                 width: `${Math.max(score.value * 100, 1)}%`,
                               }}
@@ -213,14 +190,10 @@ export default function ExperimentCompare({
                         </div>
                         <span
                           className={`w-12 text-right font-mono text-xs font-semibold ${
-                            score.value !== null
-                              ? scoreTextColor(score.value)
-                              : "text-text-muted"
+                            score.value !== null ? scoreTextColor(score.value) : 'text-text-muted'
                           }`}
                         >
-                          {score.value !== null
-                            ? `${(score.value * 100).toFixed(0)}%`
-                            : "N/A"}
+                          {score.value !== null ? `${(score.value * 100).toFixed(0)}%` : 'N/A'}
                         </span>
                         {isBest && (
                           <svg
@@ -244,9 +217,7 @@ export default function ExperimentCompare({
       {/* ── Per-question comparison ── */}
       {data.questions.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
-          <p className="text-sm text-text-muted">
-            No per-question results available.
-          </p>
+          <p className="text-sm text-text-muted">No per-question results available.</p>
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -254,11 +225,7 @@ export default function ExperimentCompare({
             Per-Question Comparison
           </h3>
           {data.questions.map((q) => (
-            <CompareQuestionRow
-              key={q.test_question_id}
-              question={q}
-              experiments={experiments}
-            />
+            <CompareQuestionRow key={q.test_question_id} question={q} experiments={experiments} />
           ))}
         </div>
       )}
@@ -273,14 +240,14 @@ function CompareQuestionRow({
   experiments,
 }: {
   question: CompareQuestionData;
-  experiments: CompareResult["experiments"];
+  experiments: CompareResult['experiments'];
 }) {
   const [open, setOpen] = useState(false);
 
   const handleToggle = () => setOpen((prev) => !prev);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
+    if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       handleToggle();
     }
@@ -290,9 +257,7 @@ function CompareQuestionRow({
   const expScores = experiments.map((exp, i) => {
     const expData = question.experiments[exp.id];
     if (!expData) return { id: exp.id, idx: i, avg: null };
-    const vals = Object.values(expData.metrics).filter(
-      (v): v is number => typeof v === "number",
-    );
+    const vals = Object.values(expData.metrics).filter((v): v is number => typeof v === 'number');
     const avg = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
     return { id: exp.id, idx: i, avg };
   });
@@ -310,17 +275,13 @@ function CompareQuestionRow({
       >
         {/* Chevron */}
         <svg
-          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-200 ${open ? "rotate-90" : ""}`}
+          className={`h-4 w-4 shrink-0 text-text-muted transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
           strokeWidth={2}
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M9 5l7 7-7 7"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
 
         {/* Question text */}
@@ -339,17 +300,15 @@ function CompareQuestionRow({
             <div
               key={es.id}
               className="flex items-center gap-1"
-              title={`${experiments[es.idx]?.name ?? "Experiment"}: ${es.avg !== null ? (es.avg * 100).toFixed(0) + "%" : "N/A"}`}
+              title={`${experiments[es.idx]?.name ?? 'Experiment'}: ${es.avg !== null ? (es.avg * 100).toFixed(0) + '%' : 'N/A'}`}
             >
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${expColor(es.idx).dot}`}
-              />
+              <span className={`inline-block h-2 w-2 rounded-full ${expColor(es.idx).dot}`} />
               <span
                 className={`font-mono text-2xs font-semibold ${
-                  es.avg !== null ? scoreTextColor(es.avg) : "text-text-muted"
+                  es.avg !== null ? scoreTextColor(es.avg) : 'text-text-muted'
                 }`}
               >
-                {es.avg !== null ? (es.avg * 100).toFixed(0) : "—"}
+                {es.avg !== null ? (es.avg * 100).toFixed(0) : '—'}
               </span>
             </div>
           ))}
@@ -358,7 +317,7 @@ function CompareQuestionRow({
 
       {/* Expanded detail */}
       <div
-        className={`grid transition-[grid-template-rows] duration-200 ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-200 ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
       >
         <div className="overflow-hidden">
           <div className="border-t border-border px-4 py-4 space-y-5">
@@ -397,9 +356,7 @@ function CompareQuestionRow({
                     </div>
 
                     {!expData ? (
-                      <p className="text-xs italic text-text-muted">
-                        No data for this experiment
-                      </p>
+                      <p className="text-xs italic text-text-muted">No data for this experiment</p>
                     ) : (
                       <>
                         {/* Response */}
@@ -412,9 +369,7 @@ function CompareQuestionRow({
                               {expData.response}
                             </p>
                           ) : (
-                            <p className="text-xs italic text-text-muted">
-                              No response
-                            </p>
+                            <p className="text-xs italic text-text-muted">No response</p>
                           )}
                         </div>
 
@@ -425,17 +380,15 @@ function CompareQuestionRow({
                               Contexts ({expData.retrieved_contexts.length})
                             </p>
                             <div className="space-y-1">
-                              {expData.retrieved_contexts
-                                .slice(0, 3)
-                                .map((ctx, ci) => (
-                                  <p
-                                    key={ci}
-                                    className="truncate text-2xs text-text-muted"
-                                    title={ctx.content}
-                                  >
-                                    {ci + 1}. {ctx.content}
-                                  </p>
-                                ))}
+                              {expData.retrieved_contexts.slice(0, 3).map((ctx, ci) => (
+                                <p
+                                  key={ci}
+                                  className="truncate text-2xs text-text-muted"
+                                  title={ctx.content}
+                                >
+                                  {ci + 1}. {ctx.content}
+                                </p>
+                              ))}
                               {expData.retrieved_contexts.length > 3 && (
                                 <p className="text-2xs text-text-muted">
                                   +{expData.retrieved_contexts.length - 3} more
@@ -452,16 +405,10 @@ function CompareQuestionRow({
                           </p>
                           <div className="space-y-1">
                             {Object.entries(expData.metrics)
-                              .filter(
-                                (e): e is [string, number] =>
-                                  typeof e[1] === "number",
-                              )
+                              .filter((e): e is [string, number] => typeof e[1] === 'number')
                               .sort((a, b) => b[1] - a[1])
                               .map(([name, value]) => (
-                                <div
-                                  key={name}
-                                  className="flex items-center gap-2"
-                                >
+                                <div key={name} className="flex items-center gap-2">
                                   <span className="w-20 shrink-0 truncate text-2xs text-text-muted">
                                     {humanizeMetric(name)}
                                   </span>

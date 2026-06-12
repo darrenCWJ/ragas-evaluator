@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback } from "react";
-import { useProject } from "../contexts/ProjectContext";
-import { fetchExperiments } from "../lib/api";
-import type { Experiment } from "../lib/api";
-import ExperimentSuggestions from "../components/experiment/ExperimentSuggestions";
-import ExperimentDelta from "../components/experiment/ExperimentDelta";
-import ExperimentResults from "../components/experiment/ExperimentResults";
-import ProjectReportPanel from "../components/experiment/ProjectReportPanel";
-import SourceVerificationPanel from "../components/experiment/SourceVerificationPanel";
-import HumanAnnotationPanel from "../components/experiment/HumanAnnotationPanel";
+import { useState, useEffect, useCallback } from 'react';
+import { useProject } from '../contexts/ProjectContext';
+import { fetchExperiments } from '../lib/api';
+import type { Experiment } from '../lib/api';
+import ExperimentSuggestions from '../components/experiment/ExperimentSuggestions';
+import ExperimentDelta from '../components/experiment/ExperimentDelta';
+import ExperimentResults from '../components/experiment/ExperimentResults';
+import ProjectReportPanel from '../components/experiment/ProjectReportPanel';
+import SourceVerificationPanel from '../components/experiment/SourceVerificationPanel';
+import HumanAnnotationPanel from '../components/experiment/HumanAnnotationPanel';
+import JudgeCalibrationPanel from '../components/experiment/JudgeCalibrationPanel';
+import HardCaseMiningPanel from '../components/experiment/HardCaseMiningPanel';
 
 export default function AnalyzePage() {
   const { project } = useProject();
@@ -19,7 +21,7 @@ export default function AnalyzePage() {
     if (!project) return;
     try {
       const exps = await fetchExperiments(project.id);
-      setExperiments(exps.filter((e) => e.status === "completed"));
+      setExperiments(exps.filter((e) => e.status === 'completed'));
     } catch {
       // Silently handle — empty list shown
     }
@@ -64,9 +66,7 @@ export default function AnalyzePage() {
 
       {/* Loading */}
       {loading ? (
-        <div className="py-12 text-center text-sm text-text-muted">
-          Loading...
-        </div>
+        <div className="py-12 text-center text-sm text-text-muted">Loading...</div>
       ) : experiments.length === 0 ? (
         /* No completed experiments */
         <div className="rounded-xl border border-dashed border-border bg-card/50 p-12 text-center">
@@ -82,20 +82,16 @@ export default function AnalyzePage() {
               Select experiment
             </label>
             <select
-              value={selectedId ?? ""}
-              onChange={(e) =>
-                setSelectedId(e.target.value ? Number(e.target.value) : null)
-              }
+              value={selectedId ?? ''}
+              onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : null)}
               className="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-text-primary focus:border-accent focus:outline-none"
             >
               <option value="">Choose a completed experiment...</option>
               {experiments.map((exp) => (
                 <option key={exp.id} value={exp.id}>
                   {exp.name}
-                  {exp.rag_config_name ? ` — ${exp.rag_config_name}` : ""}
-                  {exp.completed_at
-                    ? ` (${new Date(exp.completed_at).toLocaleDateString()})`
-                    : ""}
+                  {exp.rag_config_name ? ` — ${exp.rag_config_name}` : ''}
+                  {exp.completed_at ? ` (${new Date(exp.completed_at).toLocaleDateString()})` : ''}
                 </option>
               ))}
             </select>
@@ -104,15 +100,18 @@ export default function AnalyzePage() {
           {/* No selection */}
           {!selected && (
             <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
-              <p className="text-sm text-text-muted">
-                Select a completed experiment to analyze.
-              </p>
+              <p className="text-sm text-text-muted">Select a completed experiment to analyze.</p>
             </div>
           )}
 
           {/* Project-level report */}
           <section className="rounded-xl border border-border bg-card p-5">
             <ProjectReportPanel projectId={project.id} />
+          </section>
+
+          {/* Judge calibration — project level */}
+          <section className="rounded-xl border border-border bg-card p-5">
+            <JudgeCalibrationPanel projectId={project.id} />
           </section>
 
           {/* Selected experiment sections */}
@@ -161,6 +160,15 @@ export default function AnalyzePage() {
               <section className="rounded-xl border border-border bg-card p-5">
                 <HumanAnnotationPanel
                   key={`ann-${selected.id}`}
+                  projectId={project.id}
+                  experimentId={selected.id}
+                />
+              </section>
+
+              {/* Hard-case mining */}
+              <section className="rounded-xl border border-border bg-card p-5">
+                <HardCaseMiningPanel
+                  key={`mine-${selected.id}`}
                   projectId={project.id}
                   experimentId={selected.id}
                 />

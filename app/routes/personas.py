@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import db.init
-from config import PERSONA_SUBPROCESS_TIMEOUT, KG_WORKER_URLS
+from config import KG_WORKER_URLS, PERSONA_SUBPROCESS_TIMEOUT
 
 logger = logging.getLogger(__name__)
 

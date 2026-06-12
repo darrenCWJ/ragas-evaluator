@@ -7,6 +7,7 @@ Supports multiple embedding strategies with type-based dispatch:
 
 import asyncio
 import functools
+import inspect
 
 from openai import AsyncOpenAI
 
@@ -29,10 +30,16 @@ def _get_openai_embed_client() -> AsyncOpenAI:
 
 
 async def close_openai_embed_client() -> None:
-    """Close module-level embedding OpenAI client. Call during app shutdown."""
+    """Close module-level embedding OpenAI client. Call during app shutdown.
+
+    Defensive about the close result: tests may swap the client for a mock
+    whose close() is synchronous — shutdown must never raise over that.
+    """
     global _openai_embed_client
     if _openai_embed_client is not None:
-        await _openai_embed_client.close()
+        result = _openai_embed_client.close()
+        if inspect.isawaitable(result):
+            await result
         _openai_embed_client = None
 
 
@@ -46,6 +53,13 @@ def _get_st_model(model_name: str):
         from sentence_transformers import SentenceTransformer
         _st_models[model_name] = SentenceTransformer(model_name)
     return _st_models[model_name]
+
+
+def release_models() -> int:
+    """Drop all cached sentence-transformers models. Returns the number released."""
+    count = len(_st_models)
+    _st_models.clear()
+    return count
 
 
 async def _embed_openai(texts: list[str], model_name: str, params: dict) -> list[list[float]]:

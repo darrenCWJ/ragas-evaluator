@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from "react";
-import type { KGListItem } from "../../lib/api";
+import { useState, useEffect, useRef } from 'react';
+import type { KGListItem } from '../../lib/api';
 import {
   buildKnowledgeGraph,
   resetKnowledgeGraph,
   rebuildKGLinks,
   updateKnowledgeGraph,
   fetchKGBuildProgress,
-} from "../../lib/api";
+} from '../../lib/api';
 
 interface KGCardProps {
   kg: KGListItem;
@@ -15,42 +15,42 @@ interface KGCardProps {
 }
 
 const STAGE_LABELS: Record<string, string> = {
-  building_knowledge_graph: "Starting build...",
-  kg_extracting_headlines: "Extracting headlines...",
-  kg_splitting_headlines: "Splitting headlines...",
-  kg_extracting_keyphrases: "Extracting keyphrases...",
-  kg_building_overlap: "Building overlap scores...",
-  kg_extracting_summaries: "Extracting summaries...",
-  kg_embedding_summaries: "Embedding summaries...",
-  kg_filtering_nodes: "Filtering low-quality nodes...",
-  kg_extracting_themes: "Extracting themes...",
-  kg_extracting_entities: "Extracting entities...",
-  kg_building_summary_similarity: "Building summary similarity...",
-  kg_building_entity_overlap: "Building entity overlap...",
-  kg_resuming_from_checkpoint: "Resuming from checkpoint...",
+  building_knowledge_graph: 'Starting build...',
+  kg_extracting_headlines: 'Extracting headlines...',
+  kg_splitting_headlines: 'Splitting headlines...',
+  kg_extracting_keyphrases: 'Extracting keyphrases...',
+  kg_building_overlap: 'Building overlap scores...',
+  kg_extracting_summaries: 'Extracting summaries...',
+  kg_embedding_summaries: 'Embedding summaries...',
+  kg_filtering_nodes: 'Filtering low-quality nodes...',
+  kg_extracting_themes: 'Extracting themes...',
+  kg_extracting_entities: 'Extracting entities...',
+  kg_building_summary_similarity: 'Building summary similarity...',
+  kg_building_entity_overlap: 'Building entity overlap...',
+  kg_resuming_from_checkpoint: 'Resuming from checkpoint...',
   // Incremental update stages
-  kg_diffing_chunks: "Comparing chunks...",
-  kg_removing_old_nodes: "Removing deleted nodes...",
-  kg_reindexing_nodes: "Re-indexing nodes...",
-  kg_processing_new_chunks: "Processing new chunks...",
-  kg_rebuilding_links: "Rebuilding links...",
-  incremental_kg_extracting_headlines: "New chunks: extracting headlines...",
-  incremental_kg_splitting_headlines: "New chunks: splitting headlines...",
-  incremental_kg_extracting_keyphrases: "New chunks: extracting keyphrases...",
-  incremental_kg_extracting_summaries: "New chunks: extracting summaries...",
-  incremental_kg_filtering_nodes: "New chunks: filtering nodes...",
-  incremental_kg_embedding_summaries: "New chunks: embedding summaries...",
-  incremental_kg_extracting_themes: "New chunks: extracting themes...",
-  incremental_kg_extracting_entities: "New chunks: extracting entities...",
+  kg_diffing_chunks: 'Comparing chunks...',
+  kg_removing_old_nodes: 'Removing deleted nodes...',
+  kg_reindexing_nodes: 'Re-indexing nodes...',
+  kg_processing_new_chunks: 'Processing new chunks...',
+  kg_rebuilding_links: 'Rebuilding links...',
+  incremental_kg_extracting_headlines: 'New chunks: extracting headlines...',
+  incremental_kg_splitting_headlines: 'New chunks: splitting headlines...',
+  incremental_kg_extracting_keyphrases: 'New chunks: extracting keyphrases...',
+  incremental_kg_extracting_summaries: 'New chunks: extracting summaries...',
+  incremental_kg_filtering_nodes: 'New chunks: filtering nodes...',
+  incremental_kg_embedding_summaries: 'New chunks: embedding summaries...',
+  incremental_kg_extracting_themes: 'New chunks: extracting themes...',
+  incremental_kg_extracting_entities: 'New chunks: extracting entities...',
 };
 
 const OVERLAP_OPTIONS = [
-  { value: 250, label: "250 nodes", time: "~1 min" },
-  { value: 500, label: "500 nodes", time: "~3-5 min" },
-  { value: 750, label: "750 nodes", time: "~8-12 min" },
-  { value: 1000, label: "1000 nodes", time: "~15-20 min" },
-  { value: 1500, label: "1500 nodes", time: "~35-45 min" },
-  { value: 0, label: "No limit", time: "can be slow" },
+  { value: 250, label: '250 nodes', time: '~1 min' },
+  { value: 500, label: '500 nodes', time: '~3-5 min' },
+  { value: 750, label: '750 nodes', time: '~8-12 min' },
+  { value: 1000, label: '1000 nodes', time: '~15-20 min' },
+  { value: 1500, label: '1500 nodes', time: '~35-45 min' },
+  { value: 0, label: 'No limit', time: 'can be slow' },
 ] as const;
 
 export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
@@ -88,16 +88,18 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
       }
       return;
     }
-    fetchKGBuildProgress(kg.project_id, kg.kg_source).then((progress) => {
-      if (progress.active) {
-        setBuilding(true);
-        if (progress.stage) setBuildStage(progress.stage);
-        if (progress.completed_steps != null && progress.total_steps != null) {
-          setBuildStep({ completed: progress.completed_steps, total: progress.total_steps });
+    fetchKGBuildProgress(kg.project_id, kg.kg_source)
+      .then((progress) => {
+        if (progress.active) {
+          setBuilding(true);
+          if (progress.stage) setBuildStage(progress.stage);
+          if (progress.completed_steps != null && progress.total_steps != null) {
+            setBuildStep({ completed: progress.completed_steps, total: progress.total_steps });
+          }
         }
-      }
-    }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kg.project_id]);
 
   // Poll progress while building
@@ -141,7 +143,7 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
   const handleResume = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!kg.chunk_config_id) {
-      setError("Missing chunk config — rebuild from the Test page");
+      setError('Missing chunk config — rebuild from the Test page');
       return;
     }
     try {
@@ -150,7 +152,7 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
       await buildKnowledgeGraph(kg.project_id, kg.chunk_config_id);
     } catch (err) {
       setBuilding(false);
-      setError((err as Error).message || "Failed to resume build");
+      setError((err as Error).message || 'Failed to resume build');
     }
   };
 
@@ -161,7 +163,7 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
       await resetKnowledgeGraph(kg.project_id);
       onRefresh();
     } catch (err) {
-      setError((err as Error).message || "Failed to reset");
+      setError((err as Error).message || 'Failed to reset');
     }
   };
 
@@ -170,56 +172,56 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
     try {
       setError(null);
       setBuilding(true);
-      setBuildStage("kg_building_overlap");
+      setBuildStage('kg_building_overlap');
       await rebuildKGLinks(kg.project_id, overlapMaxNodes);
     } catch (err) {
       setBuilding(false);
       setBuildStage(null);
-      setError((err as Error).message || "Failed to rebuild links");
+      setError((err as Error).message || 'Failed to rebuild links');
     }
   };
 
   const handleUpdate = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!kg.chunk_config_id) {
-      setError("Missing chunk config — rebuild from the Test page");
+      setError('Missing chunk config — rebuild from the Test page');
       return;
     }
     try {
       setError(null);
       setBuilding(true);
-      setBuildStage("kg_diffing_chunks");
+      setBuildStage('kg_diffing_chunks');
       await updateKnowledgeGraph(kg.project_id, kg.chunk_config_id);
     } catch (err) {
       setBuilding(false);
       setBuildStage(null);
-      setError((err as Error).message || "Failed to update KG");
+      setError((err as Error).message || 'Failed to update KG');
     }
   };
 
   const statusLabel = building
-    ? "Building..."
+    ? 'Building...'
     : isComplete
-      ? "Complete"
+      ? 'Complete'
       : isPartial
         ? `Partial (${kg.completed_steps}/${kg.total_steps})`
-        : "Empty";
+        : 'Empty';
 
   const statusColor = building
-    ? "bg-blue-500/15 text-blue-400 border-blue-500/30"
+    ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
     : isComplete
-      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
       : isPartial
-        ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
-        : "bg-red-500/15 text-red-400 border-red-500/30";
+        ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+        : 'bg-red-500/15 text-red-400 border-red-500/30';
 
   const date = kg.created_at
-    ? new Date(kg.created_at).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
+    ? new Date(kg.created_at).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       })
     : null;
 
@@ -236,12 +238,8 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
         {/* Header row */}
         <div className="flex items-start justify-between gap-3 mb-4">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary truncate">
-              {kg.project_name}
-            </h3>
-            <p className="text-micro text-text-muted mt-0.5">
-              {date}
-            </p>
+            <h3 className="text-sm font-semibold text-text-primary truncate">{kg.project_name}</h3>
+            <p className="text-micro text-text-muted mt-0.5">{date}</p>
           </div>
           <span
             className={`shrink-0 rounded-md border px-2 py-0.5 text-2xs font-medium ${statusColor}`}
@@ -279,7 +277,9 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
                     {buildProgress.batch_current ?? 0}/{buildProgress.batch_total} chunks
                   </span>
                   {buildProgress.nodes_total != null && buildProgress.nodes_total > 0 && (
-                    <span>{buildProgress.nodes_processed ?? 0}/{buildProgress.nodes_total} nodes</span>
+                    <span>
+                      {buildProgress.nodes_processed ?? 0}/{buildProgress.nodes_total} nodes
+                    </span>
                   )}
                 </div>
               </>
@@ -298,10 +298,7 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
         <div className="grid grid-cols-3 gap-3">
           <StatCell label="Nodes" value={kg.num_nodes} />
           <StatCell label="Chunks" value={kg.num_chunks} />
-          <StatCell
-            label="Steps"
-            value={`${kg.completed_steps}/${kg.total_steps}`}
-          />
+          <StatCell label="Steps" value={`${kg.completed_steps}/${kg.total_steps}`} />
         </div>
 
         {/* Actions for partial KGs */}
@@ -312,8 +309,18 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
               className="flex items-center gap-1.5 rounded-lg bg-accent/10 border border-accent/20 px-3 py-1.5
                 text-micro font-medium text-accent transition hover:bg-accent/20"
             >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+              <svg
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z"
+                />
               </svg>
               Resume
             </button>
@@ -331,8 +338,18 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
         {kg.chunks_stale && !building && (
           <div className="mt-3 rounded-lg bg-amber-500/5 border border-amber-500/15 px-3 py-2.5">
             <div className="flex items-center gap-2 mb-1.5">
-              <svg className="h-3.5 w-3.5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              <svg
+                className="h-3.5 w-3.5 text-amber-400 shrink-0"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+                />
               </svg>
               <span className="text-micro text-amber-300 font-medium">
                 Documents changed since last build
@@ -365,7 +382,11 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
                   stroke="currentColor"
                   strokeWidth={2}
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
+                  />
                 </svg>
               </button>
 
@@ -378,11 +399,21 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
                   setShowRebuildLinks((v) => !v);
                 }}
                 className={`flex items-center gap-1 text-micro transition-colors ${
-                  showRebuildLinks ? "text-accent" : "text-text-muted hover:text-text-secondary"
+                  showRebuildLinks ? 'text-accent' : 'text-text-muted hover:text-text-secondary'
                 }`}
               >
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182" />
+                <svg
+                  className="h-3 w-3"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182"
+                  />
                 </svg>
                 <span>Rebuild links</span>
               </button>
@@ -395,15 +426,15 @@ export default function KGCard({ kg, onSelect, onRefresh }: KGCardProps) {
                 onClick={(e) => e.stopPropagation()}
               >
                 <p className="text-micro text-text-muted">
-                  Re-run only the overlap/linking step with a different node cap.
-                  Keeps existing headlines and keyphrases.
+                  Re-run only the overlap/linking step with a different node cap. Keeps existing
+                  headlines and keyphrases.
                 </p>
                 <div className="flex items-center gap-2">
                   <label className="text-micro text-text-secondary whitespace-nowrap">
                     Node cap
                   </label>
                   <select
-                    value={overlapMaxNodes === null ? "0" : String(overlapMaxNodes)}
+                    value={overlapMaxNodes === null ? '0' : String(overlapMaxNodes)}
                     onChange={(e) => {
                       const v = Number(e.target.value);
                       setOverlapMaxNodes(v === 0 ? null : v);
@@ -438,7 +469,7 @@ function StatCell({ label, value }: { label: string; value: number | string }) {
     <div className="rounded-lg bg-deep/60 px-3 py-2">
       <div className="text-micro text-text-muted">{label}</div>
       <div className="text-sm font-mono font-semibold text-text-primary mt-0.5">
-        {typeof value === "number" ? value.toLocaleString() : value}
+        {typeof value === 'number' ? value.toLocaleString() : value}
       </div>
     </div>
   );

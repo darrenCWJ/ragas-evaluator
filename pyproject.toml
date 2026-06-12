@@ -1,0 +1,39 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = [
+    ".venv",
+    "frontend",
+    "graphify-out",
+    "data",
+    "scripts/seed_mock_data.py",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "LOG",  # flake8-logging
+    "T20",  # flake8-print (no stray print statements)
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "SIM105", # contextlib.suppress not always clearer
+    "SIM108", # ternary not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+# B008: File(...)/Form(...)/Query(...) call-in-default is the FastAPI DI idiom.
+"app/routes/**" = ["B008"]
+"tests/**" = ["T20"]
+"scripts/**" = ["T20"]
+"worker/**" = ["T20"]
+
+[tool.ruff.format]
+quote-style = "double"

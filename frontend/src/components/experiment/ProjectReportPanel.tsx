@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
-import { fetchProjectReport } from "../../lib/api";
-import type { ProjectReport, BotSummary } from "../../lib/api";
-import { humanizeMetric, scoreBarColor, scoreTextColor, scoreBgColor } from "./scoreUtils";
+import { useState, useEffect, useCallback } from 'react';
+import { fetchProjectReport } from '../../lib/api';
+import type { ProjectReport, BotSummary } from '../../lib/api';
+import { humanizeMetric, scoreBarColor, scoreTextColor, scoreBgColor } from './scoreUtils';
 
 interface Props {
   projectId: number;
@@ -19,7 +19,7 @@ export default function ProjectReportPanel({ projectId }: Props) {
       const data = await fetchProjectReport(projectId);
       setReport(data);
     } catch (err) {
-      setError((err as Error).message || "Failed to load report");
+      setError((err as Error).message || 'Failed to load report');
     } finally {
       setLoading(false);
     }
@@ -65,7 +65,7 @@ export default function ProjectReportPanel({ projectId }: Props) {
           Project Report
         </h3>
         <span className="text-xs text-text-muted">
-          {report.total_experiments} experiment{report.total_experiments !== 1 ? "s" : ""}
+          {report.total_experiments} experiment{report.total_experiments !== 1 ? 's' : ''}
         </span>
       </div>
 
@@ -89,7 +89,9 @@ export default function ProjectReportPanel({ projectId }: Props) {
                       style={{ width: `${Math.max(value * 100, 1)}%` }}
                     />
                   </div>
-                  <span className={`w-10 text-right font-mono text-xs font-semibold ${scoreTextColor(value)}`}>
+                  <span
+                    className={`w-10 text-right font-mono text-xs font-semibold ${scoreTextColor(value)}`}
+                  >
                     {(value * 100).toFixed(0)}%
                   </span>
                 </div>
@@ -110,7 +112,10 @@ export default function ProjectReportPanel({ projectId }: Props) {
                 (e): e is [string, number] => e[1] !== null,
               );
               return (
-                <div key={bot.bot_config_id} className="rounded-lg border border-border/50 bg-elevated/30 p-3">
+                <div
+                  key={bot.bot_config_id}
+                  className="rounded-lg border border-border/50 bg-elevated/30 p-3"
+                >
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-text-primary">
@@ -122,10 +127,12 @@ export default function ProjectReportPanel({ projectId }: Props) {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-text-muted">
-                        {bot.experiment_count} exp{bot.experiment_count !== 1 ? "s" : ""}
+                        {bot.experiment_count} exp{bot.experiment_count !== 1 ? 's' : ''}
                       </span>
                       {bot.overall_score !== null && (
-                        <span className={`font-mono text-sm font-bold ${scoreTextColor(bot.overall_score)}`}>
+                        <span
+                          className={`font-mono text-sm font-bold ${scoreTextColor(bot.overall_score)}`}
+                        >
                           {(bot.overall_score * 100).toFixed(0)}
                         </span>
                       )}
@@ -200,7 +207,8 @@ export default function ProjectReportPanel({ projectId }: Props) {
             </div>
             <div className="rounded-lg bg-elevated px-3 py-2 text-center">
               <div className="text-lg font-bold text-text-primary">
-                {report.overall_evaluator_reliability.agreements}/{report.overall_evaluator_reliability.scorable_count}
+                {report.overall_evaluator_reliability.agreements}/
+                {report.overall_evaluator_reliability.scorable_count}
               </div>
               <div className="text-xs text-text-muted">Agreements</div>
             </div>

@@ -1,19 +1,17 @@
 """Unit tests for rag/query.py."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-
 from fastapi import HTTPException
 
 from pipeline.rag import (
+    CONTEXT_CHAR_BUDGET,
     _build_context_text,
     _truncate_contexts,
-    single_shot_query,
     multi_step_query,
-    CONTEXT_CHAR_BUDGET,
-    DEFAULT_SYSTEM_PROMPT,
+    single_shot_query,
 )
 
 
@@ -115,9 +113,11 @@ class TestRetrieveDense:
             {"content": "doc2", "metadata": {"chunk_id": 2, "document_id": 1}, "distance": 0.5},
         ]
 
-        with patch("pipeline.rag.embed_query_dispatch", new_callable=AsyncMock, return_value=[0.1, 0.2]):
-            with patch("pipeline.rag.vector_search", return_value=raw_results):
-                results = await _retrieve_dense("test query", config, mock_conn)
+        with (
+            patch("pipeline.rag.embed_query_dispatch", new_callable=AsyncMock, return_value=[0.1, 0.2]),
+            patch("pipeline.rag.vector_search", return_value=raw_results),
+        ):
+            results = await _retrieve_dense("test query", config, mock_conn)
 
         assert len(results) == 2
         assert results[0]["content"] == "doc1"
@@ -136,9 +136,11 @@ class TestRetrieveSparse:
             {"content": "sparse doc", "score": 1.5, "chunk_id": 10, "document_id": 1},
         ]
 
-        with patch("pipeline.rag.load_index", return_value=(MagicMock(), ["text"], [{}])):
-            with patch("pipeline.rag.search_bm25", return_value=bm25_results):
-                results = await _retrieve_sparse("query", config, mock_conn)
+        with (
+            patch("pipeline.rag.load_index", return_value=(MagicMock(), ["text"], [{}])),
+            patch("pipeline.rag.search_bm25", return_value=bm25_results),
+        ):
+            results = await _retrieve_sparse("query", config, mock_conn)
 
         assert len(results) == 1
         assert results[0]["content"] == "sparse doc"
@@ -181,11 +183,13 @@ class TestRetrieveHybrid:
             {"content": "sparse1", "score": 1.0, "chunk_id": 2, "document_id": 1},
         ]
 
-        with patch("pipeline.rag.embed_query_dispatch", new_callable=AsyncMock, return_value=[0.1]):
-            with patch("pipeline.rag.vector_search", return_value=dense_raw):
-                with patch("pipeline.rag.load_index", return_value=(MagicMock(), ["t"], [{}])):
-                    with patch("pipeline.rag.search_bm25", return_value=sparse_results):
-                        results = await _retrieve_hybrid("query", config, mock_conn)
+        with (
+            patch("pipeline.rag.embed_query_dispatch", new_callable=AsyncMock, return_value=[0.1]),
+            patch("pipeline.rag.vector_search", return_value=dense_raw),
+            patch("pipeline.rag.load_index", return_value=(MagicMock(), ["t"], [{}])),
+            patch("pipeline.rag.search_bm25", return_value=sparse_results),
+        ):
+            results = await _retrieve_hybrid("query", config, mock_conn)
 
         assert len(results) == 2
         # Both chunks should be present
@@ -215,13 +219,15 @@ class TestSingleShotQuery:
             {"content": "Answer is 42", "score": 0.9, "chunk_id": 1, "document_id": 1},
         ]
 
-        with patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                mock_llm.return_value = {
-                    "content": "The answer is 42.",
-                    "usage": {"prompt_tokens": 50, "completion_tokens": 10},
-                }
-                result = await single_shot_query("What is the answer?", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.return_value = {
+                "content": "The answer is 42.",
+                "usage": {"prompt_tokens": 50, "completion_tokens": 10},
+            }
+            result = await single_shot_query("What is the answer?", config, mock_conn)
 
         assert result["answer"] == "The answer is 42."
         assert len(result["contexts"]) == 1
@@ -256,10 +262,12 @@ class TestSingleShotQuery:
         mock_conn = MagicMock()
         contexts = [{"content": "data", "score": 0.5, "chunk_id": 1, "document_id": 1}]
 
-        with patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                mock_llm.return_value = {"content": "Arr!", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
-                await single_shot_query("query", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.return_value = {"content": "Arr!", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            await single_shot_query("query", config, mock_conn)
 
         call_args = mock_llm.call_args
         messages = call_args.kwargs["messages"]
@@ -270,10 +278,12 @@ class TestSingleShotQuery:
         mock_conn = MagicMock()
         contexts = [{"content": "data", "score": 0.5, "chunk_id": 1, "document_id": 1}]
 
-        with patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                mock_llm.return_value = {"content": "ok", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
-                await single_shot_query("query", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.return_value = {"content": "ok", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            await single_shot_query("query", config, mock_conn)
 
         call_args = mock_llm.call_args
         assert call_args.kwargs["params"] == {"temperature": 0.2}
@@ -298,14 +308,16 @@ class TestMultiStepQuery:
 
         gap_response = json.dumps({"sufficient": True, "reasoning": "All good", "refined_query": None})
 
-        with patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                # First call: gap analysis, Second call: synthesis
-                mock_llm.side_effect = [
-                    {"content": gap_response, "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-                    {"content": "Final answer.", "usage": {"prompt_tokens": 20, "completion_tokens": 10}},
-                ]
-                result = await multi_step_query("query", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            # First call: gap analysis, Second call: synthesis
+            mock_llm.side_effect = [
+                {"content": gap_response, "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                {"content": "Final answer.", "usage": {"prompt_tokens": 20, "completion_tokens": 10}},
+            ]
+            result = await multi_step_query("query", config, mock_conn)
 
         assert result["answer"] == "Final answer."
         assert result["response_mode"] == "multi_step"
@@ -334,14 +346,16 @@ class TestMultiStepQuery:
                 return step1_contexts
             return step2_contexts
 
-        with patch("pipeline.rag._retrieve_dense", side_effect=mock_retrieve):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                mock_llm.side_effect = [
-                    {"content": gap1, "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-                    {"content": gap2, "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-                    {"content": "Complete answer.", "usage": {"prompt_tokens": 30, "completion_tokens": 15}},
-                ]
-                result = await multi_step_query("query", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", side_effect=mock_retrieve),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.side_effect = [
+                {"content": gap1, "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                {"content": gap2, "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+                {"content": "Complete answer.", "usage": {"prompt_tokens": 30, "completion_tokens": 15}},
+            ]
+            result = await multi_step_query("query", config, mock_conn)
 
         assert result["answer"] == "Complete answer."
         assert len(result["steps"]) == 2
@@ -356,14 +370,16 @@ class TestMultiStepQuery:
 
         gap = json.dumps({"sufficient": False, "reasoning": "need more", "refined_query": "more"})
 
-        with patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                mock_llm.side_effect = [
-                    {"content": gap, "usage": {"prompt_tokens": 5, "completion_tokens": 5}},
-                    # Step 2: no new contexts (all deduped), goes to synthesis
-                    {"content": "Answer.", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-                ]
-                result = await multi_step_query("query", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.side_effect = [
+                {"content": gap, "usage": {"prompt_tokens": 5, "completion_tokens": 5}},
+                # Step 2: no new contexts (all deduped), goes to synthesis
+                {"content": "Answer.", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+            ]
+            result = await multi_step_query("query", config, mock_conn)
 
         # Step 2 should report 0 new contexts
         assert result["steps"][-1]["new_contexts_count"] == 0
@@ -373,13 +389,15 @@ class TestMultiStepQuery:
         mock_conn = MagicMock()
         contexts = [{"content": "data", "score": 0.9, "chunk_id": 1, "document_id": 1}]
 
-        with patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts):
-            with patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm:
-                mock_llm.side_effect = [
-                    {"content": "not valid json", "usage": {"prompt_tokens": 5, "completion_tokens": 5}},
-                    {"content": "Answer.", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-                ]
-                result = await multi_step_query("query", config, mock_conn)
+        with (
+            patch("pipeline.rag._retrieve_dense", new_callable=AsyncMock, return_value=contexts),
+            patch("pipeline.rag.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
+            mock_llm.side_effect = [
+                {"content": "not valid json", "usage": {"prompt_tokens": 5, "completion_tokens": 5}},
+                {"content": "Answer.", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+            ]
+            result = await multi_step_query("query", config, mock_conn)
 
         # Should treat as sufficient and move to synthesis
         assert result["steps"][0]["sufficient"] is True
