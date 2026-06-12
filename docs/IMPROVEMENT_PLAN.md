@@ -4,24 +4,64 @@
 > evaluation engine, RAG pipeline, worker service, React frontend, tests, CI, config,
 > deployment, and docs. This is the working plan for the v0.4+ overhaul.
 
-## Execution status (updated 2026-06-12)
+## Execution status (updated 2026-06-13 — verified against code, not memory)
+
+> **Session handoff notes (read first in a fresh session):**
+> - All work lives on branch **`feat/v0.4-overhaul`**, fully pushed — **PR #54**
+>   (github.com/darrenCWJ/tribunal). `origin/main` has NONE of it until the PR merges.
+>   Local `main` == the PR branch.
+> - Python env: the repo `.venv` was corrupted by OneDrive — use
+>   **`C:\venvs\ragas-eval\Scripts\python.exe`** (all deps + ruff installed).
+> - Verify loop: `ruff check .` → `pytest tests/unit -q` (needs env
+>   `OPENAI_API_KEY=sk-dummy`; integration tests run with mocked LLMs) → from
+>   `frontend/`: `npx tsc --noEmit && npm run build && npx eslint src`.
+> - A `langchain_community.chat_models.vertexai` stub is needed to import ragas
+>   outside pytest — copy the pattern from `tests/conftest.py`.
+> - Known pre-existing quirk: eslint has 77 warnings baseline (react-hooks v7
+>   compiler rules at 'warn'); 0 errors is the gate.
 
 | Phase | Status | Commits |
 |---|---|---|
-| 0 — Repo hygiene & tooling | ✅ Done | `adc2c069` |
-| 1 — Critical correctness fixes | ✅ Done | `c58b255e` |
-| 2 — Backend restructure (worker fork eliminated, ghost features closed) | ✅ Done (lean: services extracted incrementally — ProgressStore, skill_trials, tracing; full experiments.py/testsets.py decomposition deferred) | `a809dd2e` |
-| 2.5 — Memory & storage optimization | ✅ Done (KG zlib compression, RLIMIT_AS cap, maintenance endpoint, per-batch checkpoints + gc/malloc_trim) | `6ad82c34` |
-| 3 — Frontend restructure | 🟡 Partial: api.ts split into 15 domain modules, 12 UI primitives, useFetch/usePolling/useConfirm hooks, ErrorBoundary. **Deferred:** TestSetGenerate/ExperimentRunner/KGGraphView god-component splits and the codebase-wide primitive sweep | `0b29eb13`, `a5d705e2` |
-| 4 — Test & CI hardening | 🟡 Partial: ruff+eslint+prettier in CI, strict markers verified, 23 new mocked-LLM tests for Skill Arena (the fake-LLM pattern to extend). **Deferred:** route tests for testsets/analyze/personas/custom_metrics, Vitest setup, concurrency tests | (rolled into other commits) |
-| 5 — Skill Arena (+ model compare/apply + Langfuse tracing) | ✅ Done | `b2181249`, `d61a79d7` |
-| 6 — Polish & docs | ✅ Done (FEATURES.md, README, this status table). **Deferred:** request-id middleware, CODEMAPS regeneration | (this commit) |
+| 0 — Repo hygiene & tooling (ruff/eslint/prettier + CI, broken Dockerfile.dev, path anchoring, naming) | ✅ Done | `adc2c069` |
+| 1 — Critical correctness (ProgressStore, LLM retry/backoff, SSE hardening, query bounds, event-loop unblocking) | ✅ Done | `c58b255e` |
+| 2 — Backend restructure: worker fork DELETED (worker imports root modules; Docker builds from repo root), ghost features closed (instance_rubrics, Glean-as-LLM, token tracking) | ✅ Done | `a809dd2e` |
+| 2.5 — Memory & storage: KG zlib compression (~25x), RLIMIT_AS subprocess cap, /api/system/maintenance, per-batch KG checkpoints + gc/malloc_trim | ✅ Done | `6ad82c34` |
+| 3 — Frontend restructure: api.ts → 15 domain modules, 12 ui/ primitives, useFetch/usePolling/useConfirm/useSSE hooks, ErrorBoundary, god-component splits (TestSetGenerate → generate/, ExperimentRunner → runner/) | ✅ Done | `0b29eb13`, `a5d705e2`, `25ca083b` |
+| 4 — Tests & CI: mocked-LLM pattern, strict markers, route tests for ALL legacy modules (testsets/analyze/personas/custom_metrics/auth/conversation) — 36 backend test files | ✅ Done (backend) / ❌ frontend has zero tests (no Vitest) | `9d9a7687` + feature commits |
+| 5 — Skill Arena: skill file × model matrix, adherence/format/lift metrics, step traces + optional Langfuse export, apply-winner | ✅ Done | `b2181249`, `d61a79d7` |
+| 6 — Docs: README/FEATURES/WORKFLOW refreshed, all CODEMAPS regenerated from code | ✅ Done | `0bb17eeb`, `349201fe` |
+| 7 — Test set transparency: quality audit (deterministic + LLM), provenance (source_chunk_ids), coverage report, refusal_accuracy metric, category breakdown; external (uploaded) test sets fully supported incl. category column + refusal tagging | ✅ Done | `76ea0bb9`, `7e6d7588` |
+| 8 — Suggestion engine v2: guardrail snippet library (grounding/refusal/noise/persona/phases), category-gap rules, system_prompt_append apply mode, Prompt Doctor (LLM drafts revised prompt from worst failures) | ✅ Done | `ab4b1866` |
+| 9 — Improvement loop closed: retrieval_hit_rate/retrieval_mrr (deterministic, via provenance), bootstrap CIs on aggregates, suggestion outcomes (paired verdicts: improved/regressed/inconclusive), outcome badges + CI display in UI | ✅ Done | `5dc3bec3`, `b96ff953` |
+| 10 — UX: Start guide page (two paths: external agent vs internal RAG, live step progress), grouped metric selection with descriptions/cost tags/presets, shareable standalone HTML report | ✅ Done | `fed51794`, `6d823209` |
+| 11 — Multi-turn conversation testing + CI quality gate endpoint | ✅ Done | `135eef03`, `9d9a7687`, `25ca083b` |
+| 12 — Auth: multi-user logins, admin role (sees all projects), project isolation, machine token | ✅ Done | `466da7a6` |
 
-### Recommended next steps (deferred work, in priority order)
-1. Split `TestSetGenerate.tsx` (1.9k lines) and `ExperimentRunner.tsx` (1.2k) using the now-existing hooks/primitives; ratchet `react-hooks/set-state-in-effect` and `react-hooks/refs` back to `error` in eslint.config.js afterwards.
-2. Route tests for the four untested backend modules using the mocked-LLM pattern from `tests/integration/test_skill_routes.py`.
-3. Extract `app/services/experiment_runner.py` from `experiments.py`'s `_run_background` (the route file is still ~2.3k lines).
-4. Vitest + RTL smoke tests; request-id logging middleware.
+### Remaining work (verified NOT implemented as of 2026-06-13, priority order)
+
+**Engineering debt**
+1. **Frontend unit tests** — zero exist. Set up Vitest + React Testing Library; start with api/client error paths, usePolling/useFetch hooks, and one render test per page.
+2. **Extract `app/services/experiment_runner.py`** — `app/routes/experiments.py` is still ~2.3k lines; move `_run_background` + aggregation helpers behind unchanged route signatures.
+3. **Request-ID logging middleware** for per-request log correlation.
+4. Check whether eslint `react-hooks/set-state-in-effect`/`react-hooks/refs` can now ratchet from 'warn' back to 'error' (god splits landed; remaining warners are legacy pages).
+
+**Retrieval upgrades (designed in Part 2/§A below — none built)**
+5. **Small-to-big retrieval** — `parent_child` chunking exists and chunks table has `parent_chunk_id`, but retrieval never expands child→parent. Highest-impact retrieval fix (~30 lines in `pipeline/rag.py` retrieval functions + dedupe).
+6. **Query expansion (multi-query + RRF reuse) / HyDE** as experimentable `rag_configs` fields.
+7. **Score-threshold cutoff + MMR diversity** post-filters instead of blind top_k.
+8. `text-embedding-3-large` option + `BAAI/bge-reranker-v2-m3` reranker option.
+9. KG-assisted retrieval (vector hits → 1-hop KG expansion → rerank) — biggest differentiator, do after 5–7.
+
+**Evaluation/product features (recommended, not built)**
+10. **Parameter sweep experiments** — grid over top_k/alpha/chunk configs, auto-spawn experiments, leaderboard; run judge-free first using retrieval_hit_rate, judge the top finalists.
+11. **Judge calibration** — human annotation data (20% samples) is collected but unused; pick default judge per project by human agreement.
+12. **Scheduled regression runs** against external agents with alerts on metric drops.
+13. Real-user log import → test questions; hard-case mining (auto-generate variants of failed questions).
+
+**Known quirks to be aware of**
+- Worker delegation for experiments/testgen posts to `/run-experiment`/`/run-testgen` endpoints the worker does NOT implement — silently falls back to local execution (documented in CODEMAPS/worker.md limitations).
+- `resource` module usage in worker /status is Unix-only (fine in Docker, N/A on Windows dev).
+- Coverage report legitimately shows "doesn't apply" for corpus-less projects (external agent + uploaded test set).
 
 ---
 
