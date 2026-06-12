@@ -5,7 +5,6 @@ patched, so these tests exercise routing, persistence, the trial runner's
 matrix execution, tracing, and aggregation end-to-end.
 """
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
