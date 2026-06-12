@@ -158,6 +158,31 @@ def _compute_aggregates(conn, exp_id: int) -> dict:
     return aggregate
 
 
+def _retrieval_diagnostics(
+    q_metadata: dict | None, retrieved_contexts: list[dict]
+) -> dict[str, float] | None:
+    """Deterministic retrieval scores against question provenance.
+
+    retrieval_hit_rate — 1.0 when ANY gold source chunk was retrieved
+    retrieval_mrr      — 1/rank of the first gold chunk (0.0 when missed)
+
+    Returns None when the question carries no provenance (uploaded legacy
+    sets) or nothing was retrieved with chunk ids.
+    """
+    source_ids = set((q_metadata or {}).get("source_chunk_ids") or [])
+    if not source_ids:
+        return None
+    retrieved_ids = [
+        c.get("chunk_id") for c in retrieved_contexts if c.get("chunk_id") is not None
+    ]
+    if not retrieved_ids:
+        return {"retrieval_hit_rate": 0.0, "retrieval_mrr": 0.0}
+    for rank, cid in enumerate(retrieved_ids, 1):
+        if cid in source_ids:
+            return {"retrieval_hit_rate": 1.0, "retrieval_mrr": round(1.0 / rank, 4)}
+    return {"retrieval_hit_rate": 0.0, "retrieval_mrr": 0.0}
+
+
 def _compute_token_usage(conn, exp_id: int) -> dict | None:
     """Sum prompt/completion tokens recorded in result metadata.
 
@@ -745,8 +770,21 @@ async def get_experiment(project_id: int, experiment_id: int):
 
     if result_rows:
         exp["aggregate_metrics"] = _compute_aggregates(conn, experiment_id)
+        # Bootstrap CIs so small test sets don't present noise as signal
+        from evaluation.stats import bootstrap_ci
+
+        values_by_metric: dict[str, list[float]] = {}
+        for rr in result_rows:
+            metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
+            for mn, v in metrics.items():
+                if v is not None:
+                    values_by_metric.setdefault(mn, []).append(v)
+        exp["aggregate_ci"] = {
+            mn: bootstrap_ci(vals) for mn, vals in values_by_metric.items()
+        }
     else:
         exp["aggregate_metrics"] = None
+        exp["aggregate_ci"] = None
 
     exp["token_usage"] = _compute_token_usage(conn, experiment_id)
 
@@ -1309,6 +1347,18 @@ async def run_experiment(
                             rubrics=req.rubrics,
                             metadata=q_metadata,
                         )
+
+                        # Deterministic retrieval diagnostics (internal RAG only):
+                        # did retrieval fetch the chunk the gold answer lives in?
+                        # Free and exact — splits "retrieval missed it" from
+                        # "the model botched it". Needs question provenance
+                        # (source_chunk_ids), recorded at generation time.
+                        if not use_bot:
+                            retrieval_metrics = _retrieval_diagnostics(
+                                q_metadata, full_context_dicts
+                            )
+                            if retrieval_metrics:
+                                metrics_result.update(retrieval_metrics)
 
                         await progress_queue.put({
                             "idx": idx, "qid": qid, "question_text": question_text,

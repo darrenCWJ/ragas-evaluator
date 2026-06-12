@@ -322,7 +322,94 @@ async def get_suggestions(project_id: int, experiment_id: int):
         (experiment_id,),
     ).fetchall()
 
-    return {"suggestions": [dict(r) for r in rows]}
+    out = []
+    for r in rows:
+        s = dict(r)
+        s["outcome"] = _resolve_outcome(conn, s)
+        s.pop("outcome_json", None)
+        out.append(s)
+    return {"suggestions": out}
+
+
+def _metric_values_by_question(conn, experiment_id: int) -> dict[int, dict]:
+    rows = conn.execute(
+        "SELECT test_question_id, metrics_json FROM experiment_results WHERE experiment_id = ?",
+        (experiment_id,),
+    ).fetchall()
+    return {
+        r["test_question_id"]: _sanitize_nan(json.loads(r["metrics_json"]))
+        if r["metrics_json"] else {}
+        for r in rows
+    }
+
+
+def _resolve_outcome(conn, suggestion: dict) -> dict | None:
+    """Did the applied suggestion actually improve things?
+
+    Computed lazily once the follow-up experiment completes, then cached on
+    the suggestion row. Pairs results per question for tight comparisons and
+    reports a verdict per metric plus an overall call — this is what closes
+    the diagnose → fix → verify loop.
+    """
+    if suggestion.get("outcome_json"):
+        return json.loads(suggestion["outcome_json"])
+    applied_id = suggestion.get("applied_experiment_id")
+    if not applied_id:
+        return None
+    applied = conn.execute(
+        "SELECT status FROM experiments WHERE id = ?", (applied_id,)
+    ).fetchone()
+    if applied is None or applied["status"] != "completed":
+        return {"status": "pending", "applied_experiment_id": applied_id}
+
+    from evaluation.stats import paired_delta_verdict
+
+    base = _metric_values_by_question(conn, suggestion["experiment_id"])
+    variant = _metric_values_by_question(conn, applied_id)
+    shared_qids = sorted(set(base) & set(variant))
+    if not shared_qids:
+        return {"status": "incomparable", "applied_experiment_id": applied_id}
+
+    metric_names = {m for qid in shared_qids for m in base[qid]} & {
+        m for qid in shared_qids for m in variant[qid]
+    }
+    per_metric: dict[str, dict] = {}
+    for mn in sorted(metric_names):
+        pairs = [
+            (base[qid].get(mn), variant[qid].get(mn))
+            for qid in shared_qids
+            if base[qid].get(mn) is not None and variant[qid].get(mn) is not None
+        ]
+        if len(pairs) < 2:
+            continue
+        verdict = paired_delta_verdict([p[0] for p in pairs], [p[1] for p in pairs])
+        if verdict:
+            per_metric[mn] = verdict
+
+    improved = sum(1 for v in per_metric.values() if v["verdict"] == "improved")
+    regressed = sum(1 for v in per_metric.values() if v["verdict"] == "regressed")
+    if improved and not regressed:
+        overall = "improved"
+    elif regressed and not improved:
+        overall = "regressed"
+    elif improved and regressed:
+        overall = "mixed"
+    else:
+        overall = "inconclusive"
+
+    outcome = {
+        "status": "evaluated",
+        "applied_experiment_id": applied_id,
+        "overall": overall,
+        "metrics": per_metric,
+        "compared_questions": len(shared_qids),
+    }
+    conn.execute(
+        "UPDATE suggestions SET outcome_json = ? WHERE id = ?",
+        (json.dumps(outcome), suggestion["id"]),
+    )
+    conn.commit()
+    return outcome
 
 
 # ---------------------------------------------------------------------------
@@ -519,8 +606,8 @@ async def apply_suggestion(
         new_experiment_id = cursor2.lastrowid
 
         conn.execute(
-            "UPDATE suggestions SET implemented = TRUE WHERE id = ?",
-            (suggestion_id,),
+            "UPDATE suggestions SET implemented = TRUE, applied_experiment_id = ? WHERE id = ?",
+            (new_experiment_id, suggestion_id),
         )
         conn.commit()
     except Exception:

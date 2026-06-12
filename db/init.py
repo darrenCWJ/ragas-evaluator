@@ -534,6 +534,8 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN reasoning TEXT")
     _add_column_if_missing(conn, "ALTER TABLE custom_metrics ADD COLUMN few_shot_examples_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE projects ADD COLUMN preferred_model TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN applied_experiment_id INTEGER REFERENCES experiments(id)")
+    _add_column_if_missing(conn, "ALTER TABLE suggestions ADD COLUMN outcome_json TEXT")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:
