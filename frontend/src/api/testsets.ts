@@ -38,6 +38,7 @@ export async function confirmTestSetUpload(
     schemaContextsColumn?: string;
     referenceDataColumn?: string;
     categoryColumn?: string;
+    turnsColumn?: string;
   },
 ): Promise<UploadConfirmResult> {
   const form = new FormData();
@@ -46,6 +47,7 @@ export async function confirmTestSetUpload(
   form.append('answer_column', answerColumn);
   if (opts?.contextsColumn) form.append('contexts_column', opts.contextsColumn);
   if (opts?.categoryColumn) form.append('category_column', opts.categoryColumn);
+  if (opts?.turnsColumn) form.append('turns_column', opts.turnsColumn);
   if (opts?.referenceSqlColumn) form.append('reference_sql_column', opts.referenceSqlColumn);
   if (opts?.schemaContextsColumn) form.append('schema_contexts_column', opts.schemaContextsColumn);
   if (opts?.referenceDataColumn) form.append('reference_data_column', opts.referenceDataColumn);

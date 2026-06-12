@@ -15,6 +15,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
   const [answerCol, setAnswerCol] = useState('');
   const [contextsCol, setContextsCol] = useState('');
   const [categoryCol, setCategoryCol] = useState('');
+  const [turnsCol, setTurnsCol] = useState('');
   const [refSqlCol, setRefSqlCol] = useState('');
   const [schemaCtxCol, setSchemaCtxCol] = useState('');
   const [refDataCol, setRefDataCol] = useState('');
@@ -31,6 +32,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
     setAnswerCol('');
     setContextsCol('');
     setCategoryCol('');
+    setTurnsCol('');
     setRefSqlCol('');
     setSchemaCtxCol('');
     setRefDataCol('');
@@ -89,6 +91,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
         schemaContextsColumn: schemaCtxCol || undefined,
         referenceDataColumn: refDataCol || undefined,
         categoryColumn: categoryCol || undefined,
+        turnsColumn: turnsCol || undefined,
       });
       setSuccess(`Created test set "${result.name}" with ${result.question_count} questions.`);
       // Reset
@@ -98,6 +101,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
       setAnswerCol('');
       setContextsCol('');
       setCategoryCol('');
+      setTurnsCol('');
       setRefSqlCol('');
       setSchemaCtxCol('');
       setRefDataCol('');
@@ -122,6 +126,7 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
     setAnswerCol('');
     setContextsCol('');
     setCategoryCol('');
+    setTurnsCol('');
     setRefSqlCol('');
     setSchemaCtxCol('');
     setRefDataCol('');
@@ -397,6 +402,31 @@ export default function TestSetUpload({ projectId, onTestSetCreated }: Props) {
                 Rows with category &apos;out_of_knowledge_base&apos;, &apos;refusal&apos;,
                 &apos;out_of_scope&apos; or &apos;unanswerable&apos; are tagged as refusal tests —
                 the refusal_accuracy metric checks the agent declines instead of fabricating.
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-text-secondary">
+                Conversation Turns Column{' '}
+                <span className="font-normal text-text-muted">(optional)</span>
+              </label>
+              <select
+                value={turnsCol}
+                onChange={(e) => setTurnsCol(e.target.value)}
+                className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-text-primary focus:border-accent focus:outline-none"
+              >
+                <option value="">None</option>
+                {preview.columns.map((col) => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-0.5 text-xs text-text-muted">
+                Prior user messages before the question, as a JSON array or separated by
+                &apos;|||&apos;. The runner plays each turn against the agent (carrying history)
+                before asking the question — the conversation_retention metric checks the agent
+                remembers them.
               </p>
             </div>
 
