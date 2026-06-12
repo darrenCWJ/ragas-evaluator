@@ -3,17 +3,30 @@
 
 # Workflow Guide
 
-End-to-end walkthrough: how to set up the platform, configure a RAG pipeline, generate a test set, run an experiment, and improve your bot.
+End-to-end walkthrough: how to set up the platform, configure a RAG pipeline (or connect an external agent), generate a trustworthy test set, run an experiment, and verifiably improve your agent.
+
+> **In-app guide:** the **Start page** (the landing route) shows this same flow live — two path cards with per-step completion ticks and a "What's next" button. This document is the long-form version.
 
 ---
 
 ## Overview
 
 ```
-Setup → Create Project → Upload Docs → Configure Pipeline → Generate Test Set → Run Experiment → Analyze → Improve
+Internal RAG path:   Setup → Upload Docs → Configure Pipeline → Test Set → Experiment → Analyze → Fix → Verify
+External agent path: Setup → Connect agent via API → Upload/Generate Test Set → Experiment → Analyze → Fix → Verify
 ```
 
 Each step builds on the previous. You only do Setup once. Everything else is per-project and repeatable.
+
+---
+
+## Step 0 — First run & accounts
+
+The first time you open the app you can use it immediately (open mode). To enable logins, register an account — **the first account becomes the admin** and activates login enforcement for everyone:
+
+- Regular users only see projects they own or were invited to (Setup page → Project members → add by email).
+- Admins see every project and manage user roles (Workers page → User accounts).
+- Production: set `SESSION_SECRET` in `.env` (`openssl rand -hex 32`) so logins survive restarts; keep `RAGAS_API_KEY` for CI scripts — it works as an admin machine token.
 
 ---
 
@@ -25,7 +38,8 @@ Each step builds on the previous. You only do Setup once. Everything else is per
 cp .env.example .env
 # Edit .env — at minimum set:
 #   OPENAI_API_KEY=sk-...
-#   RAGAS_API_KEY=<random secret>   ← protects all endpoints
+#   SESSION_SECRET=<random secret>  ← keeps logins valid across restarts
+#   RAGAS_API_KEY=<random secret>   ← machine/CI token (also gates open mode)
 docker compose up --build
 ```
 
@@ -298,3 +312,20 @@ To add domain-specific scoring criteria:
 | 15–20 min | Create a RAG config + test a single query |
 | 20–25 min | Generate a test set (direct, 30 questions) + approve |
 | 25–30 min | Run first experiment (all metrics) + review suggestions |
+
+---
+
+## Step 8 — Fix and verify (the loop)
+
+1. On **Analyze**, generate suggestions. Prompt-level fixes (grounding/refusal guardrails, persona, reasoning phases) carry ready-to-apply text — **Apply** clones the config, appends the guardrail, and spawns a follow-up experiment. For an external agent, **copy** the text into your agent's own prompt instead.
+2. Optionally run the **Prompt Doctor** — it reads your worst actual responses and drafts a complete revised system prompt, each addition tied to an observed failure.
+3. Run the follow-up experiment. When it completes, return to the original experiment's suggestions: each applied one now carries a verdict badge — `Fix verified` (with the improved metric and delta), `Made things worse`, `Mixed`, or `No significant change`. Verdicts are paired bootstrap statistics, not eyeballed averages.
+4. Repeat until the **category breakdown** shows no weak spots — then wire the **CI gate** into your pipeline so quality can't silently regress:
+
+```bash
+curl -f "$URL/api/projects/1/experiments/42/gate?thresholds=faithfulness:0.7,refusal_accuracy:0.8&strict=true"
+```
+
+### Before trusting any result
+
+Run the **quality audit** on your test set (Test page → Insights) and check **coverage** — a flawed or narrow test set produces flawed verdicts about your agent. Generated questions carry provenance back to source chunks, which also powers the free `retrieval_hit_rate` diagnostic separating retrieval failures from generation failures.

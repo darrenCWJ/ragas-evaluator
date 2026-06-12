@@ -379,3 +379,38 @@ curl -f "$TRIBUNAL_URL/api/projects/1/experiments/42/gate?thresholds=faithfulnes
 ```
 
 Missing metrics fail the gate — silence never passes CI.
+
+---
+
+## Verified-Fix Loop
+
+**What it does:** Closes the gap between "we suggested a fix" and "the fix worked".
+
+- **Applyable prompt fixes** — suggestions for faithfulness, refusal, noise, and relevancy failures carry the actual guardrail/persona/phase text; Apply appends it to the system prompt (duplicates are rejected). For external agents the text is copyable into the agent's own configuration.
+- **Category-gap rules** — when a question category trails the experiment average by 0.2+, the suggestion names it and proposes the fix for that failure mode (out-of-KB → refusal guardrail, multi-hop → numbered reasoning phases, edge cases → clarify-ambiguity rule).
+- **Prompt Doctor** — one click sends the experiment's worst actual responses to an LLM that diagnoses the failure patterns and drafts a complete revised system prompt, each addition annotated with the observed failure it fixes. Results land in the normal suggestions list.
+- **Outcome verdicts** — applying a suggestion spawns a follow-up experiment; when it completes, per-metric paired bootstrap statistics produce a verdict shown as a badge: `Fix verified` (with the strongest improved metric), `Made things worse`, `Mixed results`, or `No significant change`. Deltas below 0.02 never count as improvement.
+- **Honest numbers everywhere** — aggregate metrics display 95% bootstrap confidence intervals, and `retrieval_hit_rate`/`retrieval_mrr` (computed free from question provenance) separate "retrieval missed the source" from "the model botched the answer".
+
+**Why:** without verification, suggestion engines train users to make random changes. With it, every iteration is evidence.
+
+---
+
+## User Accounts & Roles
+
+**What it does:** Multi-user logins with per-user project isolation and a global admin role.
+
+- **Bootstrap:** the first account to register becomes **admin** and activates login enforcement. Before that, the app runs in open mode (single-user self-hosting works with zero setup).
+- **Regular users** see only projects they own or were added to. Owners add members by email (Setup page → Project members).
+- **Admins** see and manage every project and get a user-accounts panel (Workers page) for promoting/demoting roles; the last admin can't be demoted.
+- **Machine token:** `RAGAS_API_KEY` keeps working as a Bearer token with admin access — CI gates and scripts are unaffected by user logins.
+- **Security:** argon2id hashing, signed httponly session cookies (set `SESSION_SECRET` in production, `SESSION_COOKIE_SECURE=true` behind HTTPS), per-IP login rate limiting, no account enumeration. `ALLOW_REGISTRATION=false` restricts signups.
+- **No self-service password reset yet** — an admin assists locked-out users.
+
+---
+
+## Guided Flow & Reports
+
+- **Start page** — the landing route shows two paths ("Test an external AI agent" vs "Build & evaluate a RAG pipeline") with live per-step completion ticks and a "What's next" button that deep-links to the first incomplete step.
+- **Metric presets** — Recommended / Free only / Everything one-click selections, cost-clarity group labels (LLM judge vs free/instant), and plain-language hover descriptions for every metric.
+- **Shareable HTML report** — `GET /api/projects/{id}/experiments/{id}/report` renders a self-contained HTML file (no JS, inline styles): aggregates with confidence intervals, the per-category breakdown with weakest questions, and suggestions with verified outcomes and prompt text. Save and send to anyone.

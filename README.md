@@ -9,65 +9,73 @@ As AI chatbots become increasingly accessible, more individuals and teams are bu
 
 Most RAG (Retrieval-Augmented Generation) systems are deployed with minimal evaluation. Builders rely on manual spot-checking or anecdotal feedback, leaving systemic issues — hallucinations, poor retrieval, irrelevant responses — undetected until users complain.
 
-This project addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests a RAG pipeline, identifies where it falls short, and generates actionable suggestions to improve it.
+This project addresses that gap. It provides an **LLM-as-a-judge evaluation platform** that systematically tests an AI agent — your own RAG pipeline built in-app, or any external agent reachable via API — shows exactly *what* went wrong, proposes concrete fixes, and **verifies that applied fixes actually worked**.
 
 ## Design
 
 ### Core Idea
 
-Rather than treating evaluation as a one-off check, Tribunal enables an **iterative improvement loop**:
+Rather than treating evaluation as a one-off check, Tribunal closes a full **diagnose → fix → verify loop**:
 
-1. **Configure** a RAG pipeline (chunking strategy, embedding model, retrieval mode, LLM)
-2. **Generate** synthetic test questions from your documents using auto-generated or custom personas
-3. **Run experiments** that evaluate every question against 20+ metrics
-4. **Analyze results** with an AI-powered suggestion engine that pinpoints weak spots
-5. **Apply suggestions** to create a new configuration and re-run — comparing before and after
+1. **Connect** the agent under test — build a RAG pipeline in-app (chunking, embedding, retrieval, LLM) or point a bot connector at any external agent (OpenAI, Claude, Gemini, DeepSeek, Glean, custom HTTP)
+2. **Build a trustworthy test set** — generate persona-based questions from your documents (with source provenance) or upload your own; audit its quality and corpus coverage before trusting any verdict
+3. **Run experiments** scoring every question against 25+ metrics, including refusal behavior on out-of-scope questions and retention across multi-turn conversations
+4. **See what went wrong** — per-category breakdowns ("fails multi-hop and refusal questions"), retrieval-vs-generation attribution, confidence intervals instead of false precision
+5. **Apply fixes** — guardrail/persona/phase prompt suggestions with ready-to-apply text, or let the Prompt Doctor draft a revised system prompt from your worst actual failures
+6. **Verify** — re-runs are statistically compared per question; suggestions earn a "Fix verified" or "Made things worse" badge
 
 ### Architecture
 
 ```
-                    +------------------+
-                    |   React Web UI   |
-                    +--------+---------+
-                             |
-                    +--------+---------+
-                    |   FastAPI REST   |
-                    +--------+---------+
-                             |
-          +------------------+------------------+
-          |                  |                  |
-  +-------+-------+  +------+------+  +--------+--------+
-  |   Pipeline    |  |  Evaluation |  |    Database     |
-  | chunking      |  | 20+ metrics |  | SQLite (local)  |
-  | embedding     |  | scoring     |  | PostgreSQL      |
-  | retrieval     |  | suggestions |  | projects        |
-  | generation    |  | test gen    |  | configs         |
-  | bot connectors|  | custom      |  | experiments     |
-  | multi-LLM     |  | annotations |  | annotations     |
-  +---------------+  +-------------+  +-----------------+
-          |
-  +-------+-------+
-  |  KG Worker    |  (optional separate service)
-  | build-kg      |  POST /build-kg
-  | progress      |  GET  /progress/{project_id}
-  | kg store      |  DELETE /kg/{project_id}
-  +---------------+
+                  +---------------------------+
+                  |       React Web UI        |
+                  |   guided flow + login     |
+                  +-------------+-------------+
+                                |
+                  +-------------+-------------+
+                  |   FastAPI REST (19 route  |
+                  |   modules + auth/access   |
+                  |   middleware + services)  |
+                  +-------------+-------------+
+                                |
+       +---------------+-------------------+----------------+
+       |               |                   |                |
++------+------+ +------+--------+ +--------+------+ +-------+--------+
+|  Pipeline   | |  Evaluation   | |   Insights    | |   Database     |
+| chunking    | | 25+ metrics   | | quality audit | | SQLite (local) |
+| embedding   | | scoring+retry | | coverage      | | PostgreSQL     |
+| retrieval   | | suggestions   | | breakdowns    | | users/projects |
+| generation  | | prompt doctor | | CI gate       | | experiments    |
+| connectors  | | skill arena   | | HTML report   | | test sets      |
+| multi-LLM   | | testgen + KG  | | stats/CIs     | | suggestions    |
++------+------+ +---------------+ +---------------+ +----------------+
+       |
++------+--------+
+|  KG Worker    |  optional separate service — imports the SAME
+|  build-kg     |  shared modules (no forked code); offloads
+|  personas     |  memory-heavy KG builds and persona generation
++---------------+
 ```
 
 ### Suggestion Engine
 
-The suggestion engine analyzes aggregate metric scores and per-question variance to produce targeted recommendations:
+The suggestion engine analyzes aggregate scores, per-question variance, and per-category gaps to produce **applyable** recommendations — prompt suggestions carry the actual guardrail text, not just advice:
 
-| Signal | Diagnosis | Suggestion |
-|--------|-----------|------------|
+| Signal | Diagnosis | Applied fix |
+|--------|-----------|-------------|
 | Low context recall | Retrieval misses relevant chunks | Increase `top_k` or switch to hybrid search |
 | Low context precision | Too much irrelevant context retrieved | Decrease `top_k` or add reranking |
-| Low faithfulness | LLM hallucinating beyond retrieved context | Strengthen system prompt grounding instructions |
-| Low answer relevancy | Responses drift from the question | Enable multi-step retrieval mode |
+| Low faithfulness | Agent asserts claims the context doesn't support | **Grounding guardrail** appended to the system prompt |
+| Low refusal accuracy | Agent fabricates answers to out-of-scope questions | **Refusal guardrail** appended to the system prompt |
+| High noise sensitivity | Irrelevant retrieved passages leak into answers | **Context-filter guardrail** or reranking |
+| Low answer relevancy | Responses drift from the question | **Persona + answer-first style rule**, or multi-step mode |
+| Weak category (e.g. multi-hop trails the average by 0.2+) | Failure localized to a question type | The fix for *that* failure mode (e.g. **numbered reasoning phases**) |
 | Both recall and precision low | Embedding model mismatch for the domain | Switch embedding model |
 | High metric variance across questions | Inconsistent chunk quality | Try a different chunking strategy |
 
-Each suggestion maps to a specific config field and can be applied directly from the UI to spawn a new experiment.
+Beyond the rules, the **Prompt Doctor** sends your worst actual responses to an LLM that diagnoses the failure patterns and drafts a complete revised system prompt (persona + guardrails + phases), with each addition annotated by the failure it fixes — applyable for internal RAG configs, copyable into an external agent's own configuration.
+
+Applying a suggestion clones the config, spawns a follow-up experiment, and — once it completes — computes a **statistical outcome** (paired bootstrap per question): the suggestion earns a `Fix verified`, `Made things worse`, `Mixed`, or `No significant change` badge. No more guessing whether a tweak helped.
 
 ## Metrics
 
@@ -108,6 +116,18 @@ Each suggestion maps to a specific config field and can be applied directly from
 | `answer_accuracy` | Response correctness |
 | `context_relevance` | Context appropriateness |
 
+### Agent Behavior
+| Metric | What it measures |
+|---|---|
+| `refusal_accuracy` | On out-of-scope questions: did the agent decline (1.0), hedge (0.5), or fabricate (0.0)? Runs only on refusal-tagged questions |
+| `conversation_retention` | On multi-turn questions: does the final answer honor facts established in earlier turns? Runs only on questions with setup turns |
+
+### Retrieval Diagnostics (free, deterministic)
+| Metric | What it measures |
+|---|---|
+| `retrieval_hit_rate` | Did retrieval fetch the chunk the gold answer lives in? Computed automatically from question provenance — no LLM cost |
+| `retrieval_mrr` | Reciprocal rank of the first gold chunk in the retrieved list |
+
 ### SQL / Tabular Metrics
 | Metric | What it measures |
 |---|---|
@@ -116,9 +136,14 @@ Each suggestion maps to a specific config field and can be applied directly from
 
 ## Key Features
 
+- **Verified-fix loop** — applied suggestions are statistically compared against the baseline per question (bootstrap confidence intervals) and badged `Fix verified` / `Made things worse` / `No significant change`; aggregate scores display their 95% CI so small test sets don't present noise as signal.
+- **Test set transparency** — quality-audit any test set (verbatim leakage, ungrounded reference answers, non-self-contained or trivial questions), see corpus coverage with untested documents listed by name, and trace every generated question back to its source chunks.
 - **Skill Arena** — test how well different AI models follow a SKILL.md-style instruction file: a judged (skill × model × question) matrix with a no-skill baseline, per-directive pass/fail verdicts, per-model *lift*, token/latency costs, step-level traces (optional Langfuse export), and one-click apply of the winning model as the project default.
 - **Multi-turn conversation tests** — questions can carry setup turns; the runner plays them against the agent with history and the `conversation_retention` metric catches forgotten or contradicted context.
+- **Multi-user accounts** — argon2-hashed logins with per-user project isolation, shareable project membership, and an admin role that sees everything; the first registered user becomes admin. Open mode (no accounts) keeps working for single-user self-hosting.
 - **CI quality gate** — `GET .../experiments/{id}/gate?thresholds=faithfulness:0.7&strict=true` returns 412 on failure so pipelines can block deploys on agent quality.
+- **Guided flow** — a Start page with two paths (test an external API agent vs build a RAG pipeline in-app), live per-step progress, and a "what's next" pointer; metric selection ships with Recommended / Free-only / Everything presets and plain-language descriptions.
+- **Shareable reports** — one-click standalone HTML report per experiment: aggregates with confidence intervals, the per-category failure breakdown, and suggestions with verified outcomes.
 - **Persona-based test generation** — auto-generate diverse personas (fast: direct LLM call; full: KG-based) with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
 - **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
 - **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously with chain-of-thought reasoning and claim-level annotations. Computes a reliability score based on inter-judge agreement; flags results where judges disagree.
@@ -177,16 +202,18 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 cd frontend && npm install && npm run dev  # dev server on :5173
 ```
 
-### Authentication
+### Authentication & user accounts
 
-Set `RAGAS_API_KEY` in your `.env` to require a Bearer token on all requests. Without it, all endpoints are publicly accessible — only skip this on trusted private networks.
+Tribunal has two auth layers that compose cleanly:
 
-```bash
-# Generate a strong secret
-openssl rand -hex 32
-```
+**User logins (recommended for teams).** Open the app and register — the **first account becomes the admin** and activates login enforcement for everyone. After that:
 
-Once set, all API requests require: `Authorization: Bearer <your-key>`
+- Regular users only see projects they **own** or were **added to** (project owners add members by email from the Setup page).
+- **Admins see and can manage every project**, plus a user-accounts panel (Workers page) to promote/demote roles.
+- Set `SESSION_SECRET` in production (`openssl rand -hex 32`) or logins reset on every restart; set `SESSION_COOKIE_SECURE=true` behind HTTPS; set `ALLOW_REGISTRATION=false` to restrict signups to admin-provisioned accounts.
+- Passwords are argon2id-hashed; logins are rate-limited per IP. There is no self-service password reset yet — an admin assists locked-out users.
+
+**Machine token (CI/scripts).** Set `RAGAS_API_KEY` and pass `Authorization: Bearer <key>` — it acts as an admin identity, so quality-gate calls and automation keep working regardless of user logins. Before any user registers, the app runs in **open mode** exactly as previous versions did (optionally gated by this same key).
 
 ### Private network deployments
 
@@ -205,7 +232,12 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 | `OPENAI_API_KEY` | — | **Required.** OpenAI API key |
 | `ANTHROPIC_API_KEY` | — | Optional. Enables Claude models as judges |
 | `GOOGLE_API_KEY` | — | Optional. Enables Gemini models as judges |
-| `RAGAS_API_KEY` | — | Bearer token auth; without it all endpoints are public |
+| `RAGAS_API_KEY` | — | Machine Bearer token (acts as admin); also gates open mode |
+| `SESSION_SECRET` | — | **Set in production.** Signs login session cookies; unset = sessions reset on restart |
+| `SESSION_TTL_SECONDS` | `1209600` | Session lifetime (14 days) |
+| `SESSION_COOKIE_SECURE` | `false` | Mark session cookies Secure (set behind HTTPS) |
+| `ALLOW_REGISTRATION` | `true` | `false` = only existing accounts can sign in |
+| `LOGIN_RATE_LIMIT` | `5` | Login attempts per IP per minute |
 | `DATABASE_URL` | — | PostgreSQL connection string; omit for SQLite |
 | `KG_WORKER_URLS` | — | Comma-separated worker URLs for load-balanced KG builds |
 | `KG_WORKER_URL` | — | Legacy single-worker URL (backward compat) |
@@ -229,57 +261,67 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 ## Project Structure
 
 ```
-├── app/                     # FastAPI application
-â”‚   ├── __init__.py          # App factory, middleware, lifespan
-â”‚   ├── models.py            # Pydantic request/response models
-â”‚   └── routes/              # Route modules (16 modules)
-â”‚       ├── projects.py      # Project CRUD, baselines, API config
-â”‚       ├── documents.py     # Document upload (PDF/TXT/DOCX)
-â”‚       ├── chunks.py        # Chunking configuration and preview
-â”‚       ├── embeddings.py    # Embedding configuration
-â”‚       ├── rag.py           # RAG config and single-query testing
-â”‚       ├── testsets.py      # Test set generation, KG endpoints, upload
-â”‚       ├── personas.py      # Persona CRUD and auto-generation
-â”‚       ├── experiments.py   # Experiment runner (SSE streaming)
-â”‚       ├── analyze.py       # Suggestions and config changes
-â”‚       ├── bot_configs.py   # External bot connector configs
-â”‚       ├── annotations.py   # Human annotation and evaluator accuracy
-â”‚       ├── reports.py       # Project-level reporting and trends
-â”‚       ├── custom_metrics.py # User-defined evaluation metrics
-â”‚       ├── multi_llm_judge.py # Multi-judge evaluation
-â”‚       └── health.py        # Health check endpoint
-├── pipeline/                # RAG engine
-â”‚   ├── chunking.py          # 6 chunking strategies + 2-step pipeline
-â”‚   ├── embedding.py         # OpenAI + SentenceTransformers + contextual prefix
-â”‚   ├── vectorstore.py       # ChromaDB integration
-â”‚   ├── bm25.py              # BM25 sparse search
-â”‚   ├── rag.py               # Retrieval + generation (dense/sparse/hybrid/reranker)
-â”‚   └── llm.py               # Multi-provider LLM routing (OpenAI, Anthropic, Google)
-├── evaluation/              # Metrics and analysis
-â”‚   ├── metrics/             # 23 metric modules
-â”‚   ├── scoring.py           # Metric orchestration
-â”‚   ├── suggestions.py       # Rule-based suggestion engine
-â”‚   └── testgen.py           # Synthetic test generation (persona-based)
-├── worker/                  # KG Worker service (separate FastAPI app)
-â”‚   ├── main.py              # Worker app entrypoint
-â”‚   ├── routes.py            # 5 endpoints: /build-kg, /progress, /kg, /clear-build, /health
-â”‚   ├── config.py            # Worker config (concurrency, timeouts, paths)
-â”‚   ├── db/init.py           # Worker DB layer (KG tables, progress tracking)
-â”‚   ├── evaluation/metrics/testgen.py  # KG build functions
-â”‚   ├── requirements.txt
-â”‚   ├── Dockerfile
-â”‚   └── .env.example
-├── db/                      # Main app database layer
-â”‚   └── init.py              # Schema, migrations, queries
-├── frontend/                # React + TypeScript + Tailwind SPA
-â”‚   └── src/
-â”‚       ├── pages/           # Setup, Build, Test, Experiment, Analyze
-â”‚       └── components/      # UI components per feature
-├── tests/                   # pytest test suite
-├── main.py                  # Uvicorn entrypoint
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
++-- app/                      # FastAPI application
+|   +-- __init__.py           # App factory, auth/access middleware, lifespan
+|   +-- models.py             # Pydantic request/response models
+|   +-- services/             # Business logic shared across routes
+|   |   +-- auth.py           # Password hashing, sessions, project access
+|   |   +-- progress.py       # Lock-guarded run-state registry (SSE-safe)
+|   |   +-- skill_trials.py   # Skill Arena matrix runner
+|   |   +-- tracing.py        # Step tracing (+ optional Langfuse export)
+|   +-- routes/               # 19 route modules
+|       +-- auth.py           # Register/login/logout, admin user management
+|       +-- projects.py       # Project CRUD, members, baselines, API config
+|       +-- documents.py      # Document upload (PDF/TXT/DOCX)
+|       +-- chunks.py         # Chunking configuration and preview
+|       +-- embeddings.py     # Embedding configuration
+|       +-- rag.py            # RAG config and single-query testing
+|       +-- testsets.py       # Test set generation, KG endpoints, upload
+|       +-- personas.py       # Persona CRUD and auto-generation
+|       +-- experiments.py    # Experiment runner (SSE, conversations, retrieval diagnostics)
+|       +-- analyze.py        # Suggestions, prompt doctor, apply + outcomes
+|       +-- insights.py       # Quality audit, coverage, breakdown, CI gate, HTML report
+|       +-- skills.py         # Skill Arena (skills, trials, apply-model)
+|       +-- bot_configs.py    # External bot connector configs
+|       +-- annotations.py    # Human annotation and evaluator accuracy
+|       +-- reports.py        # Project-level reporting and trends
+|       +-- custom_metrics.py # User-defined evaluation metrics
+|       +-- multi_llm_judge.py# Multi-judge evaluation
+|       +-- system.py         # Maintenance (vacuum, cache release)
+|       +-- health.py         # Health check endpoint
++-- pipeline/                 # RAG engine
+|   +-- chunking.py           # 6 chunking strategies + 2-step pipeline
+|   +-- embedding.py          # OpenAI + SentenceTransformers + contextual prefix
+|   +-- vectorstore.py        # ChromaDB integration
+|   +-- bm25.py               # BM25 sparse search
+|   +-- rag.py                # Retrieval + generation (dense/sparse/hybrid/reranker)
+|   +-- llm.py                # Multi-provider LLM routing (OpenAI, Anthropic, Google)
+|   +-- retry.py              # Backoff/retry for all LLM and HTTP calls
+|   +-- bot_connectors/       # 7 connectors (system context + conversation history)
++-- evaluation/               # Metrics and analysis
+|   +-- metrics/              # 26 metric modules (incl. refusal, retention, testgen)
+|   +-- skills/               # Skill parsing + adherence judging
+|   +-- scoring.py            # Metric orchestration with retries
+|   +-- suggestions.py        # Rule engine + guardrail snippet library
+|   +-- testset_quality.py    # Test set quality audit
+|   +-- stats.py              # Bootstrap CIs, paired delta verdicts
++-- worker/                   # KG Worker service (separate FastAPI app)
+|   +-- main.py, routes.py    # Imports the SAME shared modules above — no forked code
+|   +-- Dockerfile            # Builds from repo root: docker build -f worker/Dockerfile .
++-- db/                       # Database layer
+|   +-- init.py               # Schema, migrations, SQLite/PostgreSQL dual backend
++-- frontend/                 # React + TypeScript + Tailwind SPA
+|   +-- src/
+|       +-- api/              # Typed API client, one module per domain
+|       +-- pages/            # Start, Login, Setup, Build, Test, Experiment, Analyze, Skills...
+|       +-- components/       # Feature components + ui/ primitives
+|       +-- hooks/            # useFetch, usePolling, useExperimentStream...
+|       +-- contexts/         # Auth + project state
++-- tests/                    # pytest suite (450+ tests, mocked LLM layer)
++-- main.py                   # Uvicorn entrypoint
++-- Dockerfile
++-- docker-compose.yml
++-- requirements.txt
 ```
 
 ## Tech Stack
@@ -294,5 +336,6 @@ By default this is `false`, which blocks requests to private IP ranges to preven
 | Vector store | ChromaDB |
 | Sparse search | BM25 (rank-bm25) |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
+| Auth | argon2id password hashing, signed session cookies |
 | Document parsing | pypdf (PDF), python-docx (DOCX) |
 | Containerisation | Docker (multi-stage build), docker compose |

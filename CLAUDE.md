@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-RAG Evaluator — an LLM-as-a-judge platform for testing and improving RAG chatbots. Configures RAG pipelines, generates synthetic test sets, runs evaluation experiments against 20+ metrics, and produces actionable suggestions.
+Tribunal (RAG Evaluator) — an LLM-as-a-judge platform for testing and improving AI agents: internal RAG pipelines built in-app or external agents called via API (bot connectors). Generates/audits test sets, runs experiments against 25+ metrics (incl. refusal behavior, multi-turn retention, deterministic retrieval diagnostics), produces applyable prompt/config suggestions, and statistically verifies applied fixes. Has multi-user auth (first registered user = admin) plus the Skill Arena for cross-model skill-file testing.
 
 ## Commands
 
@@ -33,14 +33,26 @@ pytest --cov=app --cov=evaluation --cov=pipeline --cov-report=term-missing
 
 ```
 main.py → loads .env, imports app from app/__init__.py
-app/__init__.py → create_app() factory: lifespan (init_db, cleanup), CORS, router registration, SPA catch-all
-app/routes/ → 16 route modules, each exports `router = APIRouter(prefix=..., tags=[...])`
+app/__init__.py → create_app() factory: lifespan (init_db, worker monitor), _AuthMiddleware
+                  (sessions + per-project access; open mode until a user registers),
+                  CORS, router registration, SPA catch-all
+app/routes/ → 19 route modules, each exports `router = APIRouter(prefix=..., tags=[...])`
+              (incl. auth.py, insights.py, skills.py, system.py)
+app/services/ → shared business logic: auth.py (argon2 + session cookies + access checks),
+                progress.py (lock-guarded run-state, used by SSE), skill_trials.py, tracing.py
 app/models.py → all Pydantic request/response models
 config.py → centralized env-var-driven configuration (paths, model defaults, thresholds, limits)
-db/init.py → SQLite schema, migrations, all DB query functions (single module)
-pipeline/ → RAG engine: chunking.py, embedding.py, vectorstore.py (ChromaDB), bm25.py, rag.py, llm.py
-evaluation/ → metrics/, scoring.py (orchestration), suggestions.py (rule engine), testgen.py (synthetic QA)
-frontend/ → React 18 + TypeScript + Vite + Tailwind SPA
+db/init.py → schema, migrations, SQLite/PostgreSQL dual backend (single module, no ORM)
+pipeline/ → RAG engine: chunking.py, embedding.py, vectorstore.py (ChromaDB), bm25.py, rag.py,
+            llm.py (multi-provider routing), retry.py (backoff for ALL LLM/HTTP calls),
+            bot_connectors/ (7 connectors; all accept system_context + history kwargs)
+evaluation/ → metrics/ (26 modules), skills/ (skill parsing + adherence), scoring.py
+              (orchestration + retries), suggestions.py (rule engine + guardrail snippets),
+              testset_quality.py (audit), stats.py (bootstrap CIs, paired verdicts)
+worker/ → optional KG worker service; imports the SAME shared modules (no forked copies);
+          Docker build context is the REPO ROOT: docker build -f worker/Dockerfile .
+frontend/ → React 18 + TS + Vite + Tailwind SPA: src/api/ (typed client per domain),
+            src/hooks/ (useFetch, usePolling, useExperimentStream), src/contexts/ (Auth, Project)
 ```
 
 ### Key data flow
@@ -73,7 +85,8 @@ frontend/ → React 18 + TypeScript + Vite + Tailwind SPA
 ## Environment Variables
 
 - `OPENAI_API_KEY` (required) — OpenAI API access
-- `RAGAS_API_KEY` (optional but recommended) — Bearer token auth; without it all endpoints are public
+- `SESSION_SECRET` (set in production) — signs login session cookies; unset = logins reset on restart
+- `RAGAS_API_KEY` (optional) — machine Bearer token (admin identity); also gates open mode
 - `DATABASE_URL` (optional) — PostgreSQL connection string; defaults to SQLite if unset
 - `PORT` (optional) — server port; defaults to 3000 in Dockerfile, 8000 in docker-compose
 - `CORS_ORIGINS` (optional) — comma-separated allowed origins (default: `localhost:3000,localhost:5173`)
