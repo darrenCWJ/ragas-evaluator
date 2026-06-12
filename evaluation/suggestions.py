@@ -10,6 +10,62 @@ SUGGESTION_MEDIUM_THRESHOLD = _cfg.SUGGESTION_MEDIUM_THRESHOLD
 VALID_RESPONSE_MODES = _cfg.VALID_RESPONSE_MODES
 VALID_SEARCH_TYPES = _cfg.VALID_SEARCH_TYPES
 
+# ---------------------------------------------------------------------------
+# Prompt guardrail library
+# ---------------------------------------------------------------------------
+# Ready-to-apply system-prompt additions, each tied to the failure signal it
+# fixes. For internal RAG configs they apply directly (system_prompt_append);
+# for external agents the user copies them into their own agent's prompt.
+
+GUARDRAIL_SNIPPETS: dict[str, str] = {
+    "grounding": (
+        "GROUNDING RULES:\n"
+        "- Answer ONLY using facts stated in the provided context.\n"
+        "- Never add information from outside the context, even if you believe it is true.\n"
+        "- If the context only partially answers the question, answer the part that is "
+        "covered and explicitly say what is not covered."
+    ),
+    "refusal": (
+        "WHEN THE ANSWER IS NOT IN THE CONTEXT:\n"
+        "- If the provided context does not contain the answer, say so plainly "
+        "(e.g. \"I don't have information about that in the knowledge base\").\n"
+        "- Do NOT guess, extrapolate, or fabricate an answer.\n"
+        "- Where possible, point the user to what related information IS available."
+    ),
+    "noise_filter": (
+        "CONTEXT FILTERING:\n"
+        "- Some retrieved passages may be irrelevant to the question. Identify and ignore them.\n"
+        "- Base your answer only on the passages that directly address the question.\n"
+        "- Do not let unrelated passages change or dilute your answer."
+    ),
+    "directness": (
+        "ANSWER STYLE:\n"
+        "- Answer the question that was asked, directly, in the first sentence.\n"
+        "- Add supporting detail after the direct answer, not before.\n"
+        "- Do not pad responses with generic introductions or repetition of the question."
+    ),
+    "phased_reasoning": (
+        "REASONING STEPS (follow in order):\n"
+        "1. Identify what the question is asking and which entities/values are involved.\n"
+        "2. Locate every context passage relevant to each entity.\n"
+        "3. Combine the facts across passages, resolving conflicts by preferring the most "
+        "specific passage.\n"
+        "4. State the final answer, then list which passages support it."
+    ),
+    "persona": (
+        "ROLE:\n"
+        "You are a precise, factual assistant for this knowledge base. You value accuracy "
+        "over completeness: a short correct answer beats a long speculative one. You write "
+        "for a busy reader — plain language, no filler."
+    ),
+    "clarify_edge": (
+        "AMBIGUOUS OR EDGE-CASE QUESTIONS:\n"
+        "- If a question is ambiguous, state the interpretation you are answering under.\n"
+        "- If a question asks about an exception or boundary condition, answer the specific "
+        "case asked — do not substitute the general rule."
+    ),
+}
+
 
 def generate_suggestions(
     aggregate_metrics: dict, per_question_results: list[dict]
@@ -62,16 +118,50 @@ def generate_suggestions(
             "suggested_value": None,
         })
 
-    # --- Generation rules ---
+    # --- Generation / prompt-guardrail rules ---
     faithfulness = aggregate_metrics.get("faithfulness")
     if faithfulness is not None and faithfulness < 0.7:
         suggestions.append({
-            "category": "generation",
+            "category": "guardrail",
             "signal": f"faithfulness avg {faithfulness:.2f}",
-            "suggestion": "Responses contain unsupported claims — add system prompt instruction to only use provided context",
+            "suggestion": (
+                "Responses contain claims not supported by the retrieved context — "
+                "add grounding rules to the system prompt (Apply appends them; for an "
+                "external agent, copy them into its prompt)"
+            ),
             "priority": _priority(faithfulness),
-            "config_field": "system_prompt",
-            "suggested_value": None,
+            "config_field": "system_prompt_append",
+            "suggested_value": GUARDRAIL_SNIPPETS["grounding"],
+        })
+
+    refusal_accuracy = aggregate_metrics.get("refusal_accuracy")
+    if refusal_accuracy is not None and refusal_accuracy < 0.7:
+        suggestions.append({
+            "category": "guardrail",
+            "signal": f"refusal_accuracy avg {refusal_accuracy:.2f}",
+            "suggestion": (
+                "The agent fabricates answers to out-of-scope questions instead of "
+                "declining — add an explicit refusal guardrail to the system prompt"
+            ),
+            "priority": "high" if refusal_accuracy < 0.5 else "medium",
+            "config_field": "system_prompt_append",
+            "suggested_value": GUARDRAIL_SNIPPETS["refusal"],
+        })
+
+    # ragas noise_sensitivity is an error rate — LOWER is better.
+    noise_sensitivity = aggregate_metrics.get("noise_sensitivity")
+    if noise_sensitivity is not None and noise_sensitivity > 0.3:
+        suggestions.append({
+            "category": "guardrail",
+            "signal": f"noise_sensitivity avg {noise_sensitivity:.2f} (lower is better)",
+            "suggestion": (
+                "Irrelevant retrieved passages are leaking into answers — add a "
+                "context-filtering instruction, or enable reranking to cut the noise "
+                "before it reaches the model"
+            ),
+            "priority": "high" if noise_sensitivity > 0.5 else "medium",
+            "config_field": "system_prompt_append",
+            "suggested_value": GUARDRAIL_SNIPPETS["noise_filter"],
         })
 
     answer_relevancy = aggregate_metrics.get("answer_relevancy")
@@ -83,6 +173,17 @@ def generate_suggestions(
             "priority": _priority(answer_relevancy),
             "config_field": "response_mode",
             "suggested_value": "multi_step",
+        })
+        suggestions.append({
+            "category": "guardrail",
+            "signal": f"answer_relevancy avg {answer_relevancy:.2f}",
+            "suggestion": (
+                "Responses drift around the question — add a persona and answer-first "
+                "style rule to the system prompt"
+            ),
+            "priority": _priority(answer_relevancy),
+            "config_field": "system_prompt_append",
+            "suggested_value": GUARDRAIL_SNIPPETS["persona"] + "\n\n" + GUARDRAIL_SNIPPETS["directness"],
         })
 
     # --- Embedding rules (cross-metric) ---
@@ -129,7 +230,69 @@ def generate_suggestions(
                 "suggested_value": None,
             })
 
+        suggestions.extend(_category_rules(per_question_results))
+
     return suggestions
+
+
+# Category → the prompt fix that addresses that category's typical failure.
+_CATEGORY_FIXES: dict[str, tuple[str, str]] = {
+    "out_of_knowledge_base": ("refusal", "add a refusal guardrail so it declines instead of fabricating"),
+    "edge": ("clarify_edge", "add an edge-case instruction (state interpretation, answer the specific case)"),
+    "multi_hop": ("phased_reasoning", "add step-by-step reasoning phases to the prompt (and consider multi_step response mode)"),
+}
+
+
+def _category_rules(per_question_results: list[dict]) -> list[dict]:
+    """Flag question categories that score well below the experiment average.
+
+    Results may carry a "category" key (the analyze route joins it in). For
+    each weak category we suggest the prompt fix that targets that failure
+    mode rather than a generic knob tweak.
+    """
+    def _mean_score(metrics: dict) -> float | None:
+        vals = [v for v in metrics.values() if v is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    by_category: dict[str, list[float]] = {}
+    all_scores: list[float] = []
+    for r in per_question_results:
+        score = _mean_score(r.get("metrics", {}))
+        if score is None:
+            continue
+        all_scores.append(score)
+        category = (r.get("category") or "").strip()
+        if category:
+            by_category.setdefault(category, []).append(score)
+
+    if len(all_scores) < 5:
+        return []
+    overall = sum(all_scores) / len(all_scores)
+
+    out: list[dict] = []
+    for category, scores in by_category.items():
+        if len(scores) < 3:
+            continue
+        cat_mean = sum(scores) / len(scores)
+        if cat_mean >= overall - 0.2:
+            continue
+        fix_key = next(
+            (snippet for prefix, (snippet, _) in _CATEGORY_FIXES.items() if category.startswith(prefix)),
+            None,
+        )
+        fix_hint = next(
+            (hint for prefix, (_, hint) in _CATEGORY_FIXES.items() if category.startswith(prefix)),
+            "inspect these questions in the category breakdown to find the shared failure",
+        )
+        out.append({
+            "category": "category_gap",
+            "signal": f"'{category}' questions avg {cat_mean:.2f} vs {overall:.2f} overall ({len(scores)} questions)",
+            "suggestion": f"The agent is weakest on '{category}' questions — {fix_hint}",
+            "priority": "high" if cat_mean < overall - 0.35 else "medium",
+            "config_field": "system_prompt_append" if fix_key else None,
+            "suggested_value": GUARDRAIL_SNIPPETS[fix_key] if fix_key else None,
+        })
+    return out
 
 
 # Fields where override_value must be validated as a specific type
@@ -215,6 +378,19 @@ def apply_config_change(
                 "system_prompt requires an override_value with the new prompt text"
             )
         new_value = value_to_use
+
+    elif config_field == "system_prompt_append":
+        # Guardrail suggestions append to the existing prompt rather than
+        # replacing it. The change is recorded against system_prompt so the
+        # cloned config picks it up like any other field.
+        if value_to_use is None:
+            raise ValueError("system_prompt_append requires the guardrail text")
+        old_value = config_row.get("system_prompt") or ""
+        if value_to_use.strip() in old_value:
+            raise ValueError("This guardrail is already part of the system prompt")
+        new_value = f"{old_value}\n\n{value_to_use}".strip()
+        changes = {"system_prompt": {"old": old_value, "new": new_value}}
+        return {"system_prompt": new_value}, changes
 
     elif config_field in ("embedding_config_id", "chunk_config_id"):
         if value_to_use is None:

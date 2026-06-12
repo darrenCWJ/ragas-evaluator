@@ -46,9 +46,13 @@ async def generate_suggestions_route(project_id: int, experiment_id: int):
             detail="Experiment must be completed to generate suggestions",
         )
 
-    # Fetch results
+    # Fetch results with question category so the engine can localize
+    # weaknesses to question types, not just averages.
     result_rows = conn.execute(
-        "SELECT metrics_json FROM experiment_results WHERE experiment_id = ?",
+        """SELECT er.metrics_json, tq.category, tq.question_type
+           FROM experiment_results er
+           JOIN test_questions tq ON tq.id = er.test_question_id
+           WHERE er.experiment_id = ?""",
         (experiment_id,),
     ).fetchall()
 
@@ -61,7 +65,10 @@ async def generate_suggestions_route(project_id: int, experiment_id: int):
     per_question_results: list[dict] = []
     for rr in result_rows:
         metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
-        per_question_results.append({"metrics": metrics})
+        per_question_results.append({
+            "metrics": metrics,
+            "category": rr["category"] or rr["question_type"] or "",
+        })
         for metric_name, value in metrics.items():
             if value is not None:
                 metric_totals[metric_name] = (
@@ -109,6 +116,180 @@ async def generate_suggestions_route(project_id: int, experiment_id: int):
     result = [dict(r) for r in rows]
 
     return {"suggestions": result, "count": len(result)}
+
+
+# ---------------------------------------------------------------------------
+# 1b. POST  Prompt Doctor — LLM-drafted prompt revision from worst failures
+# ---------------------------------------------------------------------------
+
+_PROMPT_DOCTOR_TEMPLATE = """You are a prompt engineer diagnosing an AI assistant that failed parts of an evaluation.
+
+CURRENT SYSTEM PROMPT (may be the default; "(external agent — prompt not managed here)" means the user owns it):
+---
+{current_prompt}
+---
+
+AGGREGATE METRICS (0-1, higher better except noise_sensitivity):
+{aggregates}
+
+WORST-SCORING RESULTS (question / what the agent answered / expected reference):
+{failures}
+
+Diagnose the failure patterns and draft a revised system prompt. Compose it from:
+- a PERSONA line if tone/relevance/verbosity is an issue,
+- GUARDRAILS for each observed failure mode (ungrounded claims, fabricated answers to
+  out-of-scope questions, irrelevant-context leakage, etc.),
+- numbered REASONING PHASES if failures involve multi-step or multi-source questions.
+Keep everything the current prompt does well. Be specific to the observed failures — no generic advice.
+
+Return ONLY JSON:
+{{
+  "diagnosis": ["<failure pattern, citing which example(s) show it>", ...],
+  "revised_system_prompt": "<the full revised prompt>",
+  "additions": [
+    {{"type": "persona" | "guardrail" | "phase", "text": "<the exact text added>", "reason": "<which observed failure this fixes>"}}
+  ]
+}}
+"""
+
+
+@router.post("/projects/{project_id}/experiments/{experiment_id}/prompt-doctor")
+async def prompt_doctor(project_id: int, experiment_id: int):
+    """Draft a revised system prompt from the experiment's worst failures.
+
+    Stores the proposal as suggestions: each addition as an appendable
+    guardrail/persona/phase row, plus the full revised prompt as a
+    replaceable system_prompt row. For external agents the text is meant to
+    be copied into the user's own prompt.
+    """
+    from config import DEFAULT_EVAL_MODEL
+    from evaluation.skills.parser import _extract_json_object
+    from pipeline.llm import chat_completion
+    from pipeline.retry import with_backoff
+
+    conn = db.init.get_db()
+    experiment = conn.execute(
+        "SELECT * FROM experiments WHERE id = ? AND project_id = ?",
+        (experiment_id, project_id),
+    ).fetchone()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if experiment["status"] != "completed":
+        raise HTTPException(status_code=409, detail="Experiment must be completed")
+
+    # Current prompt: rag config, else snapshot, else external/default note
+    current_prompt = None
+    if experiment["rag_config_id"]:
+        rc = conn.execute(
+            "SELECT system_prompt FROM rag_configs WHERE id = ?",
+            (experiment["rag_config_id"],),
+        ).fetchone()
+        current_prompt = rc["system_prompt"] if rc else None
+    if not current_prompt and experiment["retrieval_config_json"]:
+        current_prompt = json.loads(experiment["retrieval_config_json"]).get("system_prompt")
+    if not current_prompt:
+        current_prompt = (
+            "(external agent — prompt not managed here)"
+            if experiment["bot_config_id"]
+            else "(default grounding prompt)"
+        )
+
+    rows = conn.execute(
+        """SELECT er.metrics_json, er.response, tq.question, tq.reference_answer, tq.category
+           FROM experiment_results er
+           JOIN test_questions tq ON tq.id = er.test_question_id
+           WHERE er.experiment_id = ?""",
+        (experiment_id,),
+    ).fetchall()
+    if not rows:
+        raise HTTPException(status_code=409, detail="No results to analyze")
+
+    scored = []
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for r in rows:
+        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
+        vals = [v for v in metrics.values() if v is not None]
+        for mn, v in metrics.items():
+            if v is not None:
+                totals[mn] = totals.get(mn, 0.0) + v
+                counts[mn] = counts.get(mn, 0) + 1
+        if vals:
+            scored.append((sum(vals) / len(vals), r, metrics))
+    if not scored:
+        raise HTTPException(status_code=409, detail="No scored results to analyze")
+    scored.sort(key=lambda t: t[0])
+
+    aggregates = {mn: round(totals[mn] / counts[mn], 3) for mn in totals if counts[mn]}
+    failures_text = "\n---\n".join(
+        f"[score {mean:.2f}, category {r['category'] or 'n/a'}]\n"
+        f"Q: {r['question'][:400]}\n"
+        f"AGENT: {(r['response'] or '(empty)')[:800]}\n"
+        f"EXPECTED: {(r['reference_answer'] or '')[:400]}\n"
+        f"metrics: { {k: round(v, 2) for k, v in m.items() if v is not None} }"
+        for mean, r, m in scored[:8]
+    )
+
+    async def _call():
+        return await chat_completion(
+            DEFAULT_EVAL_MODEL,
+            [{"role": "user", "content": _PROMPT_DOCTOR_TEMPLATE.format(
+                current_prompt=current_prompt[:6000],
+                aggregates=json.dumps(aggregates),
+                failures=failures_text,
+            )}],
+            {"temperature": 0.2, "max_tokens": 4000},
+        )
+
+    try:
+        raw = await with_backoff(_call, attempts=3, label="prompt-doctor")
+        proposal = _extract_json_object(raw["content"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Prompt doctor LLM call failed: {exc}") from exc
+
+    revised = str(proposal.get("revised_system_prompt", "")).strip()
+    additions = [
+        a for a in proposal.get("additions", [])
+        if isinstance(a, dict) and str(a.get("text", "")).strip()
+    ]
+    if not revised:
+        raise HTTPException(status_code=502, detail="Prompt doctor returned no revised prompt")
+
+    # Replace any previous doctor suggestions for this experiment, keep rule-based ones
+    conn.execute(
+        "DELETE FROM suggestions WHERE experiment_id = ? AND category = 'prompt'",
+        (experiment_id,),
+    )
+    for a in additions:
+        conn.execute(
+            "INSERT INTO suggestions "
+            "(experiment_id, category, signal, suggestion, priority, config_field, suggested_value) "
+            "VALUES (?, 'prompt', ?, ?, 'high', 'system_prompt_append', ?)",
+            (
+                experiment_id,
+                f"prompt-doctor: {a.get('type', 'guardrail')}",
+                str(a.get("reason", ""))[:500],
+                str(a["text"])[:4000],
+            ),
+        )
+    conn.execute(
+        "INSERT INTO suggestions "
+        "(experiment_id, category, signal, suggestion, priority, config_field, suggested_value) "
+        "VALUES (?, 'prompt', 'prompt-doctor: full revision', "
+        "'Replace the system prompt with the doctor''s full revision (or copy it into your external agent)', "
+        "'high', 'system_prompt', ?)",
+        (experiment_id, revised[:8000]),
+    )
+    conn.commit()
+
+    return {
+        "diagnosis": [str(d)[:500] for d in proposal.get("diagnosis", [])],
+        "revised_system_prompt": revised,
+        "additions": additions,
+        "current_prompt": current_prompt,
+        "external_agent": bool(experiment["bot_config_id"]),
+        "suggestions_created": len(additions) + 1,
+    }
 
 
 # ---------------------------------------------------------------------------

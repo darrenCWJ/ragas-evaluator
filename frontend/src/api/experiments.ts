@@ -14,6 +14,7 @@ import type {
   ExperimentSSEHandle,
   Suggestion,
   BatchApplyResult,
+  PromptDoctorResult,
   DeltaResult,
   CompareResult,
   HistoryExperiment,
@@ -293,6 +294,20 @@ export async function applySuggestionsBatch(
         experiment_name: experimentName || undefined,
       }),
     },
+  );
+}
+
+/**
+ * Run the prompt doctor — drafts a revised system prompt from the worst results.
+ * Slow (LLM call, ~10-30s). Also inserts rows into the normal suggestions list.
+ */
+export async function runPromptDoctor(
+  projectId: number,
+  experimentId: number,
+): Promise<PromptDoctorResult> {
+  return request<PromptDoctorResult>(
+    `/api/projects/${projectId}/experiments/${experimentId}/prompt-doctor`,
+    { method: 'POST' },
   );
 }
 

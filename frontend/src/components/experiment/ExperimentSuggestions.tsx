@@ -8,6 +8,9 @@ import {
   ApiError,
 } from '../../lib/api';
 import type { Suggestion, BatchApplyResult, ChunkConfig, EmbeddingConfig } from '../../lib/api';
+import PromptDoctorPanel from './PromptDoctorPanel';
+import CopyButton from '../ui/CopyButton';
+import TextArea from '../ui/TextArea';
 
 interface Props {
   projectId: number;
@@ -58,6 +61,9 @@ const ENUM_FIELD_OPTIONS: Record<string, { value: string; label: string }[]> = {
 
 const DROPDOWN_FIELDS = new Set([...CONFIG_ID_FIELDS, ...Object.keys(ENUM_FIELD_OPTIONS)]);
 
+/** Fields whose suggested_value is multi-line prompt text */
+const PROMPT_FIELDS = new Set(['system_prompt', 'system_prompt_append']);
+
 /** Friendly display names for raw config field names */
 const FIELD_LABELS: Record<string, string> = {
   chunk_config_id: 'Chunking Config',
@@ -68,6 +74,7 @@ const FIELD_LABELS: Record<string, string> = {
   search_type: 'Search Type',
   response_mode: 'Response Mode',
   system_prompt: 'System Prompt',
+  system_prompt_append: 'System Prompt (append)',
 };
 
 function categoryLabel(cat: string): string {
@@ -103,6 +110,20 @@ export default function ExperimentSuggestions({
         status: 'error',
         message: (err as Error).message || 'Failed to load suggestions',
       });
+    }
+  }, [projectId, experimentId]);
+
+  /**
+   * Refresh the list without flashing the loading skeleton — used after the
+   * prompt doctor inserts new rows. Keeps the current list on failure so the
+   * doctor's result panel isn't replaced by an error state.
+   */
+  const refreshSilently = useCallback(async () => {
+    try {
+      const suggestions = await fetchSuggestions(projectId, experimentId);
+      setState({ status: 'loaded', suggestions });
+    } catch {
+      // Non-critical: the doctor already reported success; keep current list
     }
   }, [projectId, experimentId]);
 
@@ -263,6 +284,13 @@ export default function ExperimentSuggestions({
         ) : null}
       </div>
 
+      {/* Prompt doctor */}
+      <PromptDoctorPanel
+        projectId={projectId}
+        experimentId={experimentId}
+        onSuggestionsCreated={refreshSilently}
+      />
+
       {/* Empty — no suggestions */}
       {suggestions.length === 0 && !generating && (
         <div className="rounded-xl border border-dashed border-border bg-card/50 px-5 py-8 text-center">
@@ -398,6 +426,7 @@ function SuggestionCard({
   const priority = PRIORITY_STYLES[s.priority] ?? PRIORITY_STYLES['low']!;
   const isActionable = s.config_field && !s.implemented;
   const hasDropdown = s.config_field && DROPDOWN_FIELDS.has(s.config_field);
+  const isPromptField = s.config_field !== null && PROMPT_FIELDS.has(s.config_field);
 
   // Build dropdown options
   const dropdownOptions: { value: string; label: string }[] =
@@ -478,13 +507,17 @@ function SuggestionCard({
                   <span className="font-medium text-text-primary">
                     {FIELD_LABELS[s.config_field!] ?? s.config_field}
                   </span>
-                  {s.suggested_value && (
+                  {s.suggested_value && !isPromptField && (
                     <>
                       <span className="text-text-muted">to</span>
                       <span className="font-mono text-text-primary">{s.suggested_value}</span>
                     </>
                   )}
                 </div>
+                {/* Multi-line prompt text — collapsed/expandable block */}
+                {s.suggested_value && isPromptField && (
+                  <PromptValueBlock value={s.suggested_value} />
+                )}
                 {/* Input — shown when staged */}
                 {isStaged &&
                   (hasDropdown ? (
@@ -504,6 +537,14 @@ function SuggestionCard({
                         </option>
                       ))}
                     </select>
+                  ) : isPromptField ? (
+                    <TextArea
+                      value={overrideValue}
+                      onChange={(e) => onOverrideChange(e.target.value)}
+                      placeholder="Override prompt text (optional — applies the suggested prompt if empty)"
+                      rows={3}
+                      className="!text-xs font-mono"
+                    />
                   ) : (
                     <input
                       type="text"
@@ -524,6 +565,34 @@ function SuggestionCard({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Multi-line prompt value (collapsed/expandable monospace block) ── */
+
+function PromptValueBlock({ value }: { value: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-border bg-base">
+      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3 py-1">
+        <button
+          type="button"
+          onClick={() => setExpanded((prev) => !prev)}
+          className="text-2xs font-medium text-text-secondary transition hover:text-text-primary"
+        >
+          {expanded ? 'Collapse' : 'Expand'} prompt text
+        </button>
+        <CopyButton text={value} />
+      </div>
+      <pre
+        className={`overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-2xs leading-relaxed text-text-primary ${
+          expanded ? 'max-h-64 overflow-y-auto' : 'max-h-12 overflow-hidden'
+        }`}
+      >
+        {value}
+      </pre>
     </div>
   );
 }

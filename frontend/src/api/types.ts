@@ -705,6 +705,23 @@ export interface BatchApplyResult {
   changes: Record<string, { old: unknown; new: unknown }>;
 }
 
+// --- Prompt doctor ---
+
+export interface PromptDoctorAddition {
+  type: 'persona' | 'guardrail' | 'phase';
+  text: string;
+  reason: string;
+}
+
+export interface PromptDoctorResult {
+  diagnosis: string[];
+  revised_system_prompt: string;
+  additions: PromptDoctorAddition[];
+  current_prompt: string;
+  external_agent: boolean;
+  suggestions_created: number;
+}
+
 // --- Delta ---
 
 export interface ConfigChange {
