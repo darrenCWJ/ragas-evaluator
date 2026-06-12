@@ -295,7 +295,7 @@ async def get_judge_reliability(
 
     if resolved_metric is not None:
         rows = conn.execute(
-            """SELECT mle.evaluator_index, mle.score, mle.verdict,
+            """SELECT mle.id AS evaluation_id, mle.evaluator_index, mle.score, mle.verdict,
                       eca.status AS annotation_status
                FROM multi_llm_evaluations mle
                JOIN experiment_results er ON mle.experiment_result_id = er.id
@@ -306,7 +306,7 @@ async def get_judge_reliability(
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT mle.evaluator_index, mle.score, mle.verdict,
+            """SELECT mle.id AS evaluation_id, mle.evaluator_index, mle.score, mle.verdict,
                       eca.status AS annotation_status
                FROM multi_llm_evaluations mle
                JOIN experiment_results er ON mle.experiment_result_id = er.id
@@ -326,6 +326,7 @@ async def get_judge_reliability(
         }
 
     stats: dict[int, dict] = {}
+    seen_evaluations: set[int] = set()
     for r in rows:
         idx = r["evaluator_index"]
         if idx not in stats:
@@ -338,9 +339,12 @@ async def get_judge_reliability(
                 "verdict_counts": {"positive": 0, "mixed": 0, "critical": 0},
             }
         s = stats[idx]
-        # Normalise criteria verdicts for verdict_counts display
-        display_verdict = _CRITERIA_VERDICT_MAP.get(r["verdict"], r["verdict"])
-        s["verdict_counts"][display_verdict] = s["verdict_counts"].get(display_verdict, 0) + 1
+        # Count each evaluation's verdict once — the LEFT JOIN repeats the
+        # evaluation row for every annotated claim.
+        if r["evaluation_id"] not in seen_evaluations:
+            seen_evaluations.add(r["evaluation_id"])
+            display_verdict = _CRITERIA_VERDICT_MAP.get(r["verdict"], r["verdict"])
+            s["verdict_counts"][display_verdict] = s["verdict_counts"].get(display_verdict, 0) + 1
         if r["annotation_status"] == "accurate":
             s["accurate"] += 1
             s["total_claims_annotated"] += 1

@@ -82,12 +82,12 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="mb-6 flex items-center justify-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent/20">
-            <span className="text-base font-bold text-accent">R</span>
+            <span className="text-base font-bold text-accent">T</span>
           </div>
           <div>
             <div className="text-base font-semibold text-text-primary leading-tight">Tribunal</div>
             <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
-              Ragas Platform
+              Evaluation Platform
             </div>
           </div>
         </div>

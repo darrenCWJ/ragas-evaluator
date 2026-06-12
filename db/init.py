@@ -493,6 +493,28 @@ CREATE TABLE IF NOT EXISTS skill_trial_results (
     error TEXT,
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS skill_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(skill_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS tool_definitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    parameters_json TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'mock',
+    fixtures_json TEXT,
+    builtin_name TEXT,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(project_id, name)
+);
 """
 
 # ---------------------------------------------------------------------------
@@ -615,6 +637,8 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN mmr_lambda REAL")
     _add_column_if_missing(conn, "ALTER TABLE rag_configs ADD COLUMN kg_expansion INTEGER NOT NULL DEFAULT 0")
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN model TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE experiments ADD COLUMN tools_json TEXT")
+    _add_column_if_missing(conn, "ALTER TABLE skill_trials ADD COLUMN mode TEXT NOT NULL DEFAULT 'inline'")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:

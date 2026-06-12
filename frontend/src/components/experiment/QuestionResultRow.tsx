@@ -58,6 +58,15 @@ export default function QuestionResultRow({
     (e): e is [string, number] => typeof e[1] === 'number',
   );
 
+  interface AgentStep {
+    tool: string;
+    arguments: Record<string, unknown>;
+    result: string;
+    latency_ms?: number;
+    error?: string | null;
+  }
+  const agentTrace = (result.metadata?.agent_trace as AgentStep[] | undefined) ?? [];
+
   const handleToggle = () => setOpen((prev) => !prev);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -152,6 +161,45 @@ export default function QuestionResultRow({
                 <div className="space-y-2">
                   {result.retrieved_contexts.map((ctx, i) => (
                     <ContextBlock key={i} index={i + 1} content={ctx.content} />
+                  ))}
+                </div>
+              </DetailBlock>
+            )}
+
+            {/* Agent tool-call trace */}
+            {agentTrace.length > 0 && (
+              <DetailBlock
+                label={`Agent Trace (${agentTrace.length} tool call${agentTrace.length !== 1 ? 's' : ''})`}
+              >
+                <div className="space-y-2">
+                  {agentTrace.map((step, i) => (
+                    <div
+                      key={i}
+                      className={`rounded-lg border px-3 py-2 text-xs ${
+                        step.error
+                          ? 'border-score-low/30 bg-score-low/5'
+                          : 'border-border/60 bg-elevated/40'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-accent/15 text-2xs font-bold text-accent">
+                          {i + 1}
+                        </span>
+                        <span className="font-mono font-semibold text-text-primary">
+                          {step.tool}
+                        </span>
+                        {step.latency_ms != null && (
+                          <span className="text-2xs text-text-muted">{step.latency_ms} ms</span>
+                        )}
+                        {step.error && <span className="text-2xs text-score-low">failed</span>}
+                      </div>
+                      <div className="mt-1 font-mono text-2xs text-text-muted break-all">
+                        {JSON.stringify(step.arguments)}
+                      </div>
+                      <div className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap text-2xs text-text-secondary">
+                        {step.result}
+                      </div>
+                    </div>
                   ))}
                 </div>
               </DetailBlock>

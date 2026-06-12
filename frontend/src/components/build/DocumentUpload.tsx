@@ -1,8 +1,26 @@
 import { useState, useRef, type DragEvent } from 'react';
 import { uploadDocument } from '../../lib/api';
 
-const ALLOWED_EXTENSIONS = ['.pdf', '.txt', '.docx'];
+const TEXT_EXTENSIONS = [
+  '.pdf',
+  '.txt',
+  '.docx',
+  '.md',
+  '.markdown',
+  '.html',
+  '.htm',
+  '.pptx',
+  '.xlsx',
+  '.csv',
+  '.tsv',
+  '.json',
+  '.yaml',
+  '.yml',
+];
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
+const ALLOWED_EXTENSIONS = [...TEXT_EXTENSIONS, ...IMAGE_EXTENSIONS];
 const MAX_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB — images go through a vision model
 
 interface Props {
   projectId: number;
@@ -19,7 +37,10 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
   function validate(file: File): string | null {
     const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      return `Unsupported file type "${ext}". Only .pdf, .txt, and .docx allowed.`;
+      return `Unsupported file type "${ext}". Allowed: ${ALLOWED_EXTENSIONS.join(', ')}.`;
+    }
+    if (IMAGE_EXTENSIONS.includes(ext) && file.size > MAX_IMAGE_SIZE) {
+      return `Image exceeds 10 MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB).`;
     }
     if (file.size > MAX_SIZE) {
       return `File exceeds 50 MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB).`;
@@ -95,7 +116,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.txt,.docx"
+          accept={ALLOWED_EXTENSIONS.join(',')}
           multiple
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
@@ -142,7 +163,12 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
             <p className="text-sm text-text-secondary">
               Drag & drop files here, or <span className="text-accent underline">browse</span>
             </p>
-            <p className="text-xs text-text-muted">.pdf, .txt, .docx — max 50 MB</p>
+            <p className="text-xs text-text-muted">
+              Documents (.pdf, .docx, .pptx, .xlsx, .md, .html, .csv, .json…) — max 50 MB
+            </p>
+            <p className="text-xs text-text-muted">
+              Images (.png, .jpg, .webp) — max 10 MB, text extracted by a vision model
+            </p>
           </div>
         )}
       </div>

@@ -60,6 +60,8 @@ export const DOMAIN_METRICS = ['sql_semantic_equivalence', 'datacompy_score'];
 
 export const JUDGE_METRICS = ['multi_llm_judge'];
 
+export const AGENT_METRICS = ['tool_call_f1'];
+
 /** Specialized metrics that need infrastructure not yet available (tool calls, etc.) */
 export const COMING_SOON_METRICS = [
   { name: 'agent_goal_accuracy', reason: 'Requires agentic goal/outcome annotations' },
@@ -68,7 +70,6 @@ export const COMING_SOON_METRICS = [
     name: 'tool_call_accuracy',
     reason: 'Requires tool/function call data from agent interactions',
   },
-  { name: 'tool_call_f1', reason: 'Requires tool/function call data from agent interactions' },
 ];
 
 export const METRIC_DESCRIPTIONS: Record<string, string> = {
@@ -129,6 +130,9 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
   // Judge Metrics
   multi_llm_judge:
     'Runs multiple LLMs independently as judges and aggregates their verdicts. Each evaluator produces a reasoning, verdict (positive/mixed/critical), score (1–10), and claim-level quotes linking the response to source chunks. The final score is the mean verdict across all evaluators.',
+  // Agent Metrics
+  tool_call_f1:
+    'Deterministic F1 between the tool calls the agent actually made and the reference_tool_calls expected for the question. Free — computed from the recorded agent trace, no LLM. Requires an agent experiment (tools attached) and a reference_tool_calls column.',
 };
 
 interface MetricGroupProps {
@@ -198,6 +202,7 @@ interface MetricSelectionProps {
   selectedMetrics: Set<string>;
   setSelectedMetrics: Dispatch<SetStateAction<Set<string>>>;
   disabledMetrics: Set<string>;
+  disabledReasons?: Record<string, string>;
   hasContexts: boolean;
 }
 
@@ -207,6 +212,7 @@ export default function MetricSelection({
   selectedMetrics,
   setSelectedMetrics,
   disabledMetrics,
+  disabledReasons,
   hasContexts,
 }: MetricSelectionProps) {
   const toggleMetric = (metric: string) => {
@@ -286,6 +292,7 @@ export default function MetricSelection({
           activeClass="border-accent/50 bg-accent/15 text-accent"
           inactiveClass="border-border bg-card text-text-muted hover:border-border-focus hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* NVIDIA Metrics */}
@@ -298,6 +305,7 @@ export default function MetricSelection({
           activeClass="border-green-500/50 bg-green-500/15 text-green-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-green-500/30 hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* Embedding Metrics */}
@@ -310,6 +318,7 @@ export default function MetricSelection({
           activeClass="border-sky-500/50 bg-sky-500/15 text-sky-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-sky-500/30 hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* String Metrics */}
@@ -322,6 +331,7 @@ export default function MetricSelection({
           activeClass="border-amber-500/50 bg-amber-500/15 text-amber-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-amber-500/30 hover:text-text-secondary"
           disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* Domain-Specific Metrics */}
@@ -337,6 +347,7 @@ export default function MetricSelection({
           disabledReasons={{
             sql_semantic_equivalence: 'no questions in this test set have reference_sql metadata',
             datacompy_score: 'no questions in this test set have reference_data metadata',
+            ...disabledReasons,
           }}
         />
 
@@ -349,6 +360,19 @@ export default function MetricSelection({
           onToggle={toggleMetric}
           activeClass="border-violet-500/50 bg-violet-500/15 text-violet-400"
           inactiveClass="border-border bg-card text-text-muted hover:border-violet-500/30 hover:text-text-secondary"
+        />
+
+        {/* Agent Metrics */}
+        <MetricGroup
+          label="Agent Metrics (free — scored from the tool-call trace)"
+          labelClass="text-rose-400"
+          metrics={AGENT_METRICS}
+          selected={selectedMetrics}
+          onToggle={toggleMetric}
+          activeClass="border-rose-500/50 bg-rose-500/15 text-rose-400"
+          inactiveClass="border-border bg-card text-text-muted hover:border-rose-500/30 hover:text-text-secondary"
+          disabledMetrics={disabledMetrics}
+          disabledReasons={disabledReasons}
         />
 
         {/* Coming Soon — specialized metrics */}

@@ -37,6 +37,7 @@ export async function confirmTestSetUpload(
     referenceSqlColumn?: string;
     schemaContextsColumn?: string;
     referenceDataColumn?: string;
+    referenceToolCallsColumn?: string;
     categoryColumn?: string;
     turnsColumn?: string;
   },
@@ -51,6 +52,8 @@ export async function confirmTestSetUpload(
   if (opts?.referenceSqlColumn) form.append('reference_sql_column', opts.referenceSqlColumn);
   if (opts?.schemaContextsColumn) form.append('schema_contexts_column', opts.schemaContextsColumn);
   if (opts?.referenceDataColumn) form.append('reference_data_column', opts.referenceDataColumn);
+  if (opts?.referenceToolCallsColumn)
+    form.append('reference_tool_calls_column', opts.referenceToolCallsColumn);
   if (opts?.name) form.append('name', opts.name);
   return formRequest<UploadConfirmResult>(`/api/projects/${projectId}/test-sets/upload`, form);
 }
@@ -64,6 +67,28 @@ export async function fetchTestSets(projectId: number): Promise<TestSet[]> {
 
 export async function fetchGenerationProgress(projectId: number): Promise<GenerationProgress> {
   return request<GenerationProgress>(`/api/projects/${projectId}/test-sets/generation-progress`);
+}
+
+export interface MetricAvailability {
+  available: boolean;
+  missing: string[];
+}
+
+export interface TestSetCapabilities {
+  test_set_id: number;
+  capabilities: string[];
+  runtime_contexts: boolean;
+  metrics: Record<string, MetricAvailability>;
+}
+
+export async function fetchTestSetCapabilities(
+  projectId: number,
+  testSetId: number,
+  runtimeContexts: boolean,
+): Promise<TestSetCapabilities> {
+  return request<TestSetCapabilities>(
+    `/api/projects/${projectId}/test-sets/${testSetId}/capabilities?runtime_contexts=${runtimeContexts}`,
+  );
 }
 
 export async function cancelTestSetGeneration(

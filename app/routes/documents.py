@@ -1,15 +1,50 @@
 """Document upload and management routes."""
 
-import io
+import json
+import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 import db.init
 from app.models import DocumentContextUpdate
-from config import ALLOWED_FILE_TYPES, MAX_UPLOAD_SIZE
+from config import (
+    ALLOWED_FILE_TYPES,
+    DATA_DIR,
+    IMAGE_FILE_TYPES,
+    MAX_IMAGE_UPLOAD_SIZE,
+    MAX_UPLOAD_SIZE,
+)
 
 router = APIRouter(prefix="/api", tags=["documents"])
+logger = logging.getLogger(__name__)
+
+_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def _save_original_image(project_id: int, filename: str, data: bytes) -> str:
+    """Persist the original image under data/uploads; return the relative path."""
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(filename).name).strip(".")
+    if not safe_name:
+        safe_name = "image"
+    upload_dir = (Path(DATA_DIR) / "uploads" / str(int(project_id))).resolve()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    target = (upload_dir / safe_name).resolve()
+    # Containment check — the sanitized name must stay inside the upload dir
+    if upload_dir not in target.parents:
+        raise HTTPException(status_code=400, detail="Invalid image filename")
+    counter = 1
+    while target.exists():
+        target = upload_dir / f"{target.stem}_{counter}{target.suffix}"
+        counter += 1
+    target.write_bytes(data)
+    return str(target.relative_to(Path(DATA_DIR).resolve()))
 
 
 @router.post("/projects/{project_id}/documents", status_code=201)
@@ -34,37 +69,42 @@ async def upload_project_document(project_id: int, file: UploadFile = File(...))
     if len(content_bytes) > MAX_UPLOAD_SIZE:
         raise HTTPException(status_code=413, detail="File exceeds 50MB size limit")
 
-    if ext == ".txt":
-        text = content_bytes.decode("utf-8", errors="ignore")
-    elif ext == ".pdf":
-        try:
-            from pypdf import PdfReader
+    metadata: dict | None = None
+    if ext in IMAGE_FILE_TYPES:
+        if len(content_bytes) > MAX_IMAGE_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Image exceeds {MAX_IMAGE_UPLOAD_SIZE // (1024 * 1024)}MB size limit",
+            )
+        from pipeline.vision import extract_image_text
 
-            reader = PdfReader(io.BytesIO(content_bytes))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not read PDF: {e}") from e
-    elif ext == ".docx":
+        text = await extract_image_text(content_bytes, _IMAGE_MIME[ext])
         try:
-            from docx import Document
-
-            doc = Document(io.BytesIO(content_bytes))
-            text = "\n".join(para.text for para in doc.paragraphs)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not read DOCX: {e}") from e
+            stored_path = _save_original_image(project_id, filename, content_bytes)
+        except OSError:
+            logger.exception("Failed to persist original image %s", filename)
+            stored_path = None
+        metadata = {"source_kind": "image", "original_path": stored_path}
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+        from pipeline.document_parsers import DocumentParseError, parse_document
+
+        try:
+            text = parse_document(filename, ext, content_bytes)
+        except DocumentParseError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     cursor = conn.execute(
-        "INSERT INTO documents (project_id, filename, file_type, content) VALUES (?, ?, ?, ?)",
-        (project_id, filename, ext, text),
+        "INSERT INTO documents (project_id, filename, file_type, content, metadata_json) VALUES (?, ?, ?, ?, ?)",
+        (project_id, filename, ext, text, json.dumps(metadata) if metadata else None),
     )
     conn.commit()
     row = conn.execute(
         "SELECT id, filename, file_type, created_at FROM documents WHERE id = ?",
         (cursor.lastrowid,),
     ).fetchone()
-    return dict(row)
+    result = dict(row)
+    result["source_kind"] = metadata["source_kind"] if metadata else "text"
+    return result
 
 
 @router.get("/projects/{project_id}/documents")

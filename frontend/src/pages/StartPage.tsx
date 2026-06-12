@@ -166,6 +166,12 @@ export default function StartPage() {
           <p className="mt-5 text-xs text-text-muted">
             Tip: run a <span className="text-text-secondary">quality audit</span> on your test set
             (Test page) before the first experiment — a flawed test set produces flawed verdicts.
+            New here? The{' '}
+            <Link to="/guide" className="text-accent hover:underline">
+              guide
+            </Link>{' '}
+            walks through both paths step by step, with a dataset format reference and metric
+            glossary.
           </p>
         </>
       )}

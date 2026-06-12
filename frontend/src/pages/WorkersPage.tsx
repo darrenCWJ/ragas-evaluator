@@ -71,6 +71,37 @@ function taskStatus(task: WorkerTask): string {
   return '';
 }
 
+function CapacityCell({
+  label,
+  active,
+  max,
+  barClass,
+}: {
+  label: string;
+  active?: number;
+  max?: number;
+  barClass: string;
+}) {
+  // A worker that doesn't run this task type reports no max — hide the cell.
+  if (max == null) return null;
+  return (
+    <div>
+      <div className="flex justify-between mb-1">
+        <span>{label}</span>
+        <span>
+          {active ?? 0}/{max}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${barClass}`}
+          style={{ width: `${Math.min(100, ((active ?? 0) / Math.max(1, max)) * 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function WorkersPage() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
   const [configured, setConfigured] = useState(0);
@@ -132,51 +163,30 @@ export default function WorkersPage() {
     );
   }
 
-  if (configured === 0) {
-    return (
-      <div className="mx-auto max-w-3xl space-y-6">
-        <h1 className="text-lg font-semibold text-text-primary">Workers</h1>
-        <div className="rounded-xl border border-border bg-card p-8 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-elevated">
-            <svg
-              className="h-6 w-6 text-text-muted"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"
-              />
-            </svg>
-          </div>
-          <p className="text-sm text-text-secondary">
-            No workers configured. Set{' '}
-            <code className="rounded bg-elevated px-1.5 py-0.5 text-xs font-mono text-accent">
-              KG_WORKER_URLS
-            </code>{' '}
-            in your environment to enable worker offloading.
-          </p>
-        </div>
-        <UserAccountsCard />
-      </div>
-    );
-  }
+  const remoteCount = Math.max(0, configured - 1);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-text-primary">Workers</h1>
         <span className="text-xs text-text-muted">
-          {configured} configured &middot; auto-refreshing every 5s
+          main app + {remoteCount} remote &middot; auto-refreshing every 5s
         </span>
       </div>
 
       {error && (
         <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-2 text-sm text-red-400">
           {error}
+        </div>
+      )}
+
+      {remoteCount === 0 && (
+        <div className="rounded-lg border border-border bg-card px-4 py-2 text-xs text-text-muted">
+          No remote workers configured — all work runs on the main app. Set{' '}
+          <code className="rounded bg-elevated px-1.5 py-0.5 font-mono text-accent">
+            KG_WORKER_URLS
+          </code>{' '}
+          to offload heavy jobs.
         </div>
       )}
 
@@ -192,10 +202,20 @@ export default function WorkersPage() {
                   }`}
                 />
                 <span className="text-sm font-medium text-text-primary truncate max-w-[200px]">
-                  {w.url.replace(/^https?:\/\//, '')}
+                  {w.is_local ? 'Main app (local)' : w.url.replace(/^https?:\/\//, '')}
                 </span>
               </div>
-              {w.rss_mb != null && <span className="text-xs text-text-muted">{w.rss_mb} MB</span>}
+              {w.rss_mb != null && (
+                <span
+                  className="text-xs text-text-muted"
+                  title={w.peak_rss_mb != null ? `Peak: ${w.peak_rss_mb} MB` : undefined}
+                >
+                  {w.rss_mb} MB
+                  {w.peak_rss_mb != null && (
+                    <span className="text-text-muted/60"> / peak {w.peak_rss_mb}</span>
+                  )}
+                </span>
+              )}
             </div>
 
             {!w.reachable ? (
@@ -203,70 +223,30 @@ export default function WorkersPage() {
             ) : (
               <div className="space-y-2">
                 <div className="grid grid-cols-2 gap-3 text-xs text-text-muted">
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span>KG builds</span>
-                      <span>
-                        {w.active_kg_builds ?? 0}/{w.max_concurrent_kg ?? '?'}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-accent transition-all"
-                        style={{
-                          width: `${Math.min(100, ((w.active_kg_builds ?? 0) / (w.max_concurrent_kg ?? 1)) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span>Personas</span>
-                      <span>
-                        {w.active_persona_builds ?? 0}/{w.max_concurrent_personas ?? '?'}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-purple-400 transition-all"
-                        style={{
-                          width: `${Math.min(100, ((w.active_persona_builds ?? 0) / (w.max_concurrent_personas ?? 1)) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span>Experiments</span>
-                      <span>
-                        {w.active_experiments ?? 0}/{w.max_concurrent_experiments ?? '?'}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-emerald-400 transition-all"
-                        style={{
-                          width: `${Math.min(100, ((w.active_experiments ?? 0) / (w.max_concurrent_experiments ?? 1)) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between mb-1">
-                      <span>Test gen</span>
-                      <span>
-                        {w.active_testgens ?? 0}/{w.max_concurrent_testgens ?? '?'}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-elevated overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-amber-400 transition-all"
-                        style={{
-                          width: `${Math.min(100, ((w.active_testgens ?? 0) / (w.max_concurrent_testgens ?? 1)) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
+                  <CapacityCell
+                    label="KG builds"
+                    active={w.active_kg_builds}
+                    max={w.max_concurrent_kg}
+                    barClass="bg-accent"
+                  />
+                  <CapacityCell
+                    label="Personas"
+                    active={w.active_persona_builds}
+                    max={w.max_concurrent_personas}
+                    barClass="bg-purple-400"
+                  />
+                  <CapacityCell
+                    label="Experiments"
+                    active={w.active_experiments}
+                    max={w.max_concurrent_experiments}
+                    barClass="bg-emerald-400"
+                  />
+                  <CapacityCell
+                    label="Test gen"
+                    active={w.active_testgens}
+                    max={w.max_concurrent_testgens}
+                    barClass="bg-amber-400"
+                  />
                 </div>
               </div>
             )}

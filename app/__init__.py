@@ -36,6 +36,7 @@ from app.routes import (
     sweeps,
     system,
     testsets,
+    tools,
 )
 from app.services.request_context import RequestIDMiddleware
 
@@ -234,6 +235,7 @@ def create_app() -> FastAPI:
     application.include_router(mining.router)
     application.include_router(insights.router)
     application.include_router(system.router)
+    application.include_router(tools.router)
 
     # SPA catch-all
     _frontend_dist = Path("frontend/dist")

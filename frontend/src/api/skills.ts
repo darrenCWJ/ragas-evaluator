@@ -1,6 +1,6 @@
 // Skill Arena domain — skill file CRUD, cross-model trials, results, and model apply
 
-import { request } from './client';
+import { formRequest, request } from './client';
 import type {
   ApplyModelResponse,
   Skill,
@@ -23,6 +23,12 @@ export async function createSkill(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function uploadSkillZip(projectId: number, file: File): Promise<Skill> {
+  const form = new FormData();
+  form.append('file', file);
+  return formRequest<Skill>(`/api/projects/${projectId}/skills/upload-zip`, form);
 }
 
 export async function fetchSkills(projectId: number): Promise<Skill[]> {

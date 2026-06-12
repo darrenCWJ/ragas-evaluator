@@ -8,6 +8,7 @@ directives.
 
 import json
 import logging
+import re
 
 from config import DEFAULT_EVAL_MODEL
 from pipeline.llm import chat_completion
@@ -17,6 +18,42 @@ logger = logging.getLogger(__name__)
 
 # Directive kinds the extractor classifies into.
 DIRECTIVE_KINDS = {"behavior", "format", "prohibition", "tone"}
+
+# Relative file references inside a skill: markdown links and bare mentions of
+# files in conventional subdirectories (references/, scripts/, assets/...).
+_MD_LINK_RE = re.compile(r"\[[^\]\n]{0,200}\]\(([^)\s]{1,300})\)")
+_BARE_REF_RE = re.compile(
+    r"\b((?:references|reference|scripts|assets|examples|docs)/[\w./-]{1,200})", re.IGNORECASE
+)
+
+# Phrases that mark a skill as needing user interaction mid-flow.
+_INTERACTION_RE = re.compile(
+    r"ask(?:s|ing)? the user|prompt(?:s|ing)? the user|ask(?: a)? clarifying"
+    r"|AskUserQuestion|wait for (?:the )?user|user(?:'s)? (?:confirmation|approval|input)",
+    re.IGNORECASE,
+)
+
+
+def referenced_paths(content: str) -> list[str]:
+    """Relative file paths the skill references (progressive disclosure)."""
+    paths: list[str] = []
+    seen: set[str] = set()
+    for match in list(_MD_LINK_RE.finditer(content)) + list(_BARE_REF_RE.finditer(content)):
+        # Trailing sentence punctuation is part of the prose, not the path.
+        raw = match.group(1).strip().lstrip("./").rstrip(".,;:)")
+        if not raw or raw in seen:
+            continue
+        # Skip URLs, anchors, and absolute paths
+        if "://" in raw or raw.startswith(("#", "/", "mailto:")):
+            continue
+        seen.add(raw)
+        paths.append(raw)
+    return paths
+
+
+def detect_interaction(content: str) -> bool:
+    """True when the skill instructs the assistant to ask the user questions."""
+    return bool(_INTERACTION_RE.search(content))
 
 _EXTRACTION_PROMPT = """You are analyzing a "skill file" — an instruction document given to an AI assistant as system context. Extract every TESTABLE directive: a discrete rule whose compliance can be judged by reading a single response.
 
@@ -130,4 +167,6 @@ async def parse_skill(content: str, model: str | None = None) -> dict:
         "name": _frontmatter_name(content) or str(data.get("name", "")).strip() or "Unnamed skill",
         "summary": str(data.get("summary", "")).strip(),
         "directives": directives,
+        "referenced_paths": referenced_paths(content),
+        "interaction_required": detect_interaction(content),
     }

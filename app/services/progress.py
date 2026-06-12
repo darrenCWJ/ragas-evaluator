@@ -93,6 +93,16 @@ class ProgressStore:
         with self._lock:
             return experiment_id in self._cancel_events or experiment_id in self._tasks
 
+    def active_runs(self) -> dict[int, dict]:
+        """Snapshot of locally-running experiments (id → progress copy).
+
+        Only runs with a registered task or cancel event count — delegated
+        experiments track progress on their worker, not here.
+        """
+        with self._lock:
+            ids = set(self._tasks) | set(self._cancel_events)
+            return {eid: copy.deepcopy(self._progress.get(eid) or {}) for eid in ids}
+
     # --- worker delegation ------------------------------------------------------
 
     def set_worker(self, experiment_id: int, worker_url: str) -> None:

@@ -47,8 +47,12 @@ export default function TrialCreate({
   const [testSetId, setTestSetId] = useState<number | ''>('');
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [includeBaseline, setIncludeBaseline] = useState(true);
+  const [agenticMode, setAgenticMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const selectedSkill = skills.find((s) => s.id === skillId);
+  const selectedSkillHasFiles = (selectedSkill?.files?.length ?? 0) > 0;
 
   const eligibleBots = useMemo(
     () => botConfigs.filter((b) => !INELIGIBLE_CONNECTORS.has(b.connector_type)),
@@ -99,6 +103,7 @@ export default function TrialCreate({
         test_set_id: testSetId,
         models: buildModelSpecs(selectedKeys, botConfigs),
         include_baseline: includeBaseline,
+        mode: agenticMode ? 'agentic' : 'inline',
       });
       setName('');
       setSelectedKeys([]);
@@ -184,15 +189,34 @@ export default function TrialCreate({
       </FormField>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
-          <input
-            type="checkbox"
-            className="accent-accent"
-            checked={includeBaseline}
-            onChange={(e) => setIncludeBaseline(e.target.checked)}
-          />
-          Include baseline (run each model without the skill to measure lift)
-        </label>
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              className="accent-accent"
+              checked={includeBaseline}
+              onChange={(e) => setIncludeBaseline(e.target.checked)}
+            />
+            Include baseline (run each model without the skill to measure lift)
+          </label>
+          <label
+            className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary"
+            title="Agentic: the model gets a read_file tool for the skill's reference files (progressive disclosure) and an ask_user tool answered by a simulated user. Bot connectors always run inline."
+          >
+            <input
+              type="checkbox"
+              className="accent-accent"
+              checked={agenticMode}
+              onChange={(e) => setAgenticMode(e.target.checked)}
+            />
+            Agentic mode
+            {selectedSkillHasFiles && (
+              <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-2xs text-accent">
+                {selectedSkill?.files?.length} reference files
+              </span>
+            )}
+          </label>
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-text-muted">
             {estimatedCells !== null

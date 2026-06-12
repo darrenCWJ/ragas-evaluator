@@ -26,7 +26,6 @@ from config import (
     KG_SUBPROCESS_TIMEOUT,
     KG_THREAD_MODE,
     KG_WORKER_URLS,
-    MAX_CHUNKS_FOR_GENERATION,
     MAX_UPLOAD_QA_ROWS,
     MAX_UPLOAD_SIZE,
 )
@@ -141,76 +140,11 @@ async def create_test_set(project_id: int, req: TestSetCreate):
                 detail="A test set is already being generated for this project",
             )
 
-    # Determine how to source the chunk texts.
-    #
-    # Option A — use_kg_as_source=True:
-    #   Load node page_content directly from the stored KG.  No chunk config
-    #   required.  Always reuses the stored KG (no hash check, no rebuild).
-    #
-    # Option B — Graph RAG Documents only:
-    #   No chunks needed; the Graph RAG path loads its own document KG.
-    #
-    # Option C — normal (default):
-    #   Load chunks from the specified chunk_config_id.
+    # Determine how to source the chunk texts (KG-as-source, Graph RAG
+    # documents only, or a chunk config) — shared with the worker service.
+    from app.services.testset_chunks import load_generation_chunks
 
-    _GRAPH_RAG_ONLY_CATS = {"bridge", "comparative", "community"}
-
-    chunks: list[str] = []
-
-    if req.use_kg_as_source:
-        import json as _json
-
-        from evaluation.metrics.testgen import load_full_kg_json as _load_full_kg_json
-
-        _kg_json = _load_full_kg_json(project_id, "chunks")
-        if _kg_json is None:
-            raise HTTPException(
-                status_code=422,
-                detail="No complete knowledge graph found for this project. Build a knowledge graph first.",
-            )
-        _nodes = _json.loads(_kg_json).get("nodes", [])
-        chunks = [
-            n.get("properties", {}).get("page_content", "")
-            for n in _nodes
-            if n.get("properties", {}).get("page_content", "").strip()
-        ]
-        if not chunks:
-            raise HTTPException(
-                status_code=422,
-                detail="Knowledge graph exists but contains no node content.",
-            )
-    elif not (
-        req.graph_rag_kg_source == "documents"
-        and req.question_categories
-        and set(req.question_categories.keys()) <= _GRAPH_RAG_ONLY_CATS
-    ):
-        if req.chunk_config_id is None:
-            raise HTTPException(status_code=422, detail="chunk_config_id required unless using only Graph RAG (Documents) categories")
-
-        cc = conn.execute(
-            "SELECT id FROM chunk_configs WHERE id = ? AND project_id = ?",
-            (req.chunk_config_id, project_id),
-        ).fetchone()
-        if cc is None:
-            raise HTTPException(status_code=404, detail="Chunk config not found")
-
-        chunk_rows = conn.execute(
-            "SELECT content FROM chunks WHERE chunk_config_id = ? ORDER BY id",
-            (req.chunk_config_id,),
-        ).fetchall()
-        if not chunk_rows:
-            raise HTTPException(
-                status_code=422,
-                detail="No chunks found for this config. Generate chunks first.",
-            )
-
-        if MAX_CHUNKS_FOR_GENERATION > 0 and len(chunk_rows) > MAX_CHUNKS_FOR_GENERATION:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Too many chunks ({len(chunk_rows)}). Maximum {MAX_CHUNKS_FOR_GENERATION} supported for test generation.",
-            )
-
-        chunks = [r["content"] for r in chunk_rows]
+    chunks = load_generation_chunks(conn, project_id, req)
 
     total_chunks = len(chunks)
 
@@ -529,6 +463,7 @@ async def upload_test_set(
     reference_sql_column: str | None = Form(None),
     schema_contexts_column: str | None = Form(None),
     reference_data_column: str | None = Form(None),
+    reference_tool_calls_column: str | None = Form(None),
     name: str | None = Form(None),
 ):
     """Step 2: Upload the same file again with chosen column mappings to create the test set.
@@ -597,6 +532,7 @@ async def upload_test_set(
         (reference_sql_column, "reference_sql_column"),
         (schema_contexts_column, "schema_contexts_column"),
         (reference_data_column, "reference_data_column"),
+        (reference_tool_calls_column, "reference_tool_calls_column"),
     ]:
         if col_name and col_name not in columns:
             raise HTTPException(
@@ -631,6 +567,7 @@ async def upload_test_set(
             "reference_sql": reference_sql_column,
             "schema_contexts": schema_contexts_column,
             "reference_data": reference_data_column,
+            "reference_tool_calls": reference_tool_calls_column,
         },
     }
     cursor = conn.execute(
@@ -648,6 +585,8 @@ async def upload_test_set(
         _domain_col_map["schema_contexts"] = schema_contexts_column
     if reference_data_column:
         _domain_col_map["reference_data"] = reference_data_column
+    if reference_tool_calls_column:
+        _domain_col_map["reference_tool_calls"] = reference_tool_calls_column
 
     # Validate domain-specific column values upfront
     for i, row in enumerate(rows):
@@ -678,6 +617,19 @@ async def upload_test_set(
                             status_code=422,
                             detail=f"Row {i + 1}, column '{col_name}': invalid JSON — {e}",
                         ) from e
+            elif meta_key == "reference_tool_calls":
+                try:
+                    parsed = json.loads(str(val))
+                    if not isinstance(parsed, list):
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"Row {i + 1}, column '{col_name}': must be a JSON array of tool calls, got {type(parsed).__name__}.",
+                        )
+                except json.JSONDecodeError as e:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Row {i + 1}, column '{col_name}': invalid JSON — {e}",
+                    ) from e
 
     # Insert questions
     inserted = []
@@ -705,6 +657,12 @@ async def upload_test_set(
                     metadata[meta_key] = parsed if isinstance(parsed, list) else [str(parsed)]
                 except (json.JSONDecodeError, TypeError):
                     metadata[meta_key] = [str(val).strip()]
+            elif meta_key == "reference_tool_calls":
+                try:
+                    parsed = json.loads(str(val))
+                    metadata[meta_key] = parsed if isinstance(parsed, list) else []
+                except (json.JSONDecodeError, TypeError):
+                    continue
             else:
                 metadata[meta_key] = str(val).strip()
 
@@ -1045,6 +1003,36 @@ async def list_test_sets(project_id: int):
         result.append(d)
 
     return {"test_sets": result}
+
+
+@router.get("/projects/{project_id}/test-sets/{test_set_id}/capabilities")
+async def test_set_capabilities(
+    project_id: int,
+    test_set_id: int,
+    runtime_contexts: bool = False,
+):
+    """Dataset capabilities + per-metric availability for this test set.
+
+    ``runtime_contexts=true`` marks the contexts requirement as satisfied by
+    the pipeline (internal RAG, or a bot connector that returns contexts).
+    """
+    from evaluation.capabilities import dataset_capabilities, metric_availability
+
+    conn = db.init.get_db()
+    row = conn.execute(
+        "SELECT id FROM test_sets WHERE id = ? AND project_id = ?",
+        (test_set_id, project_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Test set not found")
+
+    caps = dataset_capabilities(conn, test_set_id)
+    return {
+        "test_set_id": test_set_id,
+        "capabilities": sorted(caps),
+        "runtime_contexts": runtime_contexts,
+        "metrics": metric_availability(caps, runtime_contexts=runtime_contexts),
+    }
 
 
 @router.get("/projects/{project_id}/test-sets/{test_set_id}/questions")

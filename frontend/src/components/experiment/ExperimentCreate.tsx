@@ -4,14 +4,26 @@ import {
   fetchRagConfigsExpanded,
   fetchRagConfigs,
   fetchBotConfigs,
+  fetchTestSetCapabilities,
   createExperiment,
 } from '../../lib/api';
-import type { TestSet, RagConfigExpanded, BotConfig } from '../../lib/api';
+import type { TestSet, RagConfigExpanded, BotConfig, TestSetCapabilities } from '../../lib/api';
+import AgentToolsPanel from './AgentToolsPanel';
 
 interface Props {
   projectId: number;
   onCreated: () => void;
 }
+
+const AGENT_CAPABLE_CONNECTORS = new Set(['openai', 'claude', 'gemini']);
+
+const CAPABILITY_CHIPS: { key: string; label: string }[] = [
+  { key: 'contexts', label: 'contexts' },
+  { key: 'category', label: 'categories' },
+  { key: 'turns', label: 'multi-turn' },
+  { key: 'ref_sql', label: 'reference SQL' },
+  { key: 'ref_data', label: 'reference data' },
+];
 
 export default function ExperimentCreate({ projectId, onCreated }: Props) {
   const [testSets, setTestSets] = useState<TestSet[]>([]);
@@ -27,6 +39,8 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  const [capabilities, setCapabilities] = useState<TestSetCapabilities | null>(null);
+  const [selectedToolIds, setSelectedToolIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     setLoading(true);
@@ -52,6 +66,17 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // Capability chips for the selected test set (RAG mode always supplies contexts)
+  useEffect(() => {
+    if (testSetId === '') {
+      setCapabilities(null);
+      return;
+    }
+    fetchTestSetCapabilities(projectId, testSetId, mode === 'rag')
+      .then(setCapabilities)
+      .catch(() => setCapabilities(null));
+  }, [projectId, testSetId, mode]);
+
   const hasCsvBotConfigs = botConfigs.some((bc) => bc.connector_type === 'csv');
   const selectedBot = botConfigs.find((bc) => bc.id === botConfigId);
   const isCsvBot = mode === 'bot' && selectedBot?.connector_type === 'csv';
@@ -69,16 +94,21 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
     setSubmitting(true);
     setError(null);
     try {
+      const agentCapable =
+        mode === 'bot' && selectedBot && AGENT_CAPABLE_CONNECTORS.has(selectedBot.connector_type);
       await createExperiment(projectId, {
         name: name.trim(),
         test_set_id: isCsvBot ? undefined : (testSetId as number),
         rag_config_id: mode === 'rag' ? (ragConfigId as number) : undefined,
         bot_config_id: mode === 'bot' ? (botConfigId as number) : undefined,
+        tool_ids:
+          agentCapable && selectedToolIds.size > 0 ? Array.from(selectedToolIds) : undefined,
       });
       setName('');
       setTestSetId('');
       setRagConfigId('');
       setBotConfigId('');
+      setSelectedToolIds(new Set());
       setTouched(false);
       onCreated();
     } catch (err) {
@@ -200,6 +230,17 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
             </div>
           )}
 
+          {/* Agent tools — only LLM connectors can run the tool-calling loop */}
+          {mode === 'bot' &&
+            selectedBot &&
+            AGENT_CAPABLE_CONNECTORS.has(selectedBot.connector_type) && (
+              <AgentToolsPanel
+                projectId={projectId}
+                selectedToolIds={selectedToolIds}
+                onChange={setSelectedToolIds}
+              />
+            )}
+
           {/* Test Set — hidden for CSV bot connectors (auto-created from CSV data) */}
           {!isCsvBot && (
             <div>
@@ -224,6 +265,32 @@ export default function ExperimentCreate({ projectId, onCreated }: Props) {
               </select>
               {touched && !testSetValid && (
                 <p className="mt-1 text-xs text-red-400">Test set is required</p>
+              )}
+              {capabilities && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {CAPABILITY_CHIPS.map(({ key, label }) => {
+                    const has =
+                      capabilities.capabilities.includes(key) ||
+                      (key === 'contexts' && capabilities.runtime_contexts);
+                    return (
+                      <span
+                        key={key}
+                        title={
+                          has
+                            ? `This test set supports metrics requiring ${label}`
+                            : `Metrics requiring ${label} will be unavailable`
+                        }
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs ${
+                          has
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                            : 'border-border/60 bg-card/50 text-text-muted/60'
+                        }`}
+                      >
+                        {has ? '✓' : '✗'} {label}
+                      </span>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}

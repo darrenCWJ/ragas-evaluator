@@ -30,6 +30,7 @@ from app.services.progress import experiment_runs
 from config import DEFAULT_EVAL_MODEL, DEFAULT_EXPERIMENT_METRICS
 from evaluation.scoring import ALL_METRICS
 from evaluation.source_verification import verify_all_citations
+from pipeline.tools import AGENT_CAPABLE_CONNECTORS
 
 logger = logging.getLogger(__name__)
 
@@ -189,16 +190,38 @@ async def create_experiment(project_id: int, req: ExperimentCreate):
                     detail="Test set not found in this project",
                 )
 
+        # Agent tools — only LLM connectors can run the tool-calling loop
+        tools_json = None
+        if req.tool_ids:
+            if bot_config["connector_type"] not in AGENT_CAPABLE_CONNECTORS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Agent tools require an LLM connector ({', '.join(sorted(AGENT_CAPABLE_CONNECTORS))}); "
+                        f"'{bot_config['connector_type']}' connectors cannot call tools."
+                    ),
+                )
+            placeholders = ",".join("?" * len(req.tool_ids))
+            valid_tools = conn.execute(
+                f"SELECT id FROM tool_definitions WHERE id IN ({placeholders}) AND project_id = ?",
+                (*req.tool_ids, project_id),
+            ).fetchall()
+            missing = set(req.tool_ids) - {r["id"] for r in valid_tools}
+            if missing:
+                raise HTTPException(status_code=422, detail=f"Tools not found in this project: {sorted(missing)}")
+            tools_json = json.dumps(req.tool_ids)
+
         cursor = conn.execute(
             """INSERT INTO experiments
-               (project_id, test_set_id, name, model, bot_config_id, status)
-               VALUES (?, ?, ?, ?, ?, 'pending')""",
+               (project_id, test_set_id, name, model, bot_config_id, tools_json, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
             (
                 project_id,
                 test_set_id,
                 req.name,
                 f"{bot_config['connector_type']}:{bot_config['name']}",
                 req.bot_config_id,
+                tools_json,
             ),
         )
         conn.commit()
@@ -761,10 +784,47 @@ async def run_experiment(
     custom_names = {r["name"] for r in all_custom_rows}
     valid_names = set(ALL_METRICS) | custom_names
 
+    explicit_request = bool(req.metrics)
     requested_metrics = req.metrics if req.metrics else DEFAULT_EXPERIMENT_METRICS
     selected_metrics = [m for m in requested_metrics if m in valid_names]
     if not selected_metrics:
         raise HTTPException(status_code=400, detail="No valid metrics selected")
+
+    # Dataset/metric compatibility — the UI grays these out, but the API must
+    # also guard. Explicitly requested metrics are rejected with the missing
+    # capability; the default fallback set is silently filtered instead.
+    from evaluation.capabilities import dataset_capabilities, metric_availability
+
+    if experiment["bot_config_id"] is None:
+        runtime_contexts = True  # internal RAG always retrieves contexts
+    else:
+        bc = conn.execute(
+            "SELECT connector_type, config_json FROM bot_configs WHERE id = ?",
+            (experiment["bot_config_id"],),
+        ).fetchone()
+        bc_config = json.loads(bc["config_json"]) if bc and bc["config_json"] else {}
+        runtime_contexts = bool(bc) and bot_config_returns_contexts(bc["connector_type"], bc_config)
+
+    caps = dataset_capabilities(conn, experiment["test_set_id"])
+    availability = metric_availability(caps, runtime_contexts=runtime_contexts)
+    unavailable = {
+        m: availability[m]["missing"]
+        for m in selected_metrics
+        if m in availability and not availability[m]["available"]
+    }
+    if unavailable and explicit_request:
+        details = "; ".join(f"{m} requires {', '.join(missing)}" for m, missing in unavailable.items())
+        raise HTTPException(
+            status_code=422,
+            detail=f"Metrics incompatible with this test set: {details}",
+        )
+    if unavailable:
+        selected_metrics = [m for m in selected_metrics if m not in unavailable]
+        if not selected_metrics:
+            raise HTTPException(
+                status_code=422,
+                detail="No default metrics are compatible with this test set — select metrics explicitly",
+            )
 
     # Atomically claim the experiment — set status to 'running' now so any
     # concurrent page load or refresh immediately sees the correct state.

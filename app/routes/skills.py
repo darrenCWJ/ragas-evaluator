@@ -7,10 +7,13 @@ applied as the project's preferred model.
 """
 
 import asyncio
+import io
 import json
 import logging
+import zipfile
+from pathlib import PurePosixPath
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 import db.init
 from app.models import ApplyModelRequest, SkillCreate, SkillTrialCreate
@@ -26,14 +29,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["skills"])
 
+# Zip ingestion limits
+_MAX_ZIP_SIZE = 10 * 1024 * 1024
+_MAX_SKILL_FILES = 100
+_MAX_TOTAL_TEXT = 5 * 1024 * 1024
+_MAX_SINGLE_FILE = 1 * 1024 * 1024
+
 
 def _require_project(conn, project_id: int) -> None:
     if conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
-def _format_skill(row, include_content: bool = False) -> dict:
+def _skill_file_paths(conn, skill_id: int) -> list[str]:
+    return [
+        r["path"]
+        for r in conn.execute(
+            "SELECT path FROM skill_files WHERE skill_id = ? ORDER BY path", (skill_id,)
+        ).fetchall()
+    ]
+
+
+def _format_skill(row, include_content: bool = False, conn=None) -> dict:
     parsed = json.loads(row["parsed_directives_json"]) if row["parsed_directives_json"] else None
+    files = _skill_file_paths(conn, row["id"]) if conn is not None else []
+    referenced = (parsed or {}).get("referenced_paths", [])
+    file_set = set(files)
     out = {
         "id": row["id"],
         "project_id": row["project_id"],
@@ -42,11 +63,32 @@ def _format_skill(row, include_content: bool = False) -> dict:
         "summary": (parsed or {}).get("summary", ""),
         "directive_count": len((parsed or {}).get("directives", [])),
         "directives": (parsed or {}).get("directives", []),
+        "interaction_required": bool((parsed or {}).get("interaction_required", False)),
+        "referenced_paths": referenced,
+        "files": files,
+        "missing_references": [
+            p for p in referenced
+            if p not in file_set and not any(f.endswith("/" + p) for f in file_set)
+        ] if files or referenced else [],
         "created_at": row["created_at"],
     }
     if include_content:
         out["content"] = row["content"]
     return out
+
+
+def _insert_skill(conn, project_id: int, name: str, content: str, parsed: dict) -> int:
+    prev = conn.execute(
+        "SELECT MAX(version) AS v FROM skills WHERE project_id = ? AND name = ?",
+        (project_id, name),
+    ).fetchone()
+    version = (prev["v"] or 0) + 1
+    cur = conn.execute(
+        "INSERT INTO skills (project_id, name, version, content, parsed_directives_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (project_id, name, version, content, json.dumps(parsed)),
+    )
+    return cur.lastrowid
 
 
 # --- Skill CRUD -------------------------------------------------------------
@@ -69,20 +111,127 @@ async def upload_skill(project_id: int, req: SkillCreate):
         ) from exc
 
     name = (req.name or parsed["name"]).strip()
-    prev = conn.execute(
-        "SELECT MAX(version) AS v FROM skills WHERE project_id = ? AND name = ?",
-        (project_id, name),
-    ).fetchone()
-    version = (prev["v"] or 0) + 1
-
-    cur = conn.execute(
-        "INSERT INTO skills (project_id, name, version, content, parsed_directives_json) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (project_id, name, version, req.content, json.dumps(parsed)),
-    )
+    skill_id = _insert_skill(conn, project_id, name, req.content, parsed)
     conn.commit()
-    row = conn.execute("SELECT * FROM skills WHERE id = ?", (cur.lastrowid,)).fetchone()
-    return _format_skill(row, include_content=True)
+    row = conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
+    return _format_skill(row, include_content=True, conn=conn)
+
+
+def _extract_skill_zip(data: bytes) -> tuple[str, dict[str, str], list[str]]:
+    """Extract a zipped skill directory.
+
+    Returns (skill_md_content, {relative_path: content}, skipped_files).
+    SKILL.md may live at the zip root or inside a single top-level directory —
+    paths are stored relative to wherever it was found.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=422, detail="Not a valid zip archive") from exc
+
+    entries = [info for info in zf.infolist() if not info.is_dir()]
+    if len(entries) > _MAX_SKILL_FILES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many files in archive ({len(entries)}). Maximum {_MAX_SKILL_FILES}.",
+        )
+
+    # Locate SKILL.md (root preferred, else shallowest match)
+    skill_md_entry = None
+    for info in sorted(entries, key=lambda i: i.filename.count("/")):
+        if PurePosixPath(info.filename).name.lower() == "skill.md":
+            skill_md_entry = info
+            break
+    if skill_md_entry is None:
+        raise HTTPException(status_code=422, detail="Archive does not contain a SKILL.md file")
+
+    base = str(PurePosixPath(skill_md_entry.filename).parent)
+    base_prefix = "" if base == "." else base + "/"
+
+    skill_md = ""
+    files: dict[str, str] = {}
+    skipped: list[str] = []
+    total_text = 0
+    for info in entries:
+        raw_path = info.filename
+        # Path traversal guard
+        if raw_path.startswith("/") or ".." in PurePosixPath(raw_path).parts:
+            raise HTTPException(status_code=422, detail=f"Unsafe path in archive: {raw_path}")
+        if base_prefix and not raw_path.startswith(base_prefix):
+            skipped.append(raw_path)
+            continue
+        rel = raw_path[len(base_prefix):]
+        if not rel or rel.startswith("__MACOSX") or PurePosixPath(rel).name.startswith("."):
+            continue
+        if info.file_size > _MAX_SINGLE_FILE:
+            skipped.append(rel)
+            continue
+        blob = zf.read(info)
+        try:
+            text = blob.decode("utf-8")
+        except UnicodeDecodeError:
+            skipped.append(rel)  # binary file — skills store text only
+            continue
+        total_text += len(text)
+        if total_text > _MAX_TOTAL_TEXT:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Archive text content exceeds {_MAX_TOTAL_TEXT // (1024 * 1024)}MB limit",
+            )
+        if info is skill_md_entry or rel.lower() == "skill.md":
+            skill_md = text
+        else:
+            files[rel] = text
+
+    if not skill_md.strip():
+        raise HTTPException(status_code=422, detail="SKILL.md is empty")
+    return skill_md, files, skipped
+
+
+@router.post("/projects/{project_id}/skills/upload-zip", status_code=201)
+async def upload_skill_zip(
+    project_id: int,
+    file: UploadFile = File(...),
+    name: str | None = None,
+):
+    """Upload a multi-file skill as a zip (SKILL.md + references/scripts).
+
+    Reference files are stored alongside the skill; agentic trials expose them
+    to the model through a read_file tool (progressive disclosure).
+    """
+    conn = db.init.get_db()
+    _require_project(conn, project_id)
+
+    if not (file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Expected a .zip archive")
+    data = await file.read()
+    if len(data) > _MAX_ZIP_SIZE:
+        raise HTTPException(status_code=413, detail="Archive exceeds 10MB limit")
+
+    skill_md, files, skipped = _extract_skill_zip(data)
+
+    try:
+        parsed = await parse_skill(skill_md)
+    except Exception as exc:
+        logger.warning("Skill zip parse failed for project %d: %s", int(project_id), clean(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not extract testable directives from SKILL.md: {exc}",
+        ) from exc
+
+    skill_name = (name or parsed["name"]).strip()
+    skill_id = _insert_skill(conn, project_id, skill_name, skill_md, parsed)
+    for path, content in sorted(files.items()):
+        conn.execute(
+            "INSERT INTO skill_files (skill_id, path, content) VALUES (?, ?, ?)",
+            (skill_id, path, content),
+        )
+    conn.commit()
+
+    row = conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
+    out = _format_skill(row, include_content=True, conn=conn)
+    out["skipped_files"] = skipped
+    return out
 
 
 @router.get("/projects/{project_id}/skills")
@@ -93,7 +242,7 @@ async def list_skills(project_id: int, limit: int = Query(default=200, ge=1, le=
         "SELECT * FROM skills WHERE project_id = ? ORDER BY name, version DESC LIMIT ?",
         (project_id, limit),
     ).fetchall()
-    return [_format_skill(r) for r in rows]
+    return [_format_skill(r, conn=conn) for r in rows]
 
 
 @router.get("/projects/{project_id}/skills/{skill_id}")
@@ -104,7 +253,7 @@ async def get_skill(project_id: int, skill_id: int):
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Skill not found")
-    return _format_skill(row, include_content=True)
+    return _format_skill(row, include_content=True, conn=conn)
 
 
 @router.delete("/projects/{project_id}/skills/{skill_id}")
@@ -132,6 +281,7 @@ def _format_trial(row) -> dict:
         "test_set_id": row["test_set_id"],
         "models": json.loads(row["models_json"]),
         "include_baseline": bool(row["include_baseline"]),
+        "mode": row["mode"] or "inline",
         "status": row["status"],
         "error_message": row["error_message"],
         "created_at": row["created_at"],
@@ -176,11 +326,12 @@ async def create_skill_trial(project_id: int, req: SkillTrialCreate):
                 )
 
     cur = conn.execute(
-        "INSERT INTO skill_trials (project_id, skill_id, name, test_set_id, models_json, include_baseline) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO skill_trials (project_id, skill_id, name, test_set_id, models_json, include_baseline, mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             project_id, req.skill_id, req.name, req.test_set_id,
             json.dumps(req.models), 1 if req.include_baseline else 0,
+            req.mode,
         ),
     )
     conn.commit()
@@ -220,7 +371,7 @@ async def get_skill_trial(project_id: int, trial_id: int):
     out["matrix"] = aggregate_trial_matrix(conn, trial_id)
     if row["skill_id"]:
         skill = conn.execute("SELECT * FROM skills WHERE id = ?", (row["skill_id"],)).fetchone()
-        out["skill"] = _format_skill(skill) if skill else None
+        out["skill"] = _format_skill(skill, conn=conn) if skill else None
     return out
 
 

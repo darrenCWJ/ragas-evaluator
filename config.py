@@ -26,6 +26,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")  # Neon/PostgreSQL connection 
 DATABASE_PATH = _resolve_path("DATABASE_PATH", "data/ragas.db")
 CHROMADB_PATH = str(_resolve_path("CHROMADB_PATH", "data/chromadb"))
 BM25_PATH = str(_resolve_path("BM25_PATH", "data/bm25"))
+DATA_DIR = _resolve_path("DATA_DIR", "data")
 
 # ---------------------------------------------------------------------------
 # Default LLM models (used by evaluation, test generation, source verification)
@@ -76,7 +77,16 @@ MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))
 MAX_BASELINE_CSV_SIZE = int(os.environ.get("MAX_BASELINE_CSV_SIZE", str(10 * 1024 * 1024)))
 MAX_BASELINE_ROWS = int(os.environ.get("MAX_BASELINE_ROWS", "1000"))
 MAX_UPLOAD_QA_ROWS = int(os.environ.get("MAX_UPLOAD_QA_ROWS", "2000"))
-ALLOWED_FILE_TYPES = {".txt", ".pdf", ".docx"}
+TEXT_FILE_TYPES = {
+    ".txt", ".pdf", ".docx", ".md", ".markdown", ".html", ".htm",
+    ".pptx", ".xlsx", ".csv", ".tsv", ".json", ".yaml", ".yml",
+}
+IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_FILE_TYPES = TEXT_FILE_TYPES | IMAGE_FILE_TYPES
+MAX_IMAGE_UPLOAD_SIZE = int(os.environ.get("MAX_IMAGE_UPLOAD_SIZE", str(10 * 1024 * 1024)))
+# Vision model for image-document extraction. Empty = auto-pick from available
+# provider keys (OpenAI → Anthropic → Gemini).
+VISION_MODEL = os.environ.get("VISION_MODEL", "")
 
 # ---------------------------------------------------------------------------
 # LLM temperature defaults (not env-configurable — these are tuned values)
@@ -90,6 +100,8 @@ TESTGEN_QUESTION_TEMPERATURE: float = 0.8
 # ---------------------------------------------------------------------------
 MAX_CONCURRENT_KG_BUILDS = int(os.environ.get("MAX_CONCURRENT_KG_BUILDS", "1"))
 MAX_CONCURRENT_PERSONA_BUILDS = int(os.environ.get("MAX_CONCURRENT_PERSONA_BUILDS", "2"))
+MAX_CONCURRENT_EXPERIMENTS = int(os.environ.get("MAX_CONCURRENT_EXPERIMENTS", "2"))
+MAX_CONCURRENT_TESTGENS = int(os.environ.get("MAX_CONCURRENT_TESTGENS", "1"))
 
 # ---------------------------------------------------------------------------
 # Batch sizes

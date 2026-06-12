@@ -9,12 +9,14 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
-const STORAGE_KEY = 'ragas_selected_project';
+const STORAGE_KEY = 'tribunal_selected_project';
+// Pre-rename key — migrated on first read, removed once the new key is written.
+const LEGACY_STORAGE_KEY = 'ragas_selected_project';
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [project, setProjectState] = useState<Project | null>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
       return stored ? (JSON.parse(stored) as Project) : null;
     } catch {
       return null;
@@ -24,8 +26,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (project) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } else {
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     }
   }, [project]);
 
