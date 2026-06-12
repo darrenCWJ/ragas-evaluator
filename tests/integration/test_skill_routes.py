@@ -122,6 +122,74 @@ class TestSkillCrud:
         assert r.status_code == 422
 
 
+class TestDryRun:
+    STAGED_CONTENT = (
+        "# Builder skill\n\n"
+        "**Phase 3 — Bronze:** Load `tiers/bronze.md`\n\n"
+        "**Phase 4 — Silver:** Load `tiers/silver.md`\n"
+    )
+
+    def _upload_skill(self, client, project) -> int:
+        with patch("app.routes.skills.parse_skill", new=AsyncMock(return_value=PARSED)):
+            return client.post(
+                f"/api/projects/{project}/skills",
+                json={"content": self.STAGED_CONTENT},
+            ).json()["id"]
+
+    def test_dry_run_returns_process_and_stage_scores(self, client, project):
+        skill_id = self._upload_skill(client, project)
+
+        step = {
+            "tool": "read_file",
+            "arguments": {"path": "tiers/bronze.md"},
+            "result": "bronze tier contents",
+            "latency_ms": 5,
+            "error": None,
+            "turn": 1,
+        }
+        fake_agent = {
+            "answer": "Done — bronze tier designed.",
+            "steps": [step],
+            "turns": [{
+                "thought": "Loading the bronze tier first.",
+                "tool_calls": ["read_file"],
+                "latency_ms": 100,
+                "steps": [step],
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            "stop_reason": "answer",
+        }
+        with patch("pipeline.agent_loop.run_agent", new=AsyncMock(return_value=fake_agent)):
+            r = client.post(
+                f"/api/projects/{project}/skills/{skill_id}/dry-run",
+                json={"prompt": "Build a payment recon app", "model": "gpt-4o-mini"},
+            )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["answer"] == "Done — bronze tier designed."
+        assert data["turns"][0]["thought"] == "Loading the bronze tier first."
+        assert data["turns"][0]["steps"][0]["tool"] == "read_file"
+        assert data["files_read"] == ["tiers/bronze.md"]
+        # 1 of 2 stage files read, in order
+        assert data["stage_scores"]["stage_coverage"] == 0.5
+        assert data["stage_scores"]["stage_order"] == 1.0
+
+    def test_dry_run_unknown_skill_404(self, client, project):
+        r = client.post(
+            f"/api/projects/{project}/skills/99999/dry-run",
+            json={"prompt": "anything at all", "model": "gpt-4o-mini"},
+        )
+        assert r.status_code == 404
+
+    def test_dry_run_validates_prompt(self, client, project):
+        skill_id = self._upload_skill(client, project)
+        r = client.post(
+            f"/api/projects/{project}/skills/{skill_id}/dry-run",
+            json={"prompt": "x", "model": "gpt-4o-mini"},
+        )
+        assert r.status_code == 422
+
+
 class TestTrialEndToEnd:
     def test_full_trial_matrix(self, client, project):
         test_set_id = _make_test_set(project)

@@ -4,6 +4,7 @@ import { formRequest, request } from './client';
 import type {
   ApplyModelResponse,
   Skill,
+  SkillDryRunResult,
   SkillTrial,
   SkillTrialCreatePayload,
   SkillTrialCreateResponse,
@@ -43,6 +44,19 @@ export async function deleteSkill(projectId: number, skillId: number): Promise<v
   await request<{ detail: string }>(`/api/projects/${projectId}/skills/${skillId}`, {
     method: 'DELETE',
   });
+}
+
+// --- Playground (dry run) ---
+
+export async function dryRunSkill(
+  projectId: number,
+  skillId: number,
+  payload: { prompt: string; model: string; user_inputs?: string[] },
+): Promise<SkillDryRunResult> {
+  return request<SkillDryRunResult>(
+    `/api/projects/${projectId}/skills/${skillId}/dry-run`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
 }
 
 // --- Trial lifecycle ---

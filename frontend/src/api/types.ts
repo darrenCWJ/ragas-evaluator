@@ -1177,6 +1177,36 @@ export interface Skill {
   content?: string;
 }
 
+export interface AgentTurnStep {
+  tool: string;
+  arguments: Record<string, unknown>;
+  result: string;
+  error?: string | null;
+}
+
+export interface AgentTurn {
+  /** The model's narrated reasoning for this round. */
+  thought: string;
+  tool_calls: string[];
+  latency_ms?: number | null;
+  steps: AgentTurnStep[];
+}
+
+export interface SkillDryRunResult {
+  answer: string;
+  turns: AgentTurn[];
+  files_read: string[];
+  user_exchanges: number;
+  stage_scores: {
+    stage_coverage: number;
+    stage_order: number;
+    stage_files_total: number;
+  } | null;
+  tokens_in: number;
+  tokens_out: number;
+  latency_ms: number;
+}
+
 export type SkillTrialModelSpec =
   | { kind: 'llm'; model: string }
   | { kind: 'bot'; bot_config_id: number; label?: string };

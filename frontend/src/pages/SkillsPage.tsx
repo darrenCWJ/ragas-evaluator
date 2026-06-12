@@ -7,6 +7,7 @@ import {
 } from '../api';
 import type { BotConfig, JudgeModel } from '../api';
 import SkillLibrary from '../components/skills/SkillLibrary';
+import SkillPlayground from '../components/skills/SkillPlayground';
 import TrialCreate from '../components/skills/TrialCreate';
 import TrialList from '../components/skills/TrialList';
 import { Card } from '../components/ui';
@@ -101,6 +102,18 @@ export default function SkillsPage() {
           loading={skillsFetch.loading}
           loadError={skillsFetch.error}
           onChanged={skillsFetch.reload}
+        />
+      </section>
+
+      <section>
+        <SectionHeading
+          title="Playground"
+          desc="Watch one model walk a skill on a single prompt — no test set needed. Shows the turn-by-turn thinking, tool calls, and stage coverage."
+        />
+        <SkillPlayground
+          projectId={projectId}
+          skills={skillsFetch.data ?? []}
+          judgeModels={modelsFetch.data?.judgeModels ?? []}
         />
       </section>
 

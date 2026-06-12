@@ -889,6 +889,27 @@ class SkillCreate(BaseModel):
         return v
 
 
+class SkillDryRunRequest(BaseModel):
+    """Run a skill once against a single prompt to watch the model's process.
+
+    No test set, no judging, nothing persisted — purely for observing how a
+    model walks a (process-flow) skill. Always agentic.
+    """
+
+    prompt: str = Field(min_length=3, max_length=4000)
+    model: str = Field(min_length=1, max_length=128)
+    # Scripted replies for the model's ask_user calls, consumed in order;
+    # the LLM user-simulator answers once these run out.
+    user_inputs: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError("invalid model id")
+        return v
+
+
 class SkillTrialCreate(BaseModel):
     """Run a skill across selected AI models against an approved test set."""
 

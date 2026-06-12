@@ -42,9 +42,7 @@ function VerdictChip({ result }: { result: DirectiveResult }) {
  * narrated thinking per round, interleaved with the tool calls it made.
  */
 function ModelProcess({ trace }: { trace: TraceSpan[] }) {
-  const steps = trace.filter(
-    (s) => s.name.startsWith('thinking:') || s.name.startsWith('tool:'),
-  );
+  const steps = trace.filter((s) => s.name.startsWith('thinking:') || s.name.startsWith('tool:'));
   if (steps.length === 0) return null;
 
   return (

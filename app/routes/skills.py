@@ -10,14 +10,17 @@ import asyncio
 import io
 import json
 import logging
+import time
 import zipfile
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 import db.init
-from app.models import ApplyModelRequest, SkillCreate, SkillTrialCreate
+from app.models import ApplyModelRequest, SkillCreate, SkillDryRunRequest, SkillTrialCreate
 from app.services.skill_trials import (
+    _query_model_agentic,
+    _stage_metrics,
     aggregate_trial_matrix,
     run_skill_trial,
     skill_trial_runs,
@@ -274,6 +277,79 @@ async def delete_skill(project_id: int, skill_id: int):
     conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
     conn.commit()
     return {"detail": "Skill deleted"}
+
+
+# --- Playground (dry run) ------------------------------------------------------
+
+
+@router.post("/projects/{project_id}/skills/{skill_id}/dry-run")
+async def dry_run_skill(project_id: int, skill_id: int, req: SkillDryRunRequest):
+    """Watch one model walk the skill on a single prompt.
+
+    Agentic-only, no test set, no judging, nothing persisted: the model gets
+    the skill as system context plus read_file/ask_user tools, and the full
+    turn-by-turn process (thinking → tool calls → answer) is returned along
+    with stage-plan coverage for staged skills.
+    """
+    conn = db.init.get_db()
+    row = conn.execute(
+        "SELECT * FROM skills WHERE id = ? AND project_id = ?", (skill_id, project_id)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    skill_files = {
+        r["path"]: r["content"]
+        for r in conn.execute(
+            "SELECT path, content FROM skill_files WHERE skill_id = ?", (skill_id,)
+        ).fetchall()
+    }
+    parsed = json.loads(row["parsed_directives_json"] or "{}")
+    stages = parsed.get("stages")
+    if stages is None:
+        stages = extract_stages(row["content"] or "")
+
+    q_row = {
+        "question": req.prompt,
+        "metadata_json": json.dumps({"user_inputs": req.user_inputs}),
+    }
+    spec = {"kind": "llm", "model": req.model}
+    t0 = time.monotonic()
+    try:
+        reply = await _query_model_agentic(spec, q_row, row["content"], skill_files)
+    except Exception as exc:
+        logger.warning("Skill dry-run failed (skill=%d model=%s): %s", skill_id, clean(req.model), clean(exc))
+        raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    turns = [
+        {
+            "thought": turn.get("thought", ""),
+            "tool_calls": turn.get("tool_calls", []),
+            "latency_ms": turn.get("latency_ms"),
+            "steps": [
+                {
+                    "tool": s["tool"],
+                    "arguments": s["arguments"],
+                    "result": str(s["result"])[:800],
+                    "error": s.get("error"),
+                }
+                for s in turn.get("steps", [])
+            ],
+        }
+        for turn in reply.get("agent_turns", [])
+    ]
+    stage_scores = _stage_metrics(stages, reply.get("files_read", [])) if stages else None
+    return {
+        "answer": reply["answer"],
+        "turns": turns,
+        "files_read": reply.get("files_read", []),
+        "user_exchanges": reply.get("user_exchanges", 0),
+        "stage_scores": stage_scores,
+        "tokens_in": reply.get("tokens_in", 0),
+        "tokens_out": reply.get("tokens_out", 0),
+        "latency_ms": latency_ms,
+    }
 
 
 # --- Trial lifecycle ----------------------------------------------------------
