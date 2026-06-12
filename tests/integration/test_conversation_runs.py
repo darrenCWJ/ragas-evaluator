@@ -74,8 +74,8 @@ class TestConversationRun:
         fake = FakeConnector()
 
         with (
-            patch("app.routes.experiments.create_connector", return_value=fake),
-            patch("app.routes.experiments.setup_scorers", return_value=({}, {}, None)),
+            patch("app.services.experiment_runner.create_connector", return_value=fake),
+            patch("app.services.experiment_runner.setup_scorers", return_value=({}, {}, None)),
         ):
             r = client.post(
                 f"/api/projects/{project}/experiments/{seeded['experiment_id']}/run",

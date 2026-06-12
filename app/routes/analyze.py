@@ -10,7 +10,7 @@ from app.models import (
     BatchApplyRequest,
     SuggestionUpdate,
 )
-from app.routes.experiments import _parse_experiment_row, _sanitize_nan
+from app.services.experiment_runner import parse_experiment_row, sanitize_nan
 from evaluation.suggestions import apply_config_change, generate_suggestions
 
 router = APIRouter(prefix="/api", tags=["analyze"])
@@ -64,7 +64,7 @@ async def generate_suggestions_route(project_id: int, experiment_id: int):
     metric_counts: dict[str, int] = {}
     per_question_results: list[dict] = []
     for rr in result_rows:
-        metrics = _sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
+        metrics = sanitize_nan(json.loads(rr["metrics_json"])) if rr["metrics_json"] else {}
         per_question_results.append({
             "metrics": metrics,
             "category": rr["category"] or rr["question_type"] or "",
@@ -208,7 +208,7 @@ async def prompt_doctor(project_id: int, experiment_id: int):
     totals: dict[str, float] = {}
     counts: dict[str, int] = {}
     for r in rows:
-        metrics = _sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
+        metrics = sanitize_nan(json.loads(r["metrics_json"])) if r["metrics_json"] else {}
         vals = [v for v in metrics.values() if v is not None]
         for mn, v in metrics.items():
             if v is not None:
@@ -337,7 +337,7 @@ def _metric_values_by_question(conn, experiment_id: int) -> dict[int, dict]:
         (experiment_id,),
     ).fetchall()
     return {
-        r["test_question_id"]: _sanitize_nan(json.loads(r["metrics_json"]))
+        r["test_question_id"]: sanitize_nan(json.loads(r["metrics_json"]))
         if r["metrics_json"] else {}
         for r in rows
     }
@@ -623,7 +623,7 @@ async def apply_suggestion(
 
     return {
         "suggestion": dict(updated_suggestion),
-        "new_experiment": _parse_experiment_row(new_experiment_row),
+        "new_experiment": parse_experiment_row(new_experiment_row),
         "new_rag_config": {"id": new_config_id, "name": new_config_name},
         "changes": changes,
     }
@@ -821,7 +821,7 @@ async def apply_suggestions_batch(
 
     return {
         "suggestions": [dict(s) for s in updated_suggestions],
-        "new_experiment": _parse_experiment_row(new_experiment_row),
+        "new_experiment": parse_experiment_row(new_experiment_row),
         "new_rag_config": {"id": new_config_id, "name": new_config_name},
         "changes": all_changes,
     }

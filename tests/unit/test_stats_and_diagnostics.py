@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.routes.experiments import _retrieval_diagnostics
+from app.services.experiment_runner import retrieval_diagnostics
 from evaluation.stats import bootstrap_ci, paired_delta_verdict
 
 pytestmark = pytest.mark.unit
@@ -72,22 +72,22 @@ class TestRetrievalDiagnostics:
     ]
 
     def test_hit_at_rank_two(self):
-        out = _retrieval_diagnostics({"source_chunk_ids": [22]}, self.CONTEXTS)
+        out = retrieval_diagnostics({"source_chunk_ids": [22]}, self.CONTEXTS)
         assert out == {"retrieval_hit_rate": 1.0, "retrieval_mrr": 0.5}
 
     def test_hit_at_rank_one(self):
-        out = _retrieval_diagnostics({"source_chunk_ids": [11, 99]}, self.CONTEXTS)
+        out = retrieval_diagnostics({"source_chunk_ids": [11, 99]}, self.CONTEXTS)
         assert out["retrieval_mrr"] == 1.0
 
     def test_miss(self):
-        out = _retrieval_diagnostics({"source_chunk_ids": [99]}, self.CONTEXTS)
+        out = retrieval_diagnostics({"source_chunk_ids": [99]}, self.CONTEXTS)
         assert out == {"retrieval_hit_rate": 0.0, "retrieval_mrr": 0.0}
 
     def test_no_provenance_returns_none(self):
-        assert _retrieval_diagnostics({}, self.CONTEXTS) is None
-        assert _retrieval_diagnostics(None, self.CONTEXTS) is None
+        assert retrieval_diagnostics({}, self.CONTEXTS) is None
+        assert retrieval_diagnostics(None, self.CONTEXTS) is None
 
     def test_no_chunk_ids_in_retrieved(self):
         contexts = [{"content": "a", "source": "bot"}]
-        out = _retrieval_diagnostics({"source_chunk_ids": [11]}, contexts)
+        out = retrieval_diagnostics({"source_chunk_ids": [11]}, contexts)
         assert out == {"retrieval_hit_rate": 0.0, "retrieval_mrr": 0.0}
