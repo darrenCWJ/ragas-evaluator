@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 import db.init
 from app.models import ChunkConfigCreate
-from pipeline.chunking import chunk_text_pipeline
+from pipeline.chunking import chunk_text_pipeline, filter_chunks, parent_child_pairs
 
 router = APIRouter(prefix="/api", tags=["chunks"])
 
@@ -187,6 +187,42 @@ async def generate_chunks(project_id: int, config_id: int, force: bool = False):
                     "filename": doc["filename"],
                     "chunk_count": existing_count,
                     "skipped": True,
+                }
+            )
+            continue
+
+        if method == "parent_child" and step2_method is None:
+            # Small-to-big: store the parent window on each child row so
+            # retrieval can expand child hits to their parent context.
+            # (pipeline/rag.py:_expand_to_parents reads parent_key/parent_content.)
+            chunk_count = 0
+            for p_idx, (parent_text, children) in enumerate(
+                parent_child_pairs(doc["content"], params)
+            ):
+                if filter_params:
+                    children = filter_chunks(
+                        children,
+                        min_char_length=filter_params.get("min_char_length", 0),
+                        min_word_count=filter_params.get("min_word_count", 0),
+                        max_whitespace_ratio=filter_params.get("max_whitespace_ratio", 1.0),
+                    )
+                metadata = json.dumps(
+                    {"parent_key": f"{doc['id']}:{p_idx}", "parent_content": parent_text}
+                )
+                for child in children:
+                    conn.execute(
+                        "INSERT INTO chunks (document_id, chunk_config_id, content, metadata_json)"
+                        " VALUES (?, ?, ?, ?)",
+                        (doc["id"], config_id, child, metadata),
+                    )
+                    chunk_count += 1
+            total_chunks += chunk_count
+            doc_results.append(
+                {
+                    "document_id": doc["id"],
+                    "filename": doc["filename"],
+                    "chunk_count": chunk_count,
+                    "skipped": False,
                 }
             )
             continue

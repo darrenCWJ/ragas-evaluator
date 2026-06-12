@@ -52,6 +52,54 @@ def _truncate_contexts(contexts: list[dict], system_prompt: str, query: str) -> 
     return truncated
 
 
+def _expand_to_parents(
+    contexts: list[dict], conn, seen_parents: set[str] | None = None
+) -> list[dict]:
+    """Small-to-big expansion: swap child-chunk hits for their parent window.
+
+    parent_child chunk sets store parent_key/parent_content in each child's
+    metadata_json (see app/routes/chunks.py). Contexts are score-ordered, so
+    the first child of a parent wins and later siblings are dropped. Chunk
+    sets without parent metadata pass through untouched. ``seen_parents`` lets
+    multi-step retrieval dedupe parents across steps.
+    """
+    ids = [c["chunk_id"] for c in contexts if c.get("chunk_id") is not None]
+    if not ids:
+        return contexts
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT id, metadata_json FROM chunks WHERE id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    meta_by_id: dict[int, dict] = {}
+    for r in rows:
+        if not r["metadata_json"]:
+            continue
+        try:
+            meta = json.loads(r["metadata_json"])
+        except (TypeError, ValueError):
+            continue
+        if meta.get("parent_key") and meta.get("parent_content"):
+            meta_by_id[r["id"]] = meta
+    if not meta_by_id:
+        return contexts
+
+    if seen_parents is None:
+        seen_parents = set()
+    expanded = []
+    for ctx in contexts:
+        meta = meta_by_id.get(ctx.get("chunk_id"))
+        if meta is None:
+            expanded.append(ctx)
+            continue
+        parent_key = meta["parent_key"]
+        if parent_key in seen_parents:
+            continue
+        seen_parents.add(parent_key)
+        expanded.append({**ctx, "content": meta["parent_content"], "parent_key": parent_key})
+    return expanded
+
+
 async def _retrieve_dense(query: str, config_row, conn) -> list[dict]:
     """Retrieve contexts using dense vector search."""
     embedding_config = conn.execute(
@@ -181,6 +229,9 @@ async def single_shot_query(query: str, rag_config_row, conn) -> dict:
     else:
         raise HTTPException(status_code=400, detail=f"Unknown search type: {search_type}")
 
+    # Small-to-big: children matched, parents go to the LLM
+    contexts = _expand_to_parents(contexts, conn)
+
     # No contexts found
     if not contexts:
         return {
@@ -252,6 +303,7 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
     steps = []
     all_contexts = []
     seen_chunk_ids = set()
+    seen_parent_keys: set[str] = set()
     current_query = query
     total_prompt_tokens = 0
     total_completion_tokens = 0
@@ -281,6 +333,9 @@ async def multi_step_query(query: str, rag_config_row, conn) -> dict:
             if cid is not None:
                 seen_chunk_ids.add(cid)
             new_contexts.append(ctx)
+
+        # Small-to-big: expand child hits, deduping parents across steps
+        new_contexts = _expand_to_parents(new_contexts, conn, seen_parent_keys)
 
         # No new contexts found — break early
         if not new_contexts:

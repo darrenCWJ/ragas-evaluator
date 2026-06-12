@@ -155,6 +155,27 @@ def _parent_child(text: str, parent_size: int = 1000, child_size: int = 200) -> 
 
     Returns flat list of child chunk strings.
     """
+    children = []
+    for _parent, kids in parent_child_pairs(text, {"parent_size": parent_size, "child_size": child_size}):
+        children.extend(kids)
+    return children
+
+
+def parent_child_pairs(text: str, params: dict) -> list[tuple[str, list[str]]]:
+    """Split into (parent, children) pairs for small-to-big retrieval.
+
+    Children are embedded/indexed for precise matching; the parent text is
+    stored alongside each child so retrieval can swap in the bigger window.
+    Accepts the same params (and aliases) as chunk_text's parent_child method.
+    """
+    params = _coerce_numeric(params)
+    params = {_PARAM_ALIASES.get(k, k): v for k, v in params.items()}
+    parent_size = params.get("parent_size", 1000)
+    child_size = params.get("child_size", 200)
+
+    if not text or not text.strip():
+        return []
+
     parent_splitter = RecursiveCharacterTextSplitter(
         chunk_size=parent_size,
         chunk_overlap=0,
@@ -165,11 +186,10 @@ def _parent_child(text: str, parent_size: int = 1000, child_size: int = 200) -> 
         chunk_overlap=0,
         separators=["\n\n", "\n", ". ", " ", ""],
     )
-    parents = parent_splitter.split_text(text)
-    children = []
-    for parent in parents:
-        children.extend(child_splitter.split_text(parent))
-    return children
+    return [
+        (parent, child_splitter.split_text(parent))
+        for parent in parent_splitter.split_text(text)
+    ]
 
 
 def _semantic(text: str, max_chunk_size: int = 1000, breakpoint_threshold: float = 0.5) -> list[str]:
