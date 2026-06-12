@@ -1,450 +1,464 @@
-# Main Application Codemap
+# Tribunal RAG Evaluator -- Backend Codemap
 
-**Last Updated:** 2026-04-24  
-**Entry Points:** `main.py`, `app/__init__.py`  
+**Last Updated:** 2026-06-13
+**Entry Points:** main.py, app/__init__.py
 **Primary Purpose:** REST API server, RAG pipeline, evaluation metrics, test generation, suggestions
+**App version:** 0.4.1-alpha (Tribunal -- RAG Evaluator)
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Main Application (FastAPI)                    │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│ main.py ──┐                                                       │
-│           └─→ app/__init__.py:create_app()                       │
-│               ├─ Lifespan: init_db(), cleanup                    │
-│               ├─ CORS middleware                                 │
-│               ├─ Register 14 routers from app/routes/            │
-│               └─ SPA catch-all (frontend/dist/index.html)        │
-│                                                                   │
-│ app/models.py                                                    │
-│ └─ Pydantic request/response types (all API contracts)          │
-│                                                                   │
-│ config.py                                                        │
-│ └─ Env-driven configuration (paths, models, timeouts)           │
-│                                                                   │
-│ db/init.py (all data access)                                    │
-│ ├─ Connection: sqlite3 (local) or psycopg2 (PostgreSQL)        │
-│ ├─ Schema: 20+ tables (projects, chunks, configs, experiments)  │
-│ └─ Query functions: create_*, get_*, update_*, delete_*         │
-│                                                                   │
-│ pipeline/ (RAG engine)                                           │
-│ ├─ chunking.py (6 strategies)                                   │
-│ ├─ embedding.py (OpenAI, SentenceTransformers, BM25)           │
-│ ├─ vectorstore.py (ChromaDB for dense search)                  │
-│ ├─ bm25.py (keyword-based sparse search)                       │
-│ ├─ rag.py (single-shot and multi-step retrieval)               │
-│ └─ llm.py (OpenAI, Anthropic, Google GenAI routing)            │
-│                                                                   │
-│ evaluation/ (Metrics & suggestions)                              │
-│ ├─ metrics/ (20+ metric files)                                  │
-│ ├─ scoring.py (orchestration, dynamic loading)                 │
-│ ├─ suggestions.py (rule engine)                                │
-│ └─ testgen.py (synthetic QA, personas)                         │
-│                                                                   │
-│ app/routes/ (14 route modules)                                  │
-│ ├─ projects.py (CRUD, workspace management)                    │
-│ ├─ documents.py (upload, chunking preview)                     │
-│ ├─ chunk_configs.py (strategy, 2-step pipeline)                │
-│ ├─ embedding_configs.py (model selection)                      │
-│ ├─ rag_configs.py (bundle: chunking + embedding + LLM)         │
-│ ├─ testsets.py (test generation, KG builds, worker delegation) │
-│ ├─ experiments.py (run evaluation, stream progress via SSE)     │
-│ ├─ results.py (per-question metrics, contexts)                 │
-│ ├─ suggestions.py (generate, apply)                            │
-│ ├─ bot_configs.py (7 connector types)                          │
-│ ├─ custom_metrics.py (project-specific metric definitions)     │
-│ ├─ annotations.py (human feedback, evaluator accuracy)         │
-│ ├─ baselines.py (external reference Q&A)                       │
-│ ├─ health.py (liveness, config defaults)                       │
-│ └─ judge.py (multi-LLM evaluation, agreement tracking)         │
-│                                                                   │
-│ frontend/ (React SPA)                                            │
-│ └─ Mounted as static files; SPA routes fall through to HTML     │
-│                                                                   │
-└─────────────────────────────────────────────────────────────────┘
-                          │
-              ┌───────────┼───────────┐
-              │           │           │
-              ▼           ▼           ▼
-         SQLite       PostgreSQL   Worker
-       (local)      (production)   Service
-```
+    main.py
+      |-- langchain_community.chat_models.vertexai shim
+      |-- load_dotenv()
+      |-- from app import app  (calls create_app())
+            |
+            v
+    app/__init__.py: create_app()
+      |-- lifespan: init_db() + _monitor_worker_experiments task + client cleanup
+      |-- _AuthMiddleware (open/user mode, per-project RE check, machine token)
+      |-- CORSMiddleware (CORS_ORIGINS env var, default localhost:3000/5173)
+      |-- 19 routers registered
+      |-- SPA catch-all: /app/{path} -> frontend/dist/index.html
+      |-- GET / -> RedirectResponse(/app/setup)
 
-## Key Modules
+    Layers:
+      app/routes/      (19 modules -- HTTP handlers)
+      app/services/    (4 modules -- shared state/logic)
+      evaluation/      (scoring engine, metrics, suggestions, testset quality)
+      pipeline/        (chunking, embedding, vectorstore, bm25, rag, llm, connectors)
+      db/init.py       (schema, dual-backend connection, migrations)
+      config.py        (all env-driven constants)
 
-### main.py (Single Entry Point)
-- Loads `.env` via `dotenv`
-- Imports app factory from `app/__init__.py`
-- Exposes `app` for `uvicorn main:app`
+## Entry Points
 
-### app/__init__.py (Factory)
-- `create_app()` — FastAPI factory function
-  - **Lifespan**: `db.init.init_db()` on startup
-  - **CORS**: Configurable via `CORS_ORIGINS` env var
-  - **Routers**: Registers 14 routers with prefixes
-  - **SPA Catch-All**: `GET /app/*` → `frontend/dist/index.html`
-- Serves frontend at `/` (static mount)
+| File | Trigger |
+|------|---------|
+| main.py | uvicorn main:app --host 0.0.0.0 --port 8000 |
+| app/__init__.py | imported by main.py; create_app() is the factory |
 
-### config.py (132 lines)
-Central env-driven configuration:
+---
 
-| Section | Variables |
-|---------|-----------|
-| **Storage** | `DATABASE_URL`, `DATABASE_PATH`, `CHROMADB_PATH`, `BM25_PATH` |
-| **LLM Models** | `DEFAULT_EVAL_MODEL`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` |
-| **Timeouts** | `BOT_QUERY_TIMEOUT`, `TESTGEN_SUBPROCESS_TIMEOUT`, `KG_SUBPROCESS_TIMEOUT` |
-| **Limits** | `MAX_UPLOAD_SIZE`, `MAX_BASELINE_ROWS`, `MAX_UPLOAD_QA_ROWS` |
-| **Worker** | `KG_WORKER_URLS`, `KG_WORKER_URL`, `KG_THREAD_MODE` |
-| **Multi-LLM Judge** | `MULTI_LLM_JUDGE_DEFAULT_EVALUATORS`, `MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD` |
-| **Validation Sets** | `VALID_CHUNK_METHODS`, `VALID_SEARCH_TYPES`, `VALID_RESPONSE_MODES` |
+## app/__init__.py -- Factory and Middleware
 
-### db/init.py (All Data Access)
-Module-level connection management + schema + query functions:
+**Lifespan** (startup/shutdown):
+1. init_db() -- creates/migrates schema; fatal on failure (sys.exit(1))
+2. asyncio.create_task(_monitor_worker_experiments) -- every 30s polls worker
+   /experiment-progress/{eid} for delegated experiments; marks failed after 3
+   consecutive unreachable calls; experiment_runs.release(eid) on completion
+3. On shutdown: cancels monitor task; calls close_*_client() for openai,
+   anthropic, gemini, embedding clients to avoid event-loop-closed warnings
 
-**Core Tables** (20+):
-- `projects` — Workspaces
-- `documents` — Uploaded files
-- `chunks` — Split text segments
-- `chunk_configs` — Chunking strategies (6 types)
-- `embeddings` — Vector indices (dense, sparse)
-- `embedding_configs` — Embedding model selection
-- `rag_configs` — Pipeline bundles (chunking + embedding + LLM)
-- `test_sets` — Generated test questions
-- `test_questions` — Individual Q&A pairs with personas
-- `experiments` — Evaluation runs
-- `experiment_results` — Per-question scores
-- `custom_metrics` — Project-specific metric definitions
-- `annotations` — Human feedback on results
-- `suggestions` — Generated recommendations
-- `baselines` — External reference Q&A
+**_AuthMiddleware** (Starlette BaseHTTPMiddleware):
+- Exempt prefixes: /app/, /health, /api/auth/
+- Open mode (no users): pass-through unless RAGAS_API_KEY set -> Bearer check
+- User mode (>=1 registered user, lazily cached via _auth_active_cache):
+  - resolve_request_user() -> session cookie (itsdangerous) or machine Bearer
+  - _PROJECT_PATH_RE matches /api/projects/{id}/ -- project-scoped paths
+    additionally call user_can_access_project() (owner/member/admin)
+  - Attaches request.state.user
+- 401 for unauthenticated, 403 for project scope violation
 
-**Query Functions**:
-- `get_db()` (119 god node edges) — Connection factory
-- `create_project()`, `get_project()`, `list_projects()`
-- `upsert_chunks()`, `get_chunks_by_config()`
-- `create_experiment()`, `get_experiment()`, `list_experiments()`
-- `upsert_experiment_result()`, `get_experiment_results()`
-- `create_annotation()`, `get_evaluator_accuracy()`
+**SPA serving**: mounts /app/assets as StaticFiles; all other /app/* serve
+frontend/dist/index.html; 503 with build instructions when dist not found.
 
-### app/models.py
-Pydantic models for all API contracts:
-- `ProjectCreate`, `ProjectUpdate`, `ProjectResponse`
-- `ChunkConfigCreate`, `EmbeddingConfigCreate`, `RAGConfigCreate`
-- `TestGenRequest`, `TestSetCreate`, `QuestionAnnotation`
-- `ExperimentRequest`, `ExperimentResponse`
-- `BotConfigCreate`, `BotConnectorType`
-- `CustomMetricConfig` (4 types: integer_range, similarity, rubrics, instance_rubrics)
-- etc.
+---
 
-### pipeline/ (RAG Engine)
+## config.py
 
-#### chunking.py (6 Strategies)
-- **recursive** — Recursive character splitting with overlap
-- **markdown** — Split by headers, preserve structure
-- **token** — Split by token count
-- **fixed_overlap** — Fixed size with overlap
-- **parent_child** — Hierarchical chunking (parent = larger context)
-- **semantic** — Split by semantic boundaries (experimental)
+| Section | Key Variables |
+|---------|--------------|
+| Storage paths | DATABASE_URL, DATABASE_PATH, CHROMADB_PATH, BM25_PATH |
+| Default eval models | DEFAULT_EVAL_MODEL (gpt-4o-mini), DEFAULT_EVAL_EMBEDDING, DEFAULT_EVAL_MAX_TOKENS |
+| Connector defaults | CONNECTOR_DEFAULT_MODELS dict (openai/claude/deepseek/gemini), VALID_CONNECTOR_TYPES |
+| Suggestion thresholds | SUGGESTION_HIGH_THRESHOLD (0.4), SUGGESTION_MEDIUM_THRESHOLD (0.7) |
+| Timeouts | BOT_QUERY_TIMEOUT (120s), METRIC_SCORING_TIMEOUT (300s), TESTGEN_SUBPROCESS_TIMEOUT (7200s), KG_SUBPROCESS_TIMEOUT (86400s) |
+| Upload limits | MAX_UPLOAD_SIZE (50MB), MAX_BASELINE_ROWS (1000), MAX_UPLOAD_QA_ROWS (2000) |
+| LLM temps | TESTGEN_TOPIC_TEMPERATURE=0.0, TESTGEN_PERSONA_TEMPERATURE=0.7, TESTGEN_QUESTION_TEMPERATURE=0.8 |
+| KG concurrency | MAX_CONCURRENT_KG_BUILDS (1), MAX_CONCURRENT_PERSONA_BUILDS (2) |
+| Batch sizes | EMBEDDING_BATCH_SIZE (100), KG_BATCH_SIZE (50) |
+| Auth | SESSION_SECRET, SESSION_TTL_SECONDS (14d), SESSION_COOKIE_SECURE, LOGIN_RATE_LIMIT (5/min) |
+| Multi-LLM Judge | MULTI_LLM_JUDGE_DEFAULT_EVALUATORS (3), MULTI_LLM_JUDGE_RELIABILITY_THRESHOLD (0.6), temp range 0.3-0.75 |
+| Worker | KG_WORKER_URLS list, KG_WORKER_URL (first URL), KG_THREAD_MODE bool |
+| Network | ALLOW_PRIVATE_ENDPOINTS bool (SSRF guard for private IPs) |
+| Validation | VALID_CHUNK_METHODS, VALID_EMBEDDING_TYPES, VALID_SEARCH_TYPES, VALID_RESPONSE_MODES |
+| RAG | CONTEXT_CHAR_BUDGET (100000 chars), MAX_CHUNKS_FOR_GENERATION |
 
-**Key Function**: `chunk_text()` (39 god node edges)
-- Parameters: strategy, chunk_size, overlap
-- Returns: List of chunks with metadata
-- Supports 2-step pipeline (e.g., markdown then recursive)
+---
 
-#### embedding.py
-- `_embed_openai()` — OpenAI dense embeddings
-- `_embed_sentence_transformers()` — Local open-source models
-- `embed_texts_dispatch()` — Choose backend based on config
-- Batching with `EMBEDDING_BATCH_SIZE`
+## app/routes/ -- 19 Modules
 
-#### vectorstore.py (ChromaDB)
-- `get_or_create_collection()` — Lazy-load collection
-- `search()` — Dense vector search
-- `add_documents()` — Store embeddings
+| Module | One-line purpose |
+|--------|-----------------|
+| health.py | GET /health, GET /config/defaults, GET /workers/status, worker clear-build/clear-personas proxies |
+| auth.py | Register/login/logout/me, admin user management, role updates; first user becomes admin |
+| projects.py | Project CRUD; preferred_model field; project-member management |
+| documents.py | File upload (txt/pdf/docx), list, delete, chunk preview |
+| chunks.py | Chunk config CRUD, chunk generation, 2-step pipeline support |
+| embeddings.py | Embedding config CRUD, embed chunks, dense/hybrid search endpoints |
+| rag.py | RAG config CRUD, ad-hoc single-shot/multi-step query endpoint |
+| testsets.py | Test set CRUD, KG build (worker delegation or local), progress polling, question editing |
+| experiments.py | Experiment CRUD, SSE runner, compare/history/delta/export, model registry |
+| analyze.py | Suggestion generate/retrieve/apply/batch-apply, Prompt Doctor (LLM revision) |
+| insights.py | Quality audit, corpus coverage, per-category breakdown, CI gate, HTML report |
+| bot_configs.py | Bot config CRUD, connection test; 7 connector types |
+| annotations.py | Human feedback on results, evaluator accuracy sampling |
+| reports.py | Per-bot aggregates, source-verification summary, cross-experiment trends |
+| personas.py | Persona CRUD, async persona generation (subprocess or worker delegation) |
+| custom_metrics.py | Custom metric CRUD; 6 types: integer_range, similarity, rubrics, instance_rubrics, criteria_judge, reference_judge |
+| multi_llm_judge.py | Fetch judge evaluations, annotation sample, claim annotations, reliability stats |
+| skills.py | Skill CRUD (SKILL.md-style docs), skill trial lifecycle, results, apply-model endpoint |
+| system.py | POST /system/maintenance: WAL checkpoint, VACUUM, progress eviction, cache release, GC |
 
-#### bm25.py (Sparse Search)
-- `build_bm25_index()` — Build index from chunks
-- `search()` — Keyword ranking
-- Persistent indices in `BM25_PATH`
 
-#### rag.py (Retrieval)
-- `single_shot_query()` — 1-turn: retrieve, generate
-- `multi_step_query()` — Iterative: retrieve → reason → refine (up to 10 steps)
-- Hybrid search: dense + sparse with RRF
-- Context budget: truncate if exceeds `CONTEXT_CHAR_BUDGET`
+### experiments.py -- Core Evaluation Loop
 
-#### llm.py (LLM Routing)
-- `chat_completion()` (21 god node edges) — Unified LLM interface
-- Supports: OpenAI, Anthropic, Google GenAI
-- Model selection via config
-- LLM gateway support (custom OpenAI-compatible endpoints)
-- Rate limiting, retries, timeout handling
+Notable endpoints:
 
-### evaluation/ (Metrics & Suggestions)
+    POST   /api/projects/{p}/experiments                 create (RAG or bot path)
+    POST   /api/projects/{p}/experiments/{id}/run        start SSE runner
+    GET    /api/projects/{p}/experiments/{id}/progress   SSE stream
+    GET    /api/projects/{p}/experiments/compare         2-5 exp alignment view
+    GET    /api/projects/{p}/experiments/history         completed list + aggregates
+    GET    /api/projects/{p}/experiments/{id}/results    per-question results
+    DELETE /api/projects/{p}/experiments/{id}
+    GET    /api/models                                   list provider models
 
-#### metrics/ (20+ Metric Files)
-Each file exports a single async function:
-- `faithfulness()` — Response alignment with context
-- `answer_relevancy()` — Answer pertinence to question
-- `context_precision()`, `context_recall()` — Retrieval quality
-- `exact_match()`, `bleu_score()`, `rouge_score()` — String metrics
-- `semantic_similarity()` — Embedding cosine similarity
-- `aspect_critic()`, `rubrics_score()` — LLM-as-judge
-- `multi_llm_judge()` — Multi-model evaluation with agreement tracking
-- `custom_*()` — Dynamic custom metrics
+Multi-turn conversation flow (_process_question):
+- metadata.turns carries prior user messages (setup turns)
+- Bot runs: iterates conversation_turns, sends each with accumulated chat_history,
+  then sends the final question; _transcript injected into q_metadata
+  so conversation_retention metric can see it
 
-**Dynamic Loading**: `scoring.py` imports at runtime based on experiment config
+Retrieval diagnostics (internal RAG only, no LLM call):
+- _retrieval_diagnostics() computes retrieval_hit_rate and retrieval_mrr
+  against metadata.source_chunk_ids
 
-#### scoring.py (Orchestration)
-- `score_experiment()` — Run all configured metrics
-- `score_question()` — Score a single question
-- Parallel execution where possible
-- Timeout handling per metric
-- Error recovery (skip metric on timeout)
-- `ALL_METRICS` list (manually maintained dispatch map)
+Worker delegation (bot-connector experiments only):
+- Tries each KG_WORKER_URLS with POST /run-experiment; on 202 sets
+  experiment_runs.set_worker(eid, url); _reap_stale_experiments() skips these
 
-#### suggestions.py (Rule Engine)
-Analyzes metrics to produce actionable recommendations:
-- Low context_recall → increase `top_k`
-- Low context_precision → decrease `top_k`
-- Low faithfulness → improve system prompt
-- High variance → try different chunking strategy
-- etc.
+SSE progress: {phase, current, total, question, error, completed_items,
+               in_flight_details, scoring_metrics}
 
-**Output**: List of `Suggestion` objects with target config field
+### analyze.py -- Suggestion Engine + Prompt Doctor
 
-#### testgen.py (Synthetic QA)
-- `generate_testset_from_chunks()` — Random Q&A from chunks
-- `generate_testset_with_personas()` — Persona-based generation
-- `build_kg_standalone()` — Knowledge graph from chunks
-- `build_kg_standalone_from_documents()` — KG from raw documents
-- Progress tracking (stored in DB)
-- Shared with worker service
+Endpoints:
+    POST  .../suggestions/generate
+    GET   .../suggestions
+    PATCH .../suggestions/{s}           (implemented flag)
+    POST  .../suggestions/{s}/apply     single apply + clone config + new exp
+    POST  .../suggestions/apply-batch
+    POST  .../prompt-doctor
 
-### app/routes/ (14 Modules)
+Prompt Doctor: fetches worst 8 scored results, calls chat_completion with
+_PROMPT_DOCTOR_TEMPLATE, parses diagnosis + additions + revised_system_prompt.
 
-#### projects.py
-```python
-POST   /api/projects              # Create workspace
-GET    /api/projects              # List all
-GET    /api/projects/{id}         # Get one
-DELETE /api/projects/{id}         # Delete
-```
+Outcome verification: lazily computed once applied_experiment_id completes;
+calls paired_delta_verdict per metric; cached in suggestions.outcome_json.
+Verdict: improved/regressed/mixed/inconclusive.
 
-#### documents.py
-```python
-POST   /api/projects/{p}/documents         # Upload file
-GET    /api/projects/{p}/documents         # List
-DELETE /api/projects/{p}/documents/{id}    # Delete
-POST   /api/projects/{p}/documents/{id}/preview-chunks  # Preview
-```
+### insights.py -- Quality, Coverage, CI Gate, HTML Report
 
-#### chunk_configs.py
-```python
-POST   /api/projects/{p}/chunk-configs
-GET    /api/projects/{p}/chunk-configs
-PUT    /api/projects/{p}/chunk-configs/{id}
-DELETE /api/projects/{p}/chunk-configs/{id}
-```
+Endpoints:
+    POST  .../test-sets/{ts}/quality-audit
+    GET   .../test-sets/{ts}/coverage
+    GET   .../experiments/{e}/breakdown
+    GET   .../experiments/{e}/report
+    GET   .../experiments/{e}/gate
 
-#### testsets.py (Key for Worker Integration)
-```python
-POST   /api/projects/{p}/testsets                   # Create testset
-GET    /api/projects/{p}/testsets                   # List
-POST   /api/projects/{p}/testsets/{id}/build-kg     # Start KG build
-GET    /api/projects/{p}/testsets/{id}/kg-progress  # Poll progress
-DELETE /api/projects/{p}/testsets/{id}/kg           # Delete KG
-GET    /api/projects/{p}/testsets/{id}/questions    # List questions
-```
+CI gate: ?thresholds=faithfulness:0.7&strict=true -> HTTP 412 on failure.
+HTML report: server-rendered; bootstrap_ci, breakdown, suggestions with outcome badges.
 
-**Worker Delegation Logic** (in testsets.py):
-1. Check if `KG_WORKER_URLS` set
-2. Try each worker with POST `/build-kg`
-3. Handle 409 (already building), 503 (busy)
-4. Poll via GET `/progress/{project_id}`
-5. Fallback to in-process if no workers
+---
 
-#### experiments.py (Core Evaluation Loop)
-```python
-POST   /api/projects/{p}/experiments                  # Start run
-GET    /api/projects/{p}/experiments                  # List
-GET    /api/projects/{p}/experiments/{id}             # Get one
-GET    /api/projects/{p}/experiments/{id}/results     # Results
-GET    /api/projects/{p}/experiments/{id}/progress    # SSE stream
-DELETE /api/projects/{p}/experiments/{id}             # Cancel
-```
+## app/services/
 
-**Progress Streaming**: Server-Sent Events (SSE)
-- Client: `GET /progress` with EventSource
-- Server: Sends updates every 2s
-- Format: `data: {"stage": "scoring", "metric": "faithfulness", "progress": 0.45}`
 
-#### bot_configs.py (7 Connector Types)
-```python
-POST   /api/projects/{p}/bot-configs
-GET    /api/projects/{p}/bot-configs
-PUT    /api/projects/{p}/bot-configs/{id}
-DELETE /api/projects/{p}/bot-configs/{id}
-POST   /api/projects/{p}/bot-configs/{id}/test    # Verify connection
-```
+### auth.py
+- argon2id password hashing (argon2-cffi _hasher)
+- itsdangerous URLSafeTimedSerializer for session cookies
+- CurrentUser frozen dataclass: id, email, name, role, is_admin property
+- MACHINE_USER sentinel (id=None, role=admin) for RAGAS_API_KEY bearer
+- resolve_request_user(conn, request) -- tries cookie then Bearer token
+- user_can_access_project(conn, user, project_id) -- owner OR member OR admin
+- login_throttled(ip) -- in-memory sliding window, 5 req/min, bounded to 10k IPs
 
-**Supported Types**:
-1. **openai** — ChatGPT-like via OpenAI API
-2. **claude** — Claude via Anthropic API
-3. **deepseek** — DeepSeek via API
-4. **gemini** — Google Gemini via API
-5. **glean** — Glean enterprise search
-6. **custom** — Custom HTTP endpoint
-7. **csv** — Upload pre-collected Q&A
+### progress.py -- ProgressStore
+- ProgressStore: RLock-protected dict registry for experiment run state
+- Per-experiment state: progress dict, cancel event, asyncio task, worker URL
+- set_progress / mutate_progress (apply fn under lock) / snapshot_progress (deep copy)
+- is_alive(eid), delegated(), release(eid), evict_stale() (30-min TTL)
+- experiment_runs = ProgressStore() module singleton
+- skill_trial_runs = ProgressStore() in skill_trials.py (separate instance)
 
-#### custom_metrics.py
-```python
-POST   /api/projects/{p}/custom-metrics
-GET    /api/projects/{p}/custom-metrics
-PUT    /api/projects/{p}/custom-metrics/{id}
-DELETE /api/projects/{p}/custom-metrics/{id}
-```
+### skill_trials.py
+- run_skill_trial(trial_id) -- asyncio background task
+- _query_model dispatches to chat_completion (kind=llm) or bot connector (kind=bot)
+- judge_adherence() per cell -> skill_adherence score + format_compliance
+- aggregate_trial_matrix() -- model x variant summary with lift calculation
 
-**Types** (4):
-- `integer_range` — LLM rates on scale (1-5)
-- `similarity` — Compare answer to reference
-- `rubrics` — User-defined rubric descriptions
-- `instance_rubrics` — Per-question rubrics
+### tracing.py
+- TraceRecorder: context-manager span() with wall time, status, attrs
+- Optional Langfuse export; supports Langfuse v2 and v3 APIs
 
-#### judge.py (Multi-LLM Evaluation)
-```python
-GET    /api/projects/{p}/experiments/{e}/judge-evaluations
-GET    /api/projects/{p}/experiments/{e}/judge-annotation-sample
-GET    /api/projects/{p}/experiments/{e}/judge-reliability
-POST   /api/projects/{p}/experiments/{e}/results/{r}/judge-evaluations/{ev}/claims
-```
+---
 
-**Multi-Judge Agreement**:
-- Run same metric on N judges (default: 3)
-- Compute inter-judge agreement
-- Flag low-confidence results
-- Return individual verdicts + confidence score
+## pipeline/
 
-#### annotations.py (Human Feedback)
-```python
-POST   /api/projects/{p}/experiments/{e}/annotations
-GET    /api/projects/{p}/experiments/{e}/evaluator-accuracy
-```
+### chunking.py -- 6 strategies
+recursive, markdown, token, fixed_overlap, parent_child, semantic
+2-step pipeline: chunk_text_pipeline(method, params, step2_method, step2_params)
 
-**Evaluator Accuracy**:
-- Sample 20% of results (deterministic seed)
-- Humans rate: accurate, partially accurate, inaccurate
-- Compute agreement with automated metrics
+### embedding.py
+embed_texts_dispatch() / embed_query_dispatch() -- routes to OpenAI dense,
+SentenceTransformers, or BM25. release_models() evicts cached ST instances.
 
-#### suggestions.py
-```python
-GET    /api/projects/{p}/experiments/{e}/suggestions
-POST   /api/projects/{p}/experiments/{e}/suggestions/{s}/apply
-POST   /api/projects/{p}/suggestions/apply-batch
-```
+### vectorstore.py -- ChromaDB
+get_or_create_collection(), search(), add_documents().
+ChromaDB calls wrapped in asyncio.to_thread() from rag.py (blocking API).
 
-#### health.py
-```python
-GET /health                # Liveness
-GET /api/config/defaults   # LLM models, batch sizes
-GET /api/config/connectors # Available bot types
-```
+### bm25.py
+build_bm25_index(), search_bm25(), persistent pickle indices in BM25_PATH.
 
-## Data Flow Examples
+### rag.py -- dense / sparse / hybrid RRF + reranker + multi-step
+- single_shot_query -- retrieve -> truncate -> LLM
+- multi_step_query -- up to max_steps: retrieve -> reason -> refine query
+- Hybrid: parallel dense + sparse, RRF merge (alpha weight), optional reranker
+- _truncate_contexts() -- drops lowest-scored contexts to fit CONTEXT_CHAR_BUDGET
 
-### 1. Create & Run Experiment
+### llm.py -- provider routing + gateway mode
+- _LLM_GATEWAY_MODE: when OPENAI_BASE_URL set, all models route via OpenAI client
+- Prefix detection: gpt-/o1/o3/o4 -> OpenAI; claude- -> Anthropic; gemini- -> Google
+- Module-level singleton clients (lazy init, connection reuse)
+- get_available_judge_models() returns all known models with availability bool
 
-```
-Frontend: POST /api/projects/1/experiments
-├─ Request: {rag_config_id, testset_id, metrics: ["faithfulness", "..."], bot_config_id}
-│
-Main App: Create experiment row + stream progress via SSE
-├─ Load testset questions from DB
-├─ For each question:
-│  ├─ Call bot or RAG pipeline
-│  ├─ Get answer + context + citations
-│  ├─ Score with all metrics (parallel where possible)
-│  └─ Store result row
-├─ Emit SSE event: {stage, metric, progress}
-└─ Return completed experiment
+### retry.py -- with_backoff
+with_backoff(operation, attempts=3, base_delay=2.0, max_delay=60.0, label):
+- Retryable: HTTP 429/500/502/503/504 or exception name containing
+  timeout/connect/network/transport
+- Respects Retry-After header; exponential backoff with jitter
 
-Frontend: Receive SSE events
-├─ Update progress bar
-├─ When complete: fetch /results
-└─ Display per-question metrics + aggregates
-```
+### bot_connectors/
+BotConnector Protocol: query(question, *, system_context=None, history=None)
+SystemContextUnsupported / ConversationUnsupported sentinel exceptions
 
-### 2. Build Knowledge Graph (With Worker)
+| Connector | Notes |
+|-----------|-------|
+| openai_bot.py | OpenAI chat API; supports system_context + history |
+| claude_bot.py | Anthropic; supports system_context + history |
+| deepseek_bot.py | OpenAI-compatible endpoint; supports system_context + history |
+| gemini_bot.py | Google GenAI; supports system_context + history |
+| glean.py | Glean enterprise search REST; raises both unsupported exceptions |
+| custom.py | Generic HTTP POST; raises both unsupported exceptions |
+| csv_connector.py | Pre-loaded CSV answers; raises both unsupported exceptions |
 
-```
-Frontend: POST /api/projects/1/testsets/5/build-kg
-├─ Request: {chunk_config_id, overlap_max_nodes: 500}
-│
-Main App: POST {worker_url}/build-kg
-├─ Response: 202 Accepted {status: "building", project_id: 1, kg_source: "chunks"}
-│
-Frontend: Poll GET /api/projects/1/testsets/5/kg-progress
-├─ Main App: GET {worker_url}/progress/1?kg_source=chunks
-├─ Worker: Check _active_builds and return DB progress
-│
-Background (Worker):
-├─ Thread: fetch chunks, extract entities/edges, save to DB
-├─ Update kg_metadata, kg_build_progress tables
-│
-Frontend: Receive {active: true, stage: "building_knowledge_graph", percentage: 35}
-├─ Display progress
-└─ Poll again every 2s until {active: false, status: "completed"}
-```
+---
 
-### 3. Apply Suggestion
+## evaluation/
 
-```
-Frontend: POST /api/projects/1/experiments/10/suggestions/2/apply
-├─ Request: {suggestion_id: 2}
-│
-Main App:
-├─ Fetch suggestion: {target_field: "top_k", new_value: 10}
-├─ Fetch original RAG config
-├─ Create new config with top_k=10
-├─ Create new experiment with new config
-└─ Return new experiment ID
+### scoring.py -- metric registry + evaluate_experiment_row
 
-Frontend: Redirect to experiment comparison view
-└─ Compare metrics: old config vs new config
-```
+ALL_METRICS (26 entries):
+  faithfulness, answer_relevancy, context_precision, context_recall,
+  context_entities_recall, noise_sensitivity, factual_correctness,
+  semantic_similarity, non_llm_string_similarity, bleu_score, rouge_score,
+  chrf_score, exact_match, string_presence, summarization_score, aspect_critic,
+  rubrics_score, answer_accuracy, context_relevance, instance_rubrics,
+  response_groundedness, refusal_accuracy, conversation_retention,
+  sql_semantic_equivalence, datacompy_score, multi_llm_judge
+
+setup_scorers(metrics, custom_configs, rubrics) -> (builtin_scorers, custom_scorers, llm)
+[] metrics -> no built-in metrics; multi_llm_judge excluded (separate execution path)
+
+_SCORE_SIGNATURES -- 13 call patterns:
+- metadata_refusal: refusal_accuracy, conversation_retention (conditional on metadata)
+- metadata_sql: sql_semantic_equivalence (needs reference_sql)
+- metadata_data: datacompy_score (needs reference_data)
+
+evaluate_experiment_row() -- asyncio.gather(); each with with_backoff(attempts=2)
+inside wait_for(METRIC_SCORING_TIMEOUT); errors always return None.
+
+### metrics/ -- notable modules
+
+| Module | Special notes |
+|--------|--------------|
+| refusal_accuracy.py | Only on expected_behavior=refusal; refused(1.0)/hedged(0.5)/fabricated(0.0) |
+| conversation_retention.py | Only when metadata._transcript present; retained/partial/forgot |
+| multi_llm_judge.py | N parallel evaluators at linearly-spaced temps; per-claim annotations |
+| custom_metric.py | 4 scoring functions: integer_range, similarity, rubrics, instance_rubrics |
+| testgen.py | generate_testset_from_chunks/with_personas, build_kg_standalone |
+| sql_semantic_equivalence.py | Uses metadata.reference_sql + metadata.schema_contexts |
+| datacompy_score.py | Uses metadata.reference_data (structured data comparison) |
+| tool_call_accuracy.py | Exact-match tool call name + args |
+| tool_call_f1.py | F1 over predicted vs expected tool call set |
+| topic_adherence.py | Embedding similarity of response to expected topic |
+| agent_goal_accuracy.py | Whether multi-step agent achieved the declared goal |
+
+### skills/
+
+parser.py: parse_skill(content) -> {name, summary, directives[]}
+_extract_json_object() also used by prompt-doctor in analyze.py
+
+adherence.py: judge_adherence(question, answer, directives, judge_model):
+per-directive verdict; deterministic (format) vs semantic split;
+returns {score, results[{directive, verdict, deterministic}]}
+
+### suggestions.py
+
+GUARDRAIL_SNIPPETS -- 7 system-prompt additions:
+grounding, refusal, noise_filter, directness, phased_reasoning, persona, clarify_edge
+
+generate_suggestions rules:
+- context_recall < 0.7 -> top_k +5; context_precision < 0.7 -> top_k -2
+- faithfulness < 0.7 -> grounding snippet; refusal_accuracy < 0.7 -> refusal snippet
+- answer_relevancy < 0.7 -> response_mode=multi_step
+- Category gap > 0.2 below overall average -> targeted snippet (_category_rules)
+
+apply_config_change: system_prompt_append appends (does not replace);
+relative deltas (+5/-2) for numeric fields; returns (updated_fields, changes)
+
+### testset_quality.py / stats.py
+audit_test_set() -- per-question quality flags + score
+bootstrap_ci(values) -- 95% CI; paired_delta_verdict() -- per-metric verdict
+
+---
+
+## db/init.py -- Schema + Dual Backend
+
+30+ tables:
+
+| Table | Notable columns |
+|-------|----------------|
+| projects | judge_model_assignments_json, preferred_model, owner_id |
+| users | email (unique), name, password_hash, role (admin/user) |
+| project_members | project_id, user_id, role; UNIQUE(project_id, user_id) |
+| chunk_configs | step2_method/step2_params_json; filter_params_json |
+| chunks | parent_chunk_id; embedding_blob |
+| embedding_configs | type: dense_openai / dense_sentence_transformers / bm25_sparse |
+| rag_configs | search_type, sparse_config_id, alpha, reranker_model, reranker_top_k |
+| test_questions | category, metadata_json (source_chunk_ids, turns, expected_behavior) |
+| experiments | bot_config_id, baseline_experiment_id, retrieval_config_json snapshot |
+| experiment_results | retrieved_contexts, metrics_json, metadata_json |
+| suggestions | config_field, suggested_value, applied_experiment_id, outcome_json |
+| multi_llm_evaluations | evaluator_index, verdict, claims_json, reasoning |
+| evaluator_claim_annotations | human claim-level feedback; UNIQUE(evaluation_id, claim_index) |
+| knowledge_graphs | kg_source, chunk_config_id; UNIQUE(project_id, kg_source) |
+| custom_metrics | metric_type (6 types), refined_prompt, few_shot_examples_json |
+| skills | content, parsed_directives_json; UNIQUE(project_id, name, version) |
+| skill_trials | models_json, include_baseline |
+| skill_trial_results | directive_results_json, trace_json, tokens_in/out, latency_ms |
+| api_configs | per-project custom API endpoint; UNIQUE(project_id) |
+
+Dual backend: _USE_PG = bool(DATABASE_URL); _PgConnection/_PgCursor wrappers
+convert ? -> %s, auto-append RETURNING id, %% escapes literal %.
+Migration: _add_column_if_missing() on every init_db(); ~25 incremental migrations.
+
+Connection model:
+- Main thread: single module-level _connection
+- Background threads: threading.local() via get_thread_db()
+- PG health-checked with SELECT 1, auto-reconnect on close
+- NOW_SQL and json_extract_sql() provide backend-aware SQL fragments
+
+---
+
+## Key Flows
+
+### 1. Startup
+
+    uvicorn main:app
+      |-- langchain_community shim injected
+      |-- load_dotenv()
+      |-- lifespan: init_db() -> _connection set
+      |-- _monitor_worker_experiments task (30s poll)
+      |-- 19 routers, SPA configured
+      |-- ready
+
+### 2. Experiment Run
+
+    POST /api/projects/1/experiments/10/run
+      |-- atomic UPDATE status to running
+      |-- try worker delegation (bot exps only) -> set_worker or run local
+      |-- asyncio.create_task(_run_background)
+      |   |-- setup_scorers()
+      |   |-- Semaphore(concurrency) limits parallel questions
+      |   |-- for each question:
+      |   |   |-- multi-turn: play setup turns, accumulate chat_history
+      |   |   |-- RAG: single_shot_query or multi_step_query
+      |   |   |-- evaluate_experiment_row() -> asyncio.gather
+      |   |   |-- retrieval_diagnostics() for RAG (no LLM)
+      |   |-- INSERT results, UPDATE status=completed
+    GET .../progress (SSE) -> snapshot_progress every 2s, heartbeat every 15s
+
+### 3. Suggestion Apply -> Verify
+
+    POST .../suggestions/generate
+      |-- generate_suggestions() -> DELETE old + INSERT new
+
+    POST .../suggestions/42/apply
+      |-- apply_config_change() -> INSERT cloned rag_config with change
+      |-- INSERT experiment (pending, baseline_experiment_id=original)
+      |-- UPDATE suggestion: implemented=TRUE, applied_experiment_id=new_eid
+
+    GET .../suggestions (after new experiment completes)
+      |-- _resolve_outcome() -> paired_delta_verdict per metric
+      |-- verdict cached in suggestions.outcome_json
+
+### 4. Skill Trial
+
+    POST /api/projects/1/skill-trials
+      |-- parse_skill() validates directives
+      |-- run_skill_trial(trial_id) asyncio task
+      |   |-- cells: (skill|baseline) x models x questions
+      |   |-- each: query -> judge_adherence -> TraceRecorder -> INSERT results
+      |-- aggregate_trial_matrix() -> lift = skill - baseline per model
+
+---
+
+## Key Patterns
+
+### Shared Connection (get_db)
+Main thread reuses _connection; background threads use threading.local.
+No ORM, no connection pool library.
+
+### Metric Registry (ALL_METRICS / _METRIC_MODULES)
+Factory pattern: create_scorer() + async score(). _SCORE_SIGNATURES groups by
+argument shape; _score_builtin builds partial(). multi_llm_judge in ALL_METRICS
+for UI but NOT in _METRIC_MODULES (separate execution path).
+
+### ProgressStore (experiment_runs / skill_trial_runs)
+threading.RLock protects all state. mutate_progress applies fn under lock.
+snapshot_progress returns deep copy for safe SSE serialization.
+Two separate ProgressStore instances for experiments vs skill trials.
+
+### Retry Pattern (with_backoff)
+Centralized in pipeline/retry.py. Covers httpx, openai SDK, requests.
+Metric scorers additionally wrapped in asyncio.wait_for(METRIC_SCORING_TIMEOUT).
+
+### Middleware Auth Flow
+
+    _AuthMiddleware.dispatch
+      |-- exempt path? -> pass through
+      |-- _auth_is_active? (lazy cache, flips True once)
+      |    False -> optional RAGAS_API_KEY bearer check
+      |    True  -> resolve_request_user (cookie OR machine bearer)
+      |             None -> 401
+      |    project path? -> user_can_access_project
+      |             False -> 403
+      |-- request.state.user = user -> call_next
+
+---
 
 ## External Dependencies
 
-**Core**:
-- `fastapi` — Web framework
-- `uvicorn` — ASGI server
-- `pydantic` — Request validation
-- `python-dotenv` — Env var loading
-
-**Database**:
-- `sqlite3` — Bundled (dev/self-host)
-- `psycopg2-binary` — PostgreSQL (production)
-
-**RAG Pipeline**:
-- `ragas` — Metrics, KG extraction, testgen
-- `langchain-text-splitters` — Chunking strategies
-- `chromadb` — Vector search
-- `bm25-pt` — Sparse ranking
-
-**LLM**:
-- `openai` — OpenAI API
-- `anthropic` — Claude API
-- `google-generativeai` — Gemini API
-
-**Utilities**:
-- `httpx` — Async HTTP (worker delegation, bot calls)
-- `pypdf` — PDF parsing
-- `python-docx` — DOCX parsing
+Core: fastapi, uvicorn, pydantic, python-dotenv
+Database: sqlite3 (bundled), psycopg2-binary (PostgreSQL/Neon)
+RAG Pipeline: ragas, langchain-text-splitters, chromadb, bm25-pt
+LLM: openai, anthropic, google-generativeai
+Auth: argon2-cffi, itsdangerous
+Utilities: httpx (async HTTP), pypdf, python-docx
+Optional: langfuse (skill trial tracing, env-keyed)
 
 ## Related Areas
-
-- [Worker Service](./worker.md) — KG builder offloading
-- [Frontend](./frontend.md) — React SPA
-- [CLAUDE.md](../../CLAUDE.md) — Quick reference
+- Worker Service (docs/CODEMAPS/worker.md) -- KG builder + experiment runner offloading
+- Frontend (docs/CODEMAPS/frontend.md) -- React SPA
+- CLAUDE.md -- Quick reference

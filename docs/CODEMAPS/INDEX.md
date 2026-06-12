@@ -1,79 +1,55 @@
-# RAG Evaluator Codemaps
+# Tribunal Codemaps
 
-**Last Updated:** 2026-04-24
+**Last Updated:** 2026-06-13
 
-This directory contains architectural maps of the RAG Evaluator codebase, organized by functional area.
+This directory contains architectural maps of the Tribunal (RAG Evaluator) codebase, organized by functional area.
 
 ## Overview
 
-RAG Evaluator is a distributed LLM-as-a-judge platform for testing RAG pipelines. The codebase is split into:
+Tribunal is an LLM-as-a-judge platform for testing AI agents — internal RAG pipelines built in-app, or external agents called via API — with a full diagnose → fix → verify loop. The codebase is split into:
 
-1. **Main Application** (`/`) — FastAPI server, web UI, metrics, suggestion engine
-2. **Worker Service** (`/worker`) — Offloaded knowledge graph construction
-3. **Frontend** (`/frontend`) — React/TypeScript SPA
+1. **Main Application** (`/`) — FastAPI server, auth, RAG pipeline, 26 metrics, suggestion engine + prompt doctor, Skill Arena, insights (quality audit / coverage / breakdowns / CI gate)
+2. **Worker Service** (`/worker`) — offloaded KG construction and persona generation; imports the main app's shared modules (no forked code)
+3. **Frontend** (`/frontend`) — React/TypeScript SPA with login, guided Start flow, and live experiment streaming
 
 ## Codemaps
 
 | Area | Purpose | Entry Point |
 |------|---------|-------------|
-| [Worker Service](./worker.md) | Knowledge graph builder — memory-intensive async task processor | `worker/main.py` |
-| [Main App Architecture](./main.md) | RAG pipeline, evaluation metrics, test generation, suggestions | `main.py` |
-| [Frontend](./frontend.md) | React SPA — project management, experiment runner, results viewer | `frontend/src/main.tsx` |
+| [Main App Architecture](./main.md) | Routes, services, pipeline, evaluation, auth, database | `main.py` |
+| [Worker Service](./worker.md) | KG builds + persona generation on shared modules | `worker/main.py` |
+| [Frontend](./frontend.md) | React SPA — auth, guided flow, runner, analysis, Skill Arena | `frontend/src/main.tsx` |
 
 ## Key Abstractions
 
-### God Nodes (Most Connected)
-From the graphify report, these are the core abstractions that most other code depends on:
+The load-bearing pieces most other code depends on:
 
-1. `get_db()` (119 edges) — Database connection factory
-2. `request()` (66 edges) — HTTP client for worker/external APIs
-3. `chunk_text()` (39 edges) — Chunking pipeline
-4. `BotResponse` (36 edges) — Unified bot connector response type
-5. `TestGenRequest` (26 edges) — Test generation request model
-6. `TestSetCreate` (26 edges) — Test set creation request
-7. `QuestionAnnotation` (26 edges) — Human annotation request
-8. `BulkAnnotation` (26 edges) — Bulk annotation request
-9. `Citation` (24 edges) — Source citation model
-10. `chat_completion()` (21 edges) — LLM completion wrapper
-
-### Community Structure (43 Communities)
-
-Key functional clusters:
-- **Suggestions & Annotation API** — Suggestion generation, human feedback
-- **Test Generation & Bulk Operations** — Testset synthesis, bulk actions
-- **Multi-LLM Judge & Source Verification** — Multi-model evaluation, citation validation
-- **Retrieval & Embedding Dispatch** — RAG retrieval, embedding selection
-- **Custom Metrics Engine** — Per-project metric definitions
-- **Frontend Annotation & API Client** — Web UI components and API integration
-
-See `graphify-out/GRAPH_REPORT.md` for the full community map.
-
-## Development Workflow
-
-### Before Modifying Code
-
-1. Check graphify report for related nodes and communities
-2. Read the relevant codemap for architectural context
-3. Identify god nodes that may be affected
-
-### After Modifying Code
-
-Keep the knowledge graph current:
-
-```bash
-python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"
-```
+| Abstraction | Where | Why it matters |
+|---|---|---|
+| `get_db()` / `get_thread_db()` | `db/init.py` | Single data layer, SQLite/PostgreSQL dual backend, raw SQL (no ORM) |
+| `chat_completion()` | `pipeline/llm.py` | All LLM calls route here (provider detection + gateway mode) |
+| `with_backoff()` | `pipeline/retry.py` | Retry/backoff wrapper used by every LLM/HTTP call path |
+| `BotConnector` protocol | `pipeline/bot_connectors/base.py` | 7 connectors; all accept `system_context` and `history` kwargs |
+| `evaluate_experiment_row()` | `evaluation/scoring.py` | Metric dispatch (signature groups incl. metadata-gated metrics) |
+| `ProgressStore` | `app/services/progress.py` | Lock-guarded run state shared by runners and SSE observers |
+| `_AuthMiddleware` | `app/__init__.py` | Sessions + per-project access; open mode until first user registers |
+| `GUARDRAIL_SNIPPETS` | `evaluation/suggestions.py` | Applyable prompt fixes tied to failure signals |
 
 ## Database Schema
 
-Both main app and worker share the same database (PostgreSQL or SQLite):
+Main app and worker share one database (SQLite or PostgreSQL via `DATABASE_URL`), initialized and migrated **only** by `db/init.py` (the worker imports the same module). Core tables: `users`, `project_members`, `projects`, `documents`, `chunk_configs`, `chunks`, `embedding_configs`, `rag_configs`, `test_sets`, `test_questions`, `bot_configs`, `experiments`, `experiment_results`, `suggestions`, `skills`, `skill_trials`, `skill_trial_results`, `knowledge_graphs`, `multi_llm_evaluations`, `personas`, `custom_metrics`, `human_annotations`, `external_baselines`, `source_verifications`.
 
-- **Main app** initializes schema via `db/init.py`
-- **Worker** initializes its KG-specific tables via `worker/db/init.py`
-- Both can be run against the same connection string
+## Development Workflow
+
+1. Read the relevant codemap before structural changes.
+2. New route modules: `router = APIRouter(prefix=..., tags=[...])`, register in `app/__init__.py`; project-scoped paths get access control from the middleware automatically.
+3. New metrics: async module in `evaluation/metrics/`, wire into `scoring.py` (`ALL_METRICS`, `_METRIC_MODULES`, a signature group, and the dependency set) and the frontend metric catalog (`frontend/src/components/experiment/runner/MetricSelection.tsx`).
+4. Verify: `ruff check .`, `pytest tests/unit tests/integration -m "not slow"`, `cd frontend && npx tsc --noEmit && npm run build && npx eslint src`.
 
 ## Related Documentation
 
 - [CLAUDE.md](../../CLAUDE.md) — Project overview, commands, architecture at a glance
-- [README.md](../../README.md) — Problem statement, design principles, metrics guide
+- [README.md](../../README.md) — Problem statement, design, metrics guide, deployment
 - [docs/FEATURES.md](../FEATURES.md) — Feature-by-feature guide with motivation
+- [docs/WORKFLOW.md](../WORKFLOW.md) — End-to-end user walkthrough
+- [docs/IMPROVEMENT_PLAN.md](../IMPROVEMENT_PLAN.md) — The v0.4 overhaul audit, plan, and execution log

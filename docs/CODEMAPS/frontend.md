@@ -1,433 +1,398 @@
 # Frontend Codemap
 
-**Last Updated:** 2026-04-24  
+**Last Updated:** 2026-06-13  
 **Entry Point:** `frontend/src/main.tsx`  
-**Tech Stack:** React 18 + TypeScript + Vite + Tailwind CSS
+**Tech Stack:** React 18 + TypeScript + Vite + Tailwind CSS (dark-theme design system)
+
+---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              React SPA (Vite Dev Server)              │
-│           localhost:5173 (dev) or /app/ (prod)        │
-├──────────────────────────────────────────────────────┤
-│                                                       │
-│ frontend/src/main.tsx ──→ App.tsx                    │
-│                                                       │
-│ App.tsx                                               │
-│ ├─ Router setup (React Router v6)                    │
-│ ├─ Project context + API client                      │
-│ └─ Layout: Header, Sidebar, Outlet                   │
-│                                                       │
-│ Pages (src/pages/)                                   │
-│ ├─ ProjectsPage         — List workspaces            │
-│ ├─ ProjectPage          — Project dashboard          │
-│ ├─ DocumentsPage        — Upload, chunk preview      │
-│ ├─ RAGConfigPage        — Pipeline configuration     │
-│ ├─ TestSetPage          — Test generation, KG view   │
-│ ├─ ExperimentPage       — Run evaluation             │
-│ ├─ ResultsPage          — Per-question metrics       │
-│ ├─ SuggestionsPage      — Recommendations            │
-│ └─ ComparisonPage       — Two-experiment delta       │
-│                                                       │
-│ Components (src/components/)                         │
-│ ├─ ProjectSelector      — Dropdown to switch project │
-│ ├─ DocumentUploader     — File upload + drag-drop    │
-│ ├─ ChunkPreview         — Show chunks before commit  │
-│ ├─ ConfigEditor         — RAG config builder         │
-│ ├─ ExperimentRunner     — Start run + progress       │
-│ ├─ ResultsTable         — Per-question scores        │
-│ ├─ MetricsChart         — Bar/line charts            │
-│ ├─ SuggestionCard       — Individual recommendation  │
-│ ├─ ComparisonChart      — Before/after delta         │
-│ └─ BotConnectorForm     — Add external bot          │
-│                                                       │
-│ lib/ (src/lib/)                                      │
-│ ├─ api.ts               — API client (httpx-like)   │
-│ ├─ types.ts             — TypeScript types (synced) │
-│ ├─ hooks.ts             — Custom React hooks        │
-│ └─ utils.ts             — Formatting, parsing, etc.  │
-│                                                       │
-│ styles/ (src/styles/)                                │
-│ ├─ global.css           — Tailwind + custom vars    │
-│ └─ components.css       — Reusable patterns         │
-│                                                       │
-└──────────────────────────────────────────────────────┘
-       │
-       └──→ API calls to /api/... endpoints
-            (handled by main app)
+main.tsx
+  BrowserRouter (basename="/app")
+    App.tsx
+      ErrorBoundary
+        AuthProvider
+          ProjectProvider
+            Routes
+              /login             -> LoginPage  (outside WorkspaceLayout)
+              WorkspaceLayout    (auth guard + project guard)
+                /start           -> StartPage
+                /setup           -> SetupPage
+                /build           -> BuildPage
+                /test            -> TestPage
+                /experiment      -> ExperimentPage
+                /analyze         -> AnalyzePage
+                /knowledge-graph -> KnowledgeGraphPage
+                /personas        -> PersonasPage
+                /skills          -> SkillsPage
+                /workers         -> WorkersPage
+              /* redirect to /start
 ```
 
-## Key Modules
+---
 
-### src/main.tsx
-- Entry point for Vite
-- Mounts React app to `<div id="root">`
-- Imports global CSS
+## Entry / Bootstrap
 
-### src/App.tsx
-- **React Router** setup with protected routes
-- **ProjectContext** — Current project state
-- **API Client** — Singleton httpx-like client
-- Layout: Navbar + Sidebar + Page outlet
-- Error boundary
+| File | Role |
+|------|------|
+| `frontend/vite.config.ts` | `base: "/app/"`, proxy `/api` -> `http://localhost:8000`, outDir `dist` |
+| `frontend/src/main.tsx` | Creates root, wraps in `BrowserRouter basename="/app"`, mounts App |
+| `frontend/src/App.tsx` | `ErrorBoundary > AuthProvider > ProjectProvider > Routes`; login route is outside the layout wrapper |
+| `frontend/src/index.css` | Tailwind directives, reduced-motion media query, scrollbar theming |
 
-### src/pages/
+---
 
-#### ProjectsPage
-- List all workspaces
-- Create new project
-- Delete project
-- Each row is clickable → navigate to ProjectPage
+## Contexts
 
-#### ProjectPage (Dashboard)
-- Shows project details
-- Tabs:
-  1. **Documents** → DocumentsPage
-  2. **Configurations** → RAGConfigPage
-  3. **Test Sets** → TestSetPage
-  4. **Experiments** → ExperimentListPage
-  5. **Suggestions** → SuggestionsPage
+| File | Role |
+|------|------|
+| `contexts/AuthContext.tsx` | status->me two-step init: calls `fetchAuthStatus` first, then `fetchCurrentUser` when auth is enabled. Exposes `user`, `loading`, `authEnabled`, `registrationOpen`, `refresh`, `logout`. Listens for `tribunal:unauthorized` window event to clear user and trigger route-guard redirect. Open mode (`authEnabled=false`) never redirects anywhere. |
+| `contexts/ProjectContext.tsx` | Holds the active `Project` object; persists to/from `localStorage` under key `ragas_selected_project`. Exposes `project`, `setProject`, `clearProject`. |
 
-#### DocumentsPage
-- Upload .txt, .pdf, .docx (up to 50MB)
-- Drag-drop upload
-- List uploaded documents
-- Delete document
-- **Preview Chunks**: Show how document splits (before committing)
-  - Select strategy (recursive, markdown, etc.)
-  - Select chunk size / overlap
-  - Show 10 sample chunks
-  - Commit or adjust
+---
 
-#### RAGConfigPage
-- Create/edit RAG configuration
-- Fields:
-  - Chunk Config (strategy + size)
-  - Embedding Config (model, dense vs sparse)
-  - Search Type (dense, sparse, hybrid)
-  - LLM Model (with gateway support)
-  - System Prompt
-  - Response Mode (single-shot vs multi-step)
-  - Top-K for retrieval
-  - Custom Headers for API calls
-- Preview config before save
-- Reuse existing configs
+## Layouts
 
-#### TestSetPage
-- **Test Generation**:
-  - Select chunk config
-  - Choose generation method:
-    1. Auto-generate from chunks
-    2. Auto-generate with personas (6 templates + custom)
-  - Set testset size (1-400 questions)
-  - Stream generation progress
-- **Knowledge Graph**:
-  - Build KG from chunks or documents
-  - Set `overlap_max_nodes` (typical: 500)
-  - Progress bar (polls backend every 2s)
-  - View KG as graph (nodes = entities, edges = relations)
-  - Delete KG
-- **Question Management**:
-  - List all questions
-  - Filter by status (pending, approved, rejected, edited)
-  - Mark as approved/rejected
-  - Edit question or reference contexts
-  - Bulk actions (approve all, reject all)
-  - Export to CSV
-
-#### ExperimentPage
-- Select test set + RAG config (or external bot)
-- Choose metrics (20+ options)
-- Optional: Enable multi-LLM judge (2-5 judges)
-- Start experiment → streams progress via EventSource
-  - Updates: stage, metric, progress percentage
-  - Display spinner + progress bar
-- Once complete: redirect to ResultsPage
-
-#### ResultsPage
-- Per-question view:
-  - Question text
-  - Retrieved contexts (numbered list)
-  - Bot's answer
-  - Citations (if available)
-  - Score for each metric
-  - Color-coded: red (< 0.4), yellow (0.4-0.7), green (>= 0.7)
-- Aggregate view:
-  - Mean + std dev per metric
-  - Bar chart of metric scores
-  - Heatmap: questions vs metrics
-- Filter:
-  - By metric (show only low/medium/high scores)
-  - By question (search)
-- Actions:
-  - Annotate (human rating: accurate, partial, inaccurate)
-  - View judge verdicts (if multi-LLM enabled)
-  - Export to CSV
-
-#### SuggestionsPage
-- List generated suggestions for experiment
-- Each suggestion shows:
-  - Issue (e.g., "Low context_recall")
-  - Root cause
-  - Recommendation (e.g., "Increase top_k from 5 to 10")
-  - Confidence score
-- Apply suggestion:
-  - Creates new RAG config with change
-  - Optionally runs new experiment
-- Batch apply:
-  - Select multiple suggestions
-  - Apply all at once
-  - Compare old vs new metrics
-
-#### ComparisonPage
-- Two-experiment comparison
-- Metrics table:
-  - Metric name | Old score | New score | Delta | % change
-- Per-question comparison:
-  - Questions where score improved/degraded/unchanged
-- Line chart showing metric improvements
-
-### src/components/
-
-#### ProjectSelector
-```tsx
-<ProjectSelector 
-  value={projectId} 
-  onChange={setProjectId}
-  projects={projects}
-/>
-```
-- Dropdown showing all projects
-- Quick-switch between workspaces
-
-#### DocumentUploader
-```tsx
-<DocumentUploader 
-  projectId={projectId}
-  onUpload={refreshDocuments}
-/>
-```
-- Drag-drop zone
-- File picker
-- Shows upload progress
-- Validates file type + size
-- Calls POST /api/projects/{p}/documents
-
-#### ChunkPreview
-```tsx
-<ChunkPreview 
-  chunks={chunks}
-  selectedStrategy={strategy}
-  onStrategyChange={setStrategy}
-/>
-```
-- Shows 10 sample chunks
-- Strategy dropdown
-- Chunk size / overlap sliders
-- Live preview updates
-- "Commit" button to save config
-
-#### ConfigEditor
-- RAG config form builder
-- Dropdown selects for all enum fields
-- Text input for system prompt
-- "Save" calls PUT /api/projects/{p}/rag-configs/{id}
-
-#### ExperimentRunner
-```tsx
-<ExperimentRunner 
-  testsetId={testsetId}
-  ragConfigId={ragConfigId}
-  selectedMetrics={metrics}
-  onProgress={setProgress}
-  onComplete={setExperimentId}
-/>
-```
-- Form: testset + config + metrics
-- Button: "Run Experiment"
-- SSE listener: GET /api/projects/{p}/experiments/{id}/progress
-- Shows progress bar + current metric
-- Auto-redirects when complete
-
-#### ResultsTable
-```tsx
-<ResultsTable 
-  results={results}
-  metrics={metrics}
-  filterBy={filterValue}
-/>
-```
-- Virtualized table (infinite scroll)
-- Columns: Question, Answer, Metric Scores
-- Sortable by metric score
-- Color-coded cells
-- Row click → expand to see contexts
-
-#### MetricsChart
-```tsx
-<MetricsChart 
-  metrics={metrics}
-  scores={scores}
-/>
-```
-- Bar chart: metric names vs mean score
-- Error bars: std dev
-- Color-coded: red/yellow/green
-- Hover: show exact value
-
-#### SuggestionCard
-```tsx
-<SuggestionCard 
-  suggestion={suggestion}
-  onApply={applySuggestion}
-/>
-```
-- Title: issue + confidence
-- Body: root cause + recommendation
-- Button: "Apply" or "Learn more"
-
-### src/lib/
-
-#### api.ts (API Client)
-```typescript
-const client = new APIClient(baseURL: '/api')
-
-// Async request wrapper with error handling
-client.get('/projects')
-client.post('/projects/{p}/experiments', payload)
-client.put('/projects/{p}/rag-configs/{id}', payload)
-client.delete('/projects/{p}/documents/{id}')
-
-// SSE stream
-client.stream('/projects/{p}/experiments/{id}/progress', 
-  (event) => updateProgress(event))
-```
-
-**Features**:
-- Global error handling (show toast on 4xx/5xx)
-- Request/response logging
-- Auth header injection (if `RAGAS_API_KEY` set)
-- TypeScript generics for type-safe responses
-- Automatic JSON serialization
-
-#### types.ts (TypeScript Types)
-- Synced from backend `app/models.py` via code generation
-- All request/response types
-- Enums for valid values
-- Union types for discriminated variants
-
-#### hooks.ts (Custom React Hooks)
-```typescript
-useProject()              // Get current project from context
-useExperiment(id)         // Fetch experiment + cache
-useResults(experimentId)  // Paginated results
-useMetricsForExperiment(id) // Metric config
-useSSEStream(url)         // SSE event listener
-```
-
-#### utils.ts
-```typescript
-formatScore(score: number) // "0.85 (85%)"
-scoreToColor(score)        // "red" | "yellow" | "green"
-formatDelta(delta: number) // "+0.15" or "-0.08"
-exportToCSV(data)          // Download CSV file
-debounce(fn, ms)           // Debounce function
-```
-
-### src/styles/
-
-#### global.css
-- Tailwind directives
-- Custom CSS variables (colors, spacing, fonts)
-- Form styling
-- Animation classes
-- Dark mode support (if needed)
-
-## Data Flow Example: Run Experiment
+### WorkspaceLayout (`layouts/WorkspaceLayout.tsx`)
 
 ```
-Frontend:
-  1. User selects testset + RAG config + metrics
-  2. Click "Run Experiment"
-  3. POST /api/projects/{p}/experiments
-     {
-       "testset_id": 5,
-       "rag_config_id": 3,
-       "metrics": ["faithfulness", "answer_relevancy", ...],
-       "bot_config_id": null (use RAG) or 2 (use bot)
-     }
-
-Backend:
-  4. Create experiment row
-  5. Return {experiment_id: 10}
-
-Frontend:
-  6. Open EventSource: GET /api/projects/{p}/experiments/10/progress
-  7. Render progress modal with spinner
-  8. Receive SSE events:
-     - {stage: "loading_testset", progress: 10}
-     - {stage: "scoring_faithfulness", progress: 15}
-     - {stage: "scoring_answer_relevancy", progress: 25}
-     - {stage: "complete", progress: 100}
-
-Backend:
-  9. For each question:
-     - Call RAG or bot
-     - Score with all metrics
-     - Store result
-     - Emit SSE event with progress
-
-Frontend:
-  10. When progress === 100, close EventSource
-  11. Redirect to /projects/{p}/experiments/10/results
-  12. Fetch GET /api/projects/{p}/experiments/10/results
-  13. Render results table + charts
-
-User:
-  14. View per-question scores
-  15. Click "View Suggestions" → Fetch suggestions
-  16. Select suggestion → Apply → Create new config → Re-run
+WorkspaceLayout
+  Auth guard: if authLoading          -> full-screen Spinner
+              if authEnabled && !user  -> Navigate /login
+              open mode               -> never redirects
+  Project guard: if !project && not on /setup -> Navigate /setup
+  Desktop sidebar (w-60, hidden on mobile)
+    Logo "R" badge
+    Stepper (scrollable nav)
+    SidebarFooter
+  Mobile drawer (fixed, slide-in, toggled by hamburger)
+    same Stepper + SidebarFooter
+  Header bar
+    Hamburger (mobile only)
+    "Pipeline Workspace" title
+    ProjectSelector (dropdown)
+  <main> bg-deep
+    <Outlet /> (page content)
 ```
 
-## Build & Deployment
+`SidebarFooter` shows `user.name` + Admin badge + email when `authEnabled && user`; Sign Out calls `logout()` then navigates to `/login`. Always shows `v{version}`.
 
-### Development
-```bash
-cd frontend
-npm install
-npm run dev      # Vite dev server on :5173
+### Stepper (`components/Stepper.tsx`)
+
+Six pipeline stages plus four utility links below a separator:
+
+| Step | Path | Locked when |
+|------|------|-------------|
+| -> Start | `start` | never |
+| 01 Setup | `setup` | never |
+| 02 Build | `build` | no project |
+| 03 Test | `test` | no project |
+| 04 Experiment | `experiment` | no project |
+| 05 Analyze | `analyze` | no project |
+| (separator) | | |
+| Knowledge Graphs | `knowledge-graph` | never |
+| Personas | `personas` | never |
+| Skill Arena | `skills` | never |
+| Workers | `workers` | never |
+
+Stage completion ticks: `useStageCompletion` polls six API endpoints in parallel on every pathname change (`docs, chunkConfigs, embeddingConfigs, ragConfigs, testSets, experiments`). Completed stages show a checkmark badge (emerald). Active stage shows accent-glow background + left accent bar.
+
+---
+
+## API Layer
+
+### `api/client.ts` -- shared core
+
+| Symbol | Purpose |
+|--------|---------|
+| `ApiError` | `Error` subclass with `.status: number` |
+| `UNAUTHORIZED_EVENT` | `"tribunal:unauthorized"` -- window event constant |
+| `request<T>` | JSON fetch wrapper; fires `UNAUTHORIZED_EVENT` on non-auth 401; returns `undefined` on 204 |
+| `formRequest<T>` | FormData POST; same error handling |
+
+Auth-endpoint exemption: `notifyUnauthorized` skips dispatch for paths starting `/api/auth/` so login probes do not trigger global sign-out.
+
+### `api/index.ts` -- barrel re-exporting all domain modules and types
+
+### `api/types.ts` -- all shared TypeScript interfaces (no runtime code)
+
+### Domain modules (15)
+
+| Module | Purpose |
+|--------|---------|
+| `auth.ts` | `fetchAuthStatus`, `registerUser`, `loginUser`, `logoutUser`, `fetchCurrentUser`, user-admin CRUD, project membership |
+| `projects.ts` | Project CRUD, judge-model config, config defaults |
+| `documents.ts` | Document upload (`formRequest`), list, delete |
+| `chunks.ts` | Chunk config CRUD, chunk preview, chunk generate |
+| `embeddings.ts` | Embedding config CRUD, embed action |
+| `rag.ts` | RAG config CRUD, RAG test query |
+| `testsets.ts` | Test set CRUD, question annotation, bulk annotation, upload preview/confirm, generation progress polling, cancellation |
+| `personas.ts` | Saved persona CRUD, AI persona generation, bulk save |
+| `kg.ts` | KG build/reset/rebuild-links, progress polling, stream graph data (SSE ReadableStream), fetch all KGs, delete |
+| `experiments.ts` | Experiment CRUD, `runExperimentSSE` (POST /run + `observeExperimentProgress`), cancel, progress snapshot, results, export, suggestions, batch apply, prompt doctor, delta, compare, history, source verification |
+| `insights.ts` | Quality audit, corpus coverage, experiment category breakdown |
+| `annotations.ts` | Human annotation sample, create annotation, evaluator accuracy |
+| `metrics.ts` | Custom metric CRUD |
+| `workers.ts` | Worker status, clear persona/build tasks |
+| `skills.ts` | Skill CRUD, trial CRUD, trial matrix, trial results, apply preferred model |
+
+`lib/api.ts` is a one-line compatibility barrel: `export * from '../api'`
+
+---
+
+## Hooks
+
+| File | Behaviour |
+|------|-----------|
+| `hooks/useFetch.ts` | `useFetch<T>(fn, deps)` -- loads data with `{data, loading, error, reload}`. Generation counter prevents stale-resolution races on dep change or unmount. |
+| `hooks/usePolling.ts` | `usePolling(fn, intervalMs, active, onPersistentFailure?)` -- loop calls `fn()` returning `continue|stop`; tolerates transient errors; cuts off after 5 consecutive failures, sets `error`, calls `onPersistentFailure`. |
+| `hooks/useConfirm.ts` | `useConfirm<Id>()` -- arm/confirm inline-delete pattern; returns `{confirmingId, requestConfirm, clear, isConfirming}`. |
+| `hooks/useExperimentStream.ts` | `useExperimentStream({projectId, experiment, onComplete})` -- unified SSE lifecycle. Auto-reconnects on mount when experiment is running (pre-populates from progress snapshot). `startRun(opts)` POSTs `/run` then calls `observeExperimentProgress`. `RunState` discriminated union: idle | running | completed | error | connection_lost. Exposes `startRun`, `abort`, `refreshStatus`, `completedLog`, `elapsed`, `errorCount`, `experimentMeta`. |
+
+---
+
+## Pages
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| `LoginPage` | `/login` | Login + register tabs; open-mode shows first-admin bootstrap notice; redirects to `/start` when already authenticated |
+| `StartPage` | `/start` | Two-path progress card (external-agent vs RAG-pipeline); "What's next" highlight; step rows with completion ticks via four `useFetch` calls |
+| `SetupPage` | `/setup` | Project selection/creation; `BotConnectorConfig`; `ExternalBaselineUpload`; `CustomMetricBuilder`; `CsvUploadsList`; `ProjectMembersPanel` (auth mode only) |
+| `BuildPage` | `/build` | Document upload + list; `ChunkConfigPanel` with chunk preview; `EmbeddingConfigPanel`; `RagConfigPanel`; `PipelineStatus` |
+| `TestPage` | `/test` | Test set list; inline question browser; `TestSetGenerate` wizard; `TestSetUpload` CSV import; `TestSetInsights` quality audit |
+| `ExperimentPage` | `/experiment` | Experiment list; `ExperimentCreate` form; single-experiment `ExperimentRunner` + `useExperimentStream`; multi-select compare (2-5) via `ExperimentCompare`; `ExperimentHistory` trend |
+| `AnalyzePage` | `/analyze` | Completed-experiment selector; `ExperimentResults`; `ExperimentSuggestions` + apply; `ExperimentDelta`; `SourceVerificationPanel`; `HumanAnnotationPanel`; `ProjectReportPanel` |
+| `KnowledgeGraphPage` | `/knowledge-graph` | Cross-project KG list via `KGCard`; graph streaming into `KGGraphView` + `KGNodeDetail` |
+| `PersonasPage` | `/personas` | Inline CRUD for saved personas (edit/delete with confirm) |
+| `SkillsPage` | `/skills` | `SkillLibrary` + `SkillUpload`; `TrialCreate`; `TrialList` -> `TrialMatrix` -> `TrialDrilldown` + `TraceTimeline`; apply preferred model |
+| `WorkersPage` | `/workers` | Worker health dashboard; task list per worker; `UserAccountsCard` (admin only) |
+
+---
+
+## Components
+
+### `components/ui/` -- primitives
+
+| Component | Purpose |
+|-----------|---------|
+| `Button` | Variant-aware button with `loading` spinner state |
+| `Card` | Surface container with `padding` prop |
+| `Label` | Form label |
+| `TextInput` | Styled `<input>` |
+| `TextArea` | Styled `<textarea>` |
+| `Select` | Styled `<select>` |
+| `FormField` | Label + children + optional hint wrapper |
+| `Spinner` | Animated loading indicator, `size` prop |
+| `ScoreBar` | Filled bar for 0-1 scores using score-high/mid/low thresholds |
+| `ErrorAlert` | Dismissible error message box |
+| `EmptyState` | Centered empty-content placeholder |
+| `ConfirmButtons` | Inline confirm/cancel pair for destructive actions |
+| `CopyButton` | Clipboard copy with visual feedback |
+
+All exported via `components/ui/index.ts` barrel.
+
+### `components/test/generate/` -- test-set generation wizard sub-components
+
+| Component | Purpose |
+|-----------|---------|
+| `SourceFields` | Chunk config selector, name, size, sample-size inputs |
+| `KGBuildPanel` | KG build/reset controls + `KgSourceInfoCard` status badge |
+| `PersonaSection` | AI-generated or manual persona editor; save to library |
+| `DistributionSliders` | Even-redistribution sliders for query-type or category percentages |
+| `GraphRagSection` | GraphRAG toggle, KG source (chunks vs documents), category sliders |
+| `GenerateProgress` | Live stage labels + progress bar + cancel; polls `fetchGenerationProgress` |
+| `constants.ts` | `QUERY_TYPES`, `QUESTION_CATEGORIES`, `GRAPH_RAG_CATEGORIES`, default distributions |
+
+### `components/test/` -- test set management
+
+| Component | Purpose |
+|-----------|---------|
+| `TestSetGenerate` | Full generation wizard orchestrating all `generate/` sub-components |
+| `TestSetUpload` | CSV upload -> `previewTestSetUpload` -> column mapping (question, answer, contexts, category, turns, ref_sql, schema_ctx, ref_data) -> `confirmTestSetUpload` |
+| `TestSetInsights` | Quality audit (quick/deep LLM) + corpus coverage panel |
+| `TestSetList` | List with status badges, select/delete |
+| `QuestionList` | Paginated question browser with approve/reject/edit inline |
+| `QuestionCard` | Individual question display with annotation controls |
+| `BulkActions` | Approve-all / reject-all / export CSV |
+
+### `components/experiment/runner/` -- experiment run controls
+
+| Component | Purpose |
+|-----------|---------|
+| `MetricSelection` | Checkbox grid with metric groups (LLM/NVIDIA/embedding/string/domain); `PRESET_RECOMMENDED` one-click; warns when context metrics selected but bot has no contexts |
+| `RubricsForm` | 5-level rubric criteria editor (score1-score5 descriptions); shown when `rubrics_score` selected |
+| `JudgeSettings` | Per-slot judge model + temperature; saves as project default via `updateProjectJudgeDefaults` |
+| `RunLog` | In-flight per-question pipeline display (`InFlightDetail`) + auto-scrolling completed Q&A feed |
+
+### `components/experiment/` -- experiment results and analysis
+
+| Component | Purpose |
+|-----------|---------|
+| `ExperimentRunner` | Wires `useExperimentStream`; renders `MetricSelection`, `RubricsForm`, `JudgeSettings`, run button, `RunLog` |
+| `ExperimentSuggestions` | Loads/generates suggestions; `PromptDoctorPanel` embedded; batch apply with outcome badges |
+| `PromptDoctorPanel` | Runs prompt-doctor LLM analysis; renders revised prompt + additions (persona/guardrail/phase) with `CopyButton` |
+| `CategoryBreakdown` | Per-category metric breakdown table with weakest-question list |
+| `ExperimentResults` | Per-question score table; metric aggregates with 95% CI; CSV export; embeds `MultiLLMJudgeDashboard` and `CategoryBreakdown` |
+| `ExperimentDelta` | Baseline vs iteration: `ConfigChange` list + per-metric `MetricDelta` with direction badges |
+| `ExperimentCompare` | Multi-experiment (2-5) side-by-side comparison via `CompareResult` |
+| `ExperimentHistory` | Score trend across all completed experiments |
+| `ExperimentCreate` | New experiment form: name, test set, RAG config or bot config selector |
+| `ExperimentList` | Sortable list with status badges, compare checkboxes, delete/reset |
+| `HumanAnnotationPanel` | Sample-based human rating (accurate/partial/inaccurate) + evaluator agreement stats |
+| `MultiLLMJudgeDashboard` | Judge reliability stats + claim annotation UI |
+| `MultiLLMJudgePanel` | Per-result judge verdict viewer |
+| `QuestionResultRow` | Expandable row: question, response, contexts, per-metric scores with color coding |
+| `SourceVerificationPanel` | Citation status (verified/hallucinated/inaccessible/unverifiable) per result |
+| `ProjectReportPanel` | Project-wide report: all experiments + bot summary |
+| `scoreUtils.ts` | `humanizeMetric`, `scoreBarColor`, `scoreBgColor`, `scoreTextColor`; thresholds: >= 0.8 high (emerald), >= 0.5 mid (amber), < 0.5 low (red) |
+
+Outcome badges on applied suggestions: `SuggestionOutcomeOverall` = improved | regressed | mixed | inconclusive; rendered inline in suggestion card after batch apply.
+
+### `components/skills/` -- Skill Arena
+
+| Component | Purpose |
+|-----------|---------|
+| `SkillUpload` | Upload/parse skill doc; classifies directives with `DirectiveKindBadge` (behavior/format/prohibition/tone) |
+| `SkillLibrary` | Lists skills with directive count; select to run trial |
+| `TrialCreate` | Form: skill, test set, model slots (LLM or bot config), include-baseline toggle |
+| `TrialList` | Trial history; polls running trials via `usePolling`; click row -> `TrialMatrix` |
+| `TrialMatrix` | Adherence/format/latency/token grid by model x variant (skill vs baseline); lift delta per model; apply-as-preferred-model action |
+| `TrialDrilldown` | Per-question per-directive verdict list for a selected matrix cell |
+| `TraceTimeline` | Gantt-style span bars (prepare/query/judge) from `TraceSpan[]` |
+
+### `components/setup/` -- setup panel components
+
+| Component | Purpose |
+|-----------|---------|
+| `BotConnectorConfig` | Bot connector CRUD (glean/openai/claude/deepseek/gemini/custom/csv) |
+| `ApiEndpointConfig` | Raw API endpoint + key + headers config |
+| `ExternalBaselineUpload` | Upload external Q&A CSV with column mapping |
+| `BaselinePreview` | Preview uploaded baseline rows |
+| `CsvUploadsList` | List of uploaded CSV baselines with row counts |
+| `CustomMetricBuilder` | Create/edit custom metrics with few-shot examples (integer_range/similarity/rubrics/instance_rubrics/criteria_judge/reference_judge) |
+| `ProjectMembersPanel` | Add/remove project members by email; shows owner + member list |
+
+### `components/admin/`
+
+| Component | Purpose |
+|-----------|---------|
+| `UserAccountsCard` | Lazy-loaded admin panel (expands on demand); role toggle per user; guards against removing last admin |
+
+### `components/kg/`
+
+| Component | Purpose |
+|-----------|---------|
+| `KGCard` | Per-KG status card with build/reset/rebuild-links controls; polls build progress inline |
+| `KGGraphView` | Graph render of streamed nodes + edges |
+| `KGNodeDetail` | Keyphrase and edge detail panel for a selected node |
+
+### Other components
+
+| Component | Purpose |
+|-----------|---------|
+| `ErrorBoundary` | Class component; catches render errors; shows fallback |
+| `ProjectSelector` | Dropdown to create/select project; stores selection in `ProjectContext` |
+
+---
+
+## Key Flows
+
+### Login / Auth Guard
+
+```
+1. main.tsx mounts BrowserRouter -> App.tsx
+2. AuthProvider.refresh():
+   GET /api/auth/status
+     auth_enabled=false -> open mode; setUser(null); loading=false; never redirects
+     auth_enabled=true  -> GET /api/auth/me
+         200 -> setUser(me)
+         401 -> setUser(null)
+3. WorkspaceLayout:
+   authLoading=true        -> Spinner
+   authEnabled && !user    -> Navigate /login
+4. LoginPage: POST /api/auth/login -> refresh() -> navigate("/start")
+5. Any API 401 on non-/api/auth/* path:
+   -> window.dispatchEvent("tribunal:unauthorized")
+   -> AuthContext listener -> setUser(null)
+   -> WorkspaceLayout redirects to /login
 ```
 
-### Production
-```bash
-cd frontend
-npm run build    # Outputs to dist/
-npm run preview  # Test production build locally
+### Experiment Run via useExperimentStream
+
+```
+1. User configures metrics / rubrics / judge settings in ExperimentRunner
+2. startRun():
+   POST /api/projects/{p}/experiments/{id}/run
+   {metrics, rubrics, concurrency, multi_llm_judge_evaluators,
+    judge_model_assignments, judge_temperature_assignments}
+   -> background task starts; response has experiment_id + metrics
+3. observeExperimentProgress():
+   GET /api/projects/{p}/experiments/{id}/progress  (SSE ReadableStream)
+   - retries up to 10x with 500ms gaps when 409 (task not yet registered)
+   - SSE event types: started / progress / completed / error
+4. RunState: idle -> running -> completed | error | connection_lost
+5. onCompleted -> onComplete() callback -> parent reloads experiment list
+
+Auto-reconnect (already-running experiment on mount):
+   fetchProgressSnapshot() -> pre-populate RunState with real progress
+   observeExperimentProgress() -> same callbacks
 ```
 
-**In docker-compose**:
-```dockerfile
-# Build frontend first
-WORKDIR /app/frontend
-RUN npm install && npm run build
+### Suggestion Apply + Outcome Display
 
-# Copy dist to app static mount
-RUN cp -r dist ../frontend/dist
+```
+1. ExperimentSuggestions loads suggestions for selected experiment
+2. User selects one or more; clicks Apply
+   POST /api/projects/{p}/experiments/{id}/suggestions/apply
+   -> BatchApplyResult: {suggestions, new_experiment, new_rag_config, changes}
+3. new_experiment.baseline_experiment_id = original experiment id
+4. User runs new_experiment on ExperimentPage
+5. After run: suggestions[].outcome populated
+   .status:  pending | incomparable | evaluated
+   .overall: improved | regressed | mixed | inconclusive
+   Per-metric SuggestionOutcomeMetric: delta + lo/hi CI + verdict badge
 ```
 
-## External Dependencies
+### Skill Trial Lifecycle
 
-- `react` — UI library
-- `typescript` — Type safety
-- `vite` — Build tool
-- `react-router-dom` — Client-side routing
-- `tailwindcss` — Styling
-- `recharts` (or similar) — Charts
-- `lucide-react` — Icon library
-- `http-status-codes` — Status code constants
+```
+1. SkillsPage: parallel useFetch for skills, trials, test sets, judge models, bots
+2. TrialCreate: POST /api/projects/{p}/skills/trials
+   -> {trial_id, status:"pending", total_cells}
+3. TrialList polls running trials via usePolling until status !== "running"
+4. Completed trial click -> TrialMatrix: adherence grid by model x variant
+5. Matrix cell click -> TrialDrilldown: per-question directive verdicts
+   + TraceTimeline: prepare/query/judge span bars
+6. Apply button -> PATCH /api/projects/{p}/skills/trials/{t}/apply-model
+   -> Project.preferred_model updated
+```
 
-## Related Areas
+---
 
-- [Main App Architecture](./main.md) — API endpoints
-- [CLAUDE.md](../../CLAUDE.md) — Quick reference
+## Conventions
+
+### Design Tokens (dark theme, defined in `tailwind.config`)
+
+| Token | Usage |
+|-------|-------|
+| `bg-deep` | Page background (darkest layer) |
+| `bg-base` | Sidebar background |
+| `bg-card` | Card surfaces |
+| `bg-elevated` | Hover states |
+| `bg-input` | Form input backgrounds |
+| `text-primary` / `text-secondary` / `text-muted` | Text hierarchy |
+| `border-border` | Dividers and outlines |
+| `accent` / `accent-glow` | Indigo-purple accent; active-state glow |
+| `score-high` / `score-mid` / `score-low` | Emerald / amber / red for metric scores |
+| `text-2xs` / `text-micro` | Sub-xs sizes used in sidebar and badges |
+
+### Patterns
+
+- `useFetch(fn, deps)` is the standard read-only data-loading primitive; prefer over raw `useEffect + useState`
+- `useConfirm` for all inline destructive-action confirm flows
+- `lib/api.ts` is a one-line re-export barrel; both `../lib/api` and `../api` resolve identically
+- Domain modules use only `request` / `formRequest` from `client.ts` -- no HTTP client class or Axios
+- All types live exclusively in `api/types.ts`; domain modules import from there, never define their own
+- ESLint baseline is standard Vite React + TypeScript config; no custom overrides detected
