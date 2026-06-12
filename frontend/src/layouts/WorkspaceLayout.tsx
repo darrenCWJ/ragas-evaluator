@@ -96,10 +96,10 @@ export default function WorkspaceLayout() {
         {/* Logo area */}
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
-            <span className="text-sm font-bold text-accent">R</span>
+            <span className="text-sm font-bold text-accent">T</span>
           </div>
           <div>
-            <div className="text-sm font-semibold text-text-primary leading-tight">Ragas</div>
+            <div className="text-sm font-semibold text-text-primary leading-tight">Tribunal</div>
             <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
               Platform
             </div>
@@ -135,10 +135,10 @@ export default function WorkspaceLayout() {
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
-              <span className="text-sm font-bold text-accent">R</span>
+              <span className="text-sm font-bold text-accent">T</span>
             </div>
             <div>
-              <div className="text-sm font-semibold text-text-primary leading-tight">Ragas</div>
+              <div className="text-sm font-semibold text-text-primary leading-tight">Tribunal</div>
               <div className="text-2xs font-medium uppercase tracking-widest text-text-muted">
                 Platform
               </div>

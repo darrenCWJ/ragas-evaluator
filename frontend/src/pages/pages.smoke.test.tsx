@@ -41,7 +41,7 @@ const PAGES: ReadonlyArray<[string, ComponentType]> = [
   ['WorkersPage', WorkersPage],
 ];
 
-const STORAGE_KEY = 'ragas_selected_project';
+const STORAGE_KEY = 'tribunal_selected_project';
 
 function renderPage(Page: ComponentType) {
   return render(

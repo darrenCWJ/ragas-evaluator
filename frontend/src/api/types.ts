@@ -1,4 +1,4 @@
-// Shared API types — all exported interfaces/types for the Ragas Platform backend, grouped by domain
+// Shared API types — all exported interfaces/types for the Tribunal backend, grouped by domain
 
 // ---------------------------------------------------------------------------
 // Projects, judge models, config defaults

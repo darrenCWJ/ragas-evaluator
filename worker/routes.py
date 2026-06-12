@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 import db.init
 from config import MAX_CONCURRENT_KG_BUILDS, MAX_CONCURRENT_PERSONA_BUILDS
+from system_stats import memory_stats
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -68,18 +69,8 @@ def _run_kg_in_thread(
 
 @router.get("/health")
 async def health():
-    import os
-    try:
-        import resource
-        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        # macOS reports in bytes, Linux in KB
-        if os.uname().sysname == "Darwin":
-            rss_mb = rss_bytes / (1024 * 1024)
-        else:
-            rss_mb = rss_bytes / 1024
-    except Exception:
-        rss_mb = None
-    return {"status": "ok", "rss_mb": round(rss_mb, 1) if rss_mb else None, "active_builds": len(_active_builds)}
+    mem = memory_stats()
+    return {"status": "ok", **mem, "active_builds": len(_active_builds)}
 
 
 @router.post("/build-kg", status_code=202)
@@ -287,13 +278,7 @@ async def clear_stale_personas(project_id: int):
 @router.get("/status")
 async def worker_status():
     """Rich status for dashboard: all active tasks with metadata."""
-    import os
-    try:
-        import resource
-        rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        rss_mb = rss_bytes / (1024 * 1024) if os.uname().sysname == "Darwin" else rss_bytes / 1024
-    except Exception:
-        rss_mb = None
+    mem = memory_stats()
 
     tasks: list[dict] = []
 
@@ -314,7 +299,7 @@ async def worker_status():
 
     return {
         "status": "ok",
-        "rss_mb": round(rss_mb, 1) if rss_mb else None,
+        **mem,
         "tasks": tasks,
         "active_kg_builds": sum(1 for t in tasks if t["type"] == "kg_build"),
         "active_persona_builds": sum(1 for t in tasks if t["type"] == "persona_generation"),
