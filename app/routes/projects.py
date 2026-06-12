@@ -13,7 +13,6 @@ from app.models import (
     ProjectUpdate,
 )
 from config import MAX_BASELINE_CSV_SIZE, MAX_BASELINE_ROWS
-from db.init import NOW_SQL, is_integrity_error
 
 router = APIRouter(prefix="/api", tags=["projects"])
 
@@ -43,7 +42,7 @@ async def create_project(req: ProjectCreate, request: Request):
         ).fetchone()
         return _format_project(row)
     except Exception as e:
-        if is_integrity_error(e):
+        if db.init.is_integrity_error(e):
             raise HTTPException(status_code=409, detail="Project name already exists") from e
         raise
 
@@ -113,7 +112,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
     if req.judge_model_assignments is not None:
         updates.append("judge_model_assignments_json = ?")
         params.append(json.dumps(req.judge_model_assignments) if req.judge_model_assignments else None)
-    updates.append(f"updated_at = {NOW_SQL}")
+    updates.append(f"updated_at = {db.init.NOW_SQL}")
     params.append(project_id)
     try:
         conn.execute(
@@ -122,7 +121,7 @@ async def update_project(project_id: int, req: ProjectUpdate):
         )
         conn.commit()
     except Exception as e:
-        if is_integrity_error(e):
+        if db.init.is_integrity_error(e):
             raise HTTPException(status_code=409, detail="Project name already exists") from e
         raise
     row = conn.execute(
@@ -224,7 +223,7 @@ async def add_member(project_id: int, request: Request, body: dict):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        if is_integrity_error(e):
+        if db.init.is_integrity_error(e):
             raise HTTPException(status_code=409, detail="Already a member") from e
         raise
     return {"detail": "Member added", "user_id": target["id"]}
@@ -475,7 +474,7 @@ async def save_api_config(project_id: int, payload: ApiConfigCreate):
 
     if existing:
         conn.execute(
-            f"UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = {NOW_SQL} WHERE project_id = ?",
+            f"UPDATE api_configs SET endpoint_url = ?, api_key = ?, headers_json = ?, updated_at = {db.init.NOW_SQL} WHERE project_id = ?",
             (payload.endpoint_url, payload.api_key, payload.headers_json, project_id),
         )
         config_id = existing[0]

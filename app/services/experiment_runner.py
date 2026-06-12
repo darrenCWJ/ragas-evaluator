@@ -22,6 +22,7 @@ from config import BOT_QUERY_TIMEOUT
 from evaluation.metrics import multi_llm_judge as _multi_llm_judge_module
 from evaluation.metrics.custom_metric import CustomMetricConfig
 from evaluation.scoring import ALL_METRICS, evaluate_experiment_row, setup_scorers
+from logging_utils import clean
 from pipeline.bot_connectors.factory import create_connector
 from pipeline.rag import multi_step_query, single_shot_query
 
@@ -357,14 +358,14 @@ async def run_experiment_background(
             )
             logger.info(
                 "Experiment %d: multi_llm_judge enabled with %d evaluators (assignments: %s)",
-                experiment_id, n_evaluators, judge_assignments,
+                experiment_id, n_evaluators, clean(judge_assignments),
             )
 
         # Setup scorers — skip entirely when no built-in or custom metrics
         # are selected (e.g. only multi_llm_judge). Calling setup_scorers([])
         # or setup_scorers(None) falls back to ALL_METRICS inside that
         # function, so we must guard the call here instead.
-        logger.info("Experiment %d: setting up scorers for %s", experiment_id, builtin_selected)
+        logger.info("Experiment %d: setting up scorers for %s", experiment_id, clean(builtin_selected))
         scorers, custom_scorers, llm = setup_scorers(
             builtin_selected,   # [] → no built-in metrics (fixed in scoring.py)
             custom_configs,
@@ -466,7 +467,7 @@ async def run_experiment_background(
                     if is_csv:
                         # Look up the bot's actual answer from external_baselines;
                         # reference_answer (ground truth) comes from test_questions.
-                        logger.info("CSV experiment %d: processing q%d '%s'", experiment_id, qid, question_text[:60])
+                        logger.info("CSV experiment %d: processing q%d '%s'", experiment_id, qid, clean(question_text[:60]))
                         csv_match = csv_answer_lookup.get(question_text.strip().lower())
                         if csv_match:
                             generated_answer = csv_match["answer"]
@@ -632,7 +633,7 @@ async def run_experiment_background(
                     })
 
                 except Exception as e:
-                    logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, e)
+                    logger.warning("Experiment %d question %d failed: %s", experiment_id, qid, clean(e))
                     await progress_queue.put({
                         "idx": idx, "qid": qid, "question_text": question_text,
                         "generated_answer": None,
@@ -711,7 +712,7 @@ async def run_experiment_background(
                     except Exception as _judge_err:
                         logger.warning(
                             "Experiment %d: multi_llm_judge failed for result %d: %s",
-                            experiment_id, result_row_id, _judge_err,
+                            experiment_id, result_row_id, clean(_judge_err),
                             exc_info=True,
                         )
                 # --- End Multi-LLM Judge block ---
@@ -751,7 +752,7 @@ async def run_experiment_background(
                     except Exception as _cj_err:
                         logger.warning(
                             "Experiment %d: criteria_judge '%s' failed for result %d: %s",
-                            experiment_id, cj_config.metric_name, result_row_id, _cj_err,
+                            experiment_id, clean(cj_config.metric_name), result_row_id, clean(_cj_err),
                             exc_info=True,
                         )
                 # --- End Criteria Judges block ---
@@ -792,7 +793,7 @@ async def run_experiment_background(
                     except Exception as _rj_err:
                         logger.warning(
                             "Experiment %d: reference_judge '%s' failed for result %d: %s",
-                            experiment_id, rj_config.metric_name, result_row_id, _rj_err,
+                            experiment_id, clean(rj_config.metric_name), result_row_id, clean(_rj_err),
                             exc_info=True,
                         )
                 # --- End Reference Judges block ---
@@ -878,8 +879,9 @@ async def run_experiment_background(
             })
 
     except Exception as e:
-        import traceback
-        logger.error("Experiment %d fatal error: %s\n%s", experiment_id, e, traceback.format_exc())
+        # exc_info carries the traceback through the logging framework instead
+        # of interpolating it (and any user text it wraps) into the message.
+        logger.error("Experiment %d fatal error: %s", experiment_id, clean(e), exc_info=True)
         experiment_runs.set_progress(experiment_id, {
             "phase": "error", "current": 0, "total": 0,
             "question": "", "error": str(e), "result_count": 0,
@@ -910,7 +912,7 @@ async def run_experiment_background(
         except Exception as _cleanup_err:
             logger.warning(
                 "Experiment %d: cleanup status-update failed: %s",
-                experiment_id, _cleanup_err,
+                experiment_id, clean(_cleanup_err),
             )
         finally:
             run_conn.close()

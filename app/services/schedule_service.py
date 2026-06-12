@@ -19,6 +19,7 @@ import db.init
 from app.models import ExperimentRunRequest
 from app.services.experiment_runner import compute_aggregates, run_experiment_background
 from app.services.progress import experiment_runs
+from logging_utils import clean
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,7 @@ async def run_scheduled_check(schedule_id: int) -> int | None:
         if final is None or final["status"] != "completed":
             logger.warning(
                 "Schedule %d: regression run %d ended %s — skipping comparison",
-                schedule_id, experiment_id, final["status"] if final else "missing",
+                schedule_id, experiment_id, clean(final["status"]) if final else "missing",
             )
             return experiment_id
 
@@ -169,7 +170,7 @@ async def run_scheduled_check(schedule_id: int) -> int | None:
                 logger.warning(
                     "Schedule %d ALERT: %d metric(s) dropped on experiment %d: %s",
                     schedule_id, len(drops), experiment_id,
-                    ", ".join(f"{d['metric']} -{d['drop']}" for d in drops),
+                    clean(", ".join(f"{d['metric']} -{d['drop']}" for d in drops)),
                 )
                 if schedule["webhook_url"]:
                     await _post_webhook(schedule["webhook_url"], {

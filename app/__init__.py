@@ -46,10 +46,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI):
     import asyncio
 
-    from db.init import init_db
+    import db.init as _dbi
 
     try:
-        init_db()
+        _dbi.init_db()
         from config import DATABASE_PATH
         logger.info("Database initialized at %s", DATABASE_PATH)
     except Exception as e:
@@ -110,7 +110,7 @@ async def lifespan(application: FastAPI):
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            pass  # expected: we cancelled the task ourselves on shutdown
     # Cleanup: close shared HTTP clients to avoid "Event loop is closed" warnings
     from evaluation.metrics.testgen import close_openai_clients
     from pipeline.embedding import close_openai_embed_client

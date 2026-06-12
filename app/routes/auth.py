@@ -23,7 +23,7 @@ from app.services.auth import (
     verify_password,
 )
 from config import SESSION_COOKIE_SECURE, SESSION_TTL_SECONDS
-from db.init import is_integrity_error
+from logging_utils import clean
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +87,14 @@ async def register(req: RegisterRequest, response: Response):
         conn.commit()
     except Exception as exc:
         conn.rollback()
-        if is_integrity_error(exc):
+        if db.init.is_integrity_error(exc):
             raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
         raise
 
     user_id = cursor.lastrowid
     _set_session(response, user_id)
     if first_user:
-        logger.info("First user registered — login enforcement is now ACTIVE (admin: %s)", req.email)
+        logger.info("First user registered — login enforcement is now ACTIVE (admin: %s)", clean(req.email))
     row = conn.execute("SELECT id, email, name, role FROM users WHERE id = ?", (user_id,)).fetchone()
     return _user_payload(row)
 

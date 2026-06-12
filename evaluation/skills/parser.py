@@ -8,7 +8,6 @@ directives.
 
 import json
 import logging
-import re
 
 from config import DEFAULT_EVAL_MODEL
 from pipeline.llm import chat_completion
@@ -71,11 +70,21 @@ def _extract_json_object(text: str) -> dict:
 
 
 def _frontmatter_name(content: str) -> str | None:
-    """Pull `name:` out of YAML frontmatter when present."""
-    match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
-    if not match:
+    """Pull `name:` out of YAML frontmatter when present.
+
+    String scanning instead of a lazy-dotall regex — the content is
+    user-uploaded, and `^---\\s*\\n(.*?)\\n---` is polynomial on adversarial
+    input (CodeQL py/polynomial-redos).
+    """
+    if not content.startswith("---"):
         return None
-    for line in match.group(1).splitlines():
+    first_newline = content.find("\n")
+    if first_newline == -1 or content[3:first_newline].strip():
+        return None
+    end = content.find("\n---", first_newline)
+    if end == -1:
+        return None
+    for line in content[first_newline + 1 : end].splitlines():
         if line.strip().startswith("name:"):
             return line.split(":", 1)[1].strip().strip("\"'") or None
     return None

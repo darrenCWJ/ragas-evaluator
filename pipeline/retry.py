@@ -12,6 +12,8 @@ import logging
 import random
 from collections.abc import Awaitable, Callable
 
+from logging_utils import clean
+
 logger = logging.getLogger(__name__)
 
 # HTTP status codes worth retrying: rate limit + transient upstream failures.
@@ -79,7 +81,7 @@ async def with_backoff[T](
                 delay *= 0.5 + random.random()  # jitter: 0.5x–1.5x
             logger.warning(
                 "%s failed (attempt %d/%d, %s) — retrying in %.1fs",
-                label, attempt, attempts, type(exc).__name__, delay,
+                clean(label), attempt, attempts, type(exc).__name__, delay,
             )
             await asyncio.sleep(delay)
     raise last_exc if last_exc else RuntimeError(f"{label}: exhausted retries")

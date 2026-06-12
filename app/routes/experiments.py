@@ -40,6 +40,28 @@ _STREAM_STALL_SECONDS = 30 * 60
 _SSE_HEARTBEAT_SECONDS = 15
 
 
+def _trusted_worker_url(experiment_id: int) -> str | None:
+    """Worker base URL for a delegated experiment, re-validated against the
+    configured allowlist.
+
+    Outbound requests must only ever use a URL drawn from KG_WORKER_URLS —
+    never a value read back from mutable run state (CodeQL py/partial-ssrf).
+    """
+    from config import KG_WORKER_URLS
+
+    stored = experiment_runs.get_worker(experiment_id)
+    if not stored:
+        return None
+    for trusted in KG_WORKER_URLS:
+        if trusted == stored:
+            return trusted
+    logger.warning(
+        "Experiment %d: stored worker URL is not in KG_WORKER_URLS — ignoring it",
+        experiment_id,
+    )
+    return None
+
+
 def _reap_stale_experiments(conn) -> int:
     """Mark 'running' experiments as 'failed' if no active SSE generator exists.
 
@@ -857,7 +879,7 @@ async def experiment_progress_snapshot(project_id: int, experiment_id: int):
     the SSE stream sends its first event, avoiding the 'Initializing...' flicker.
     """
     # Check if delegated to a worker
-    worker_url = experiment_runs.get_worker(experiment_id)
+    worker_url = _trusted_worker_url(experiment_id)
     if worker_url:
         import httpx
         try:
@@ -908,8 +930,8 @@ async def experiment_progress(project_id: int, experiment_id: int):
     This is separate from /run so that the frontend can navigate away and
     reconnect later without affecting the background task.
     """
-    # Check if delegated to a worker
-    worker_url = experiment_runs.get_worker(experiment_id)
+    # Check if delegated to a worker (allowlist-validated URL)
+    worker_url = _trusted_worker_url(experiment_id)
 
     progress = experiment_runs.snapshot_progress(experiment_id)
     if progress is None and worker_url is None:
@@ -1095,9 +1117,11 @@ async def experiment_progress(project_id: int, experiment_id: int):
 
                 await asyncio.sleep(0.5)
 
-        except Exception as exc:
+        except Exception:
+            # Details stay in the server log — exception text can carry
+            # internal paths/stack info (CodeQL py/stack-trace-exposure).
             logger.exception("Experiment %d: progress stream failed", experiment_id)
-            yield f"data: {json.dumps({'phase': 'error', 'error': 'stream failure: ' + str(exc), 'recoverable': True})}\n\n"
+            yield f"data: {json.dumps({'phase': 'error', 'error': 'stream failure — see server logs', 'recoverable': True})}\n\n"
 
     return StreamingResponse(_observe(), media_type="text/event-stream")
 
@@ -1172,7 +1196,7 @@ async def cancel_experiment(project_id: int, experiment_id: int):
         raise HTTPException(status_code=409, detail="Experiment is not running")
 
     # Check if delegated to a worker
-    worker_url = experiment_runs.get_worker(experiment_id)
+    worker_url = _trusted_worker_url(experiment_id)
     if worker_url:
         import httpx
         try:

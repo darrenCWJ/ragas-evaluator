@@ -14,6 +14,8 @@ excluded from calibration.
 import json
 import logging
 
+from logging_utils import clean
+
 logger = logging.getLogger(__name__)
 
 # Same buckets the per-experiment evaluator-accuracy view uses.
@@ -99,5 +101,5 @@ def apply_judge_assignments(conn, project_id: int, models: list[str]) -> list[st
         (json.dumps(models), project_id),
     )
     conn.commit()
-    logger.info("Project %d judge assignments set to %s", project_id, models)
+    logger.info("Project %d judge assignments set to %s", project_id, clean(models))
     return models

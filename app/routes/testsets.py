@@ -30,7 +30,6 @@ from config import (
     MAX_UPLOAD_QA_ROWS,
     MAX_UPLOAD_SIZE,
 )
-from db.init import NOW_SQL, json_extract_sql
 
 router = APIRouter(prefix="/api", tags=["testsets"])
 logger = logging.getLogger(__name__)
@@ -1032,7 +1031,7 @@ async def list_test_sets(project_id: int):
            FROM test_sets ts
            LEFT JOIN test_questions tq ON tq.test_set_id = ts.id
            WHERE ts.project_id = ? AND ts.status != 'generating'
-                 AND COALESCE({json_extract_sql('ts.generation_config_json', 'source')}, '') != 'csv_auto'
+                 AND COALESCE({db.init.json_extract_sql('ts.generation_config_json', 'source')}, '') != 'csv_auto'
            GROUP BY ts.id
            ORDER BY ts.created_at DESC""",
         (project_id,),
@@ -1161,7 +1160,7 @@ async def annotate_question(
         f"""UPDATE test_questions
            SET status = ?, user_edited_answer = ?, user_edited_contexts = ?, user_notes = ?,
                metadata_json = COALESCE(?, metadata_json),
-               reviewed_at = {NOW_SQL}
+               reviewed_at = {db.init.NOW_SQL}
            WHERE id = ?""",
         (req.status, req.user_edited_answer, edited_ctx_json, req.user_notes, metadata_json, question_id),
     )
@@ -1225,7 +1224,7 @@ async def bulk_annotate_questions(
 
         # Update specified questions
         cursor = conn.execute(
-            f"UPDATE test_questions SET status = ?, reviewed_at = {NOW_SQL} WHERE id IN ({placeholders}) AND test_set_id = ?",
+            f"UPDATE test_questions SET status = ?, reviewed_at = {db.init.NOW_SQL} WHERE id IN ({placeholders}) AND test_set_id = ?",
             (target_status, *req.question_ids, test_set_id),
         )
         conn.commit()
@@ -1241,7 +1240,7 @@ async def bulk_annotate_questions(
 
         # Update all pending questions in this test set
         cursor = conn.execute(
-            f"UPDATE test_questions SET status = ?, reviewed_at = {NOW_SQL} WHERE test_set_id = ? AND status = 'pending'",
+            f"UPDATE test_questions SET status = ?, reviewed_at = {db.init.NOW_SQL} WHERE test_set_id = ? AND status = 'pending'",
             (target_status, test_set_id),
         )
         conn.commit()

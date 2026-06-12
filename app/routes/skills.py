@@ -19,8 +19,8 @@ from app.services.skill_trials import (
     run_skill_trial,
     skill_trial_runs,
 )
-from db.init import NOW_SQL
 from evaluation.skills.parser import parse_skill
+from logging_utils import clean
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ async def upload_skill(project_id: int, req: SkillCreate):
     try:
         parsed = await parse_skill(req.content)
     except Exception as exc:
-        logger.warning("Skill parse failed for project %d: %s", project_id, exc)
+        logger.warning("Skill parse failed for project %d: %s", project_id, clean(exc))
         raise HTTPException(
             status_code=422,
             detail=f"Could not extract testable directives from the skill file: {exc}",
@@ -319,7 +319,7 @@ async def apply_preferred_model(project_id: int, req: ApplyModelRequest):
     conn = db.init.get_db()
     _require_project(conn, project_id)
     conn.execute(
-        f"UPDATE projects SET preferred_model = ?, updated_at = {NOW_SQL} WHERE id = ?",
+        f"UPDATE projects SET preferred_model = ?, updated_at = {db.init.NOW_SQL} WHERE id = ?",
         (req.model, project_id),
     )
     conn.commit()

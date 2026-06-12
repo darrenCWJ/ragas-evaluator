@@ -43,7 +43,7 @@ def _release_process_memory() -> None:
             libc = ctypes.CDLL("libc.so.6")
             libc.malloc_trim(0)
         except Exception:
-            pass
+            pass  # malloc_trim is glibc-specific, best-effort only
 
 
 @router.post("/system/maintenance")

@@ -130,7 +130,7 @@ def _release_memory() -> None:
             libc = ctypes.CDLL("libc.so.6")
             libc.malloc_trim(0)
         except Exception:
-            pass
+            pass  # malloc_trim is glibc-specific, best-effort only
 
 
 _progress_lock = threading.Lock()
