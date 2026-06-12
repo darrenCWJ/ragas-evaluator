@@ -3,7 +3,7 @@
 fastapi>=0.115.0
 uvicorn>=0.34.0
 python-dotenv>=1.2.0
-openai>=2.29.0
+openai>=2.41.1
 ragas>=0.4.3
 psycopg2-binary>=2.9.0
 langchain-text-splitters>=0.3.0
