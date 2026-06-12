@@ -355,3 +355,27 @@ Each matrix cell also records tokens in/out and latency, so "follows the skill b
 - **Category breakdown** (`GET .../experiments/{id}/breakdown`) — experiment scores grouped by question category with per-metric averages and the weakest questions per group, sorted worst-first. "Your agent fails multi-hop and refusal questions" instead of one averaged number.
 
 **Why:** The platform's promise is transparency into what went wrong with the user's agent. That requires trustworthy questions (audit), knowing what was never tested (coverage), testing the most common real failure (fabricating answers to out-of-scope questions), and attributing failures to categories rather than averaging them away.
+
+---
+
+## Multi-Turn Conversation Testing
+
+**What it does:** Tests conversational behavior, not just single Q→A. A test question may carry prior *turns* (user messages that set up context — "I'm on the Pro plan", "I pay annually"). The experiment runner plays each turn against the agent, carrying the growing conversation history, then asks the final question. The full transcript is stored with the result.
+
+**Setup:** map a `turns` column when uploading a test set — a JSON array (`["I'm on Pro", "I pay annually"]`) or `|||`-separated user messages. All chat-style connectors support history (OpenAI, Claude, Gemini, DeepSeek, Glean natively; custom HTTP gets a transcript prepend); CSV connectors can't.
+
+**Scoring:** the `conversation_retention` metric judges whether the final answer honors what was established earlier — `retained` (1.0), `partial` (0.5), or `forgot/contradicted` (0.0). It scores only multi-turn questions, so single-turn aggregates stay clean. All standard metrics also run on the final answer.
+
+**Why:** the most common conversational agent failure — forgetting or contradicting context from three turns ago — is invisible to single-turn evaluation.
+
+---
+
+## CI Quality Gate
+
+**What it does:** `GET /api/projects/{id}/experiments/{id}/gate?thresholds=faithfulness:0.7,refusal_accuracy:0.8&strict=true` returns pass/fail per threshold plus an optional `min_overall` check. With `strict=true` a failing gate answers HTTP 412, so a pipeline can gate deploys with one line:
+
+```bash
+curl -f "$TRIBUNAL_URL/api/projects/1/experiments/42/gate?thresholds=faithfulness:0.7&strict=true"
+```
+
+Missing metrics fail the gate — silence never passes CI.

@@ -117,6 +117,8 @@ Each suggestion maps to a specific config field and can be applied directly from
 ## Key Features
 
 - **Skill Arena** — test how well different AI models follow a SKILL.md-style instruction file: a judged (skill × model × question) matrix with a no-skill baseline, per-directive pass/fail verdicts, per-model *lift*, token/latency costs, step-level traces (optional Langfuse export), and one-click apply of the winning model as the project default.
+- **Multi-turn conversation tests** — questions can carry setup turns; the runner plays them against the agent with history and the `conversation_retention` metric catches forgotten or contradicted context.
+- **CI quality gate** — `GET .../experiments/{id}/gate?thresholds=faithfulness:0.7&strict=true` returns 412 on failure so pipelines can block deploys on agent quality.
 - **Persona-based test generation** — auto-generate diverse personas (fast: direct LLM call; full: KG-based) with configurable question styles, or define custom ones. Personas are saved and reusable across test sets.
 - **Bot connectors** — test external bots (OpenAI, Claude, DeepSeek, Gemini, Glean, custom HTTP, CSV) with a unified evaluation framework.
 - **Multi-LLM judge** — run evaluation metrics across multiple LLM judges simultaneously with chain-of-thought reasoning and claim-level annotations. Computes a reliability score based on inter-judge agreement; flags results where judges disagree.
