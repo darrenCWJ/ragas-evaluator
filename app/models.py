@@ -770,6 +770,43 @@ class ScheduleUpdate(BaseModel):
         return v
 
 
+class HardCaseMineRequest(BaseModel):
+    """Mine harder variants of an experiment's worst-scoring questions."""
+
+    threshold: float = 0.5
+    variants_per_question: int = 2
+    max_questions: int = 20
+    model: str | None = None
+
+    @field_validator("threshold")
+    @classmethod
+    def validate_mine_threshold(cls, v: float) -> float:
+        if v <= 0.0 or v > 1.0:
+            raise ValueError("threshold must be in (0.0, 1.0]")
+        return v
+
+    @field_validator("variants_per_question")
+    @classmethod
+    def validate_variants(cls, v: int) -> int:
+        if v < 1 or v > 5:
+            raise ValueError("variants_per_question must be between 1 and 5")
+        return v
+
+    @field_validator("max_questions")
+    @classmethod
+    def validate_max_questions(cls, v: int) -> int:
+        if v < 1 or v > 50:
+            raise ValueError("max_questions must be between 1 and 50")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_mine_model(cls, v: str | None) -> str | None:
+        if v is not None and not _LLM_MODEL_RE.match(v):
+            raise ValueError(f"invalid model id: {v!r}")
+        return v
+
+
 class JudgeCalibrationApply(BaseModel):
     """Explicit judge panel, or empty to apply the calibration recommendation."""
 

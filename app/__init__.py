@@ -25,6 +25,7 @@ from app.routes import (
     experiments,
     health,
     insights,
+    mining,
     multi_llm_judge,
     personas,
     projects,
@@ -230,6 +231,7 @@ def create_app() -> FastAPI:
     application.include_router(skills.router)
     application.include_router(sweeps.router)
     application.include_router(schedules.router)
+    application.include_router(mining.router)
     application.include_router(insights.router)
     application.include_router(system.router)
 
