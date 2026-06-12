@@ -6,7 +6,25 @@
 > test-type compatibility gating, more file types + images, and skills v2
 > (multi-file / progressive disclosure / user input).
 >
-> Status legend: ☐ not started · ◐ in progress · ✅ done
+> ## ✅ ALL PHASES COMPLETE — 2026-06-12
+>
+> P1–P7 implemented on branch `feat/v2-improvements` (7 commits, one per phase),
+> verified green: ruff, 611 backend tests (unit + non-slow integration),
+> 48 frontend Vitest tests, tsc, eslint (0 errors), production build.
+>
+> Notes vs the original plan:
+> - The audit's "human annotation has no UI" finding (2.4) was wrong — the panel
+>   was already mounted on AnalyzePage; the real fixes were the six missing worker
+>   endpoints, the RAM bug, the reliability verdict-count inflation, and a stale
+>   closure in MultiLLMJudgePanel.
+> - tool_call_accuracy stayed "coming soon"; tool_call_f1 ships as a deterministic
+>   trace-vs-reference metric instead of the ragas wrapper (no LLM cost).
+> - Run-route capability validation: explicit metric requests 422 on missing
+>   capabilities; the default fallback metric set is filtered instead.
+> - 6.3 (vision pass for image-only PDF pages) deliberately deferred.
+>
+> Status legend: ☐ not started · ◐ in progress · ✅ done (phase headers below
+> kept as the original plan for reference)
 
 ---
 
