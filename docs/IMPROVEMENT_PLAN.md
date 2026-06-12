@@ -63,16 +63,43 @@
    post-retrieval (sibling + cross-step dedupe; child chunk_id kept for provenance).
    ⚠️ Existing parent_child chunk sets must be re-generated (force=true) to gain
    parent metadata; old sets pass through unchanged.
-6. **Query expansion (multi-query + RRF reuse) / HyDE** as experimentable `rag_configs` fields.
-7. **Score-threshold cutoff + MMR diversity** post-filters instead of blind top_k.
-8. `text-embedding-3-large` option + `BAAI/bge-reranker-v2-m3` reranker option.
-9. KG-assisted retrieval (vector hits → 1-hop KG expansion → rerank) — biggest differentiator, do after 5–7.
+6. ~~**Query expansion / HyDE**~~ ✅ Done — `query_expansion` (multi_query|hyde) +
+   `num_expansions` rag_config fields; multi-query variants RRF-fused; HyDE passage
+   replaces the retrieval query; expansion tokens counted into experiment usage;
+   failures fall back to the original query.
+7. ~~**Score-threshold + MMR**~~ ✅ Done — `score_threshold` drops weak hits
+   (unscored pass through); `mmr_lambda` enables MMR diversity over a 3× over-fetch
+   (token-set Jaccard redundancy, no extra embeddings).
+8. ~~Embedding/reranker options~~ ✅ Done — both were already free-text fields;
+   `BAAI/bge-reranker-v2-m3` added to the suggested rerankers in the UI. ALSO FIXED:
+   experiment snapshots silently dropped reranker_model/top_k (experiments never reranked).
+9. ~~**KG-assisted retrieval**~~ ✅ Done — `kg_expansion` flag; `pipeline/kg_retrieval.py`
+   parses the stored KG JSON (no ragas import), caches a slim adjacency index, appends
+   1-hop neighbours of retrieved chunks (provenance-mapped); pair with a reranker.
 
-**Evaluation/product features (recommended, not built)**
-10. **Parameter sweep experiments** — grid over top_k/alpha/chunk configs, auto-spawn experiments, leaderboard; run judge-free first using retrieval_hit_rate, judge the top finalists.
-11. **Judge calibration** — human annotation data (20% samples) is collected but unused; pick default judge per project by human agreement.
-12. **Scheduled regression runs** against external agents with alerts on metric drops.
-13. Real-user log import → test questions; hard-case mining (auto-generate variants of failed questions).
+**Evaluation/product features**
+10. ~~**Parameter sweep experiments**~~ ✅ Done — POST /sweeps with a grid over
+    sweepable fields (≤36 combos), one experiment per combo run sequentially with
+    judge-free metrics; /leaderboard ranks by retrieval_hit_rate then overall.
+    Backend only — no UI panel yet.
+11. ~~**Judge calibration**~~ ✅ Done — multi_llm_evaluations now records the judge
+    model; GET /judge-calibration ranks models by human-annotation agreement
+    (5+ pairs, ≥50% agreement to be recommended); POST /apply sets the project
+    default panel. Backend only — no UI yet. Pre-existing rows (model NULL) excluded.
+12. ~~**Scheduled regression runs**~~ ✅ Done — schedules table + 60s in-process
+    ticker (lifespan task); drop alerts stored + optional SSRF-guarded webhook.
+    Backend only — no UI yet.
+13. ~~Log import + hard-case mining~~ ✅ Done — /test-sets/import-logs creates
+    reference-free sets from raw query logs (dedupe, trivial filter, 1000 cap);
+    /experiments/{id}/mine-hard-cases LLM-generates harder variants of worst
+    results into a provenance-preserving test set. Backend only — no UI yet.
+
+**New follow-up work (from this session)**
+- Frontend panels for sweeps (create + leaderboard), schedules (CRUD + alerts),
+  judge calibration (report + apply), log import, and hard-case mining — the
+  backends are complete and tested; only the RAG-config Retrieval Quality UI landed.
+- Sweep/schedule runs execute in the API process; a server restart leaves a
+  'running' sweep until cancelled (documented in service docstrings).
 
 **Known quirks to be aware of**
 - `tests/integration/test_glean_experiment.py::test_glean_all_metrics` (slow marker) fails
