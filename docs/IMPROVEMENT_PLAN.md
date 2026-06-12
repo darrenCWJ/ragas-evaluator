@@ -54,8 +54,15 @@
    contextvars. 8 unit tests.
 4. Check whether eslint `react-hooks/set-state-in-effect`/`react-hooks/refs` can now ratchet from 'warn' back to 'error' (god splits landed; remaining warners are legacy pages — 71 warnings as of this session).
 
-**Retrieval upgrades (designed in Part 2/§A below — none built)**
-5. **Small-to-big retrieval** — `parent_child` chunking exists and chunks table has `parent_chunk_id`, but retrieval never expands child→parent. Highest-impact retrieval fix (~30 lines in `pipeline/rag.py` retrieval functions + dedupe).
+**Retrieval upgrades**
+5. ~~**Small-to-big retrieval**~~ ✅ Done — NOTE: the original premise was wrong;
+   `_parent_child` discarded parents entirely (parent_chunk_id was never populated).
+   Implemented via metadata: `parent_child_pairs()` in chunking, generation stores
+   `parent_key`/`parent_content` on child rows (`metadata_json`), and
+   `_expand_to_parents()` in `pipeline/rag.py` swaps child hits for parent windows
+   post-retrieval (sibling + cross-step dedupe; child chunk_id kept for provenance).
+   ⚠️ Existing parent_child chunk sets must be re-generated (force=true) to gain
+   parent metadata; old sets pass through unchanged.
 6. **Query expansion (multi-query + RRF reuse) / HyDE** as experimentable `rag_configs` fields.
 7. **Score-threshold cutoff + MMR diversity** post-filters instead of blind top_k.
 8. `text-embedding-3-large` option + `BAAI/bge-reranker-v2-m3` reranker option.
