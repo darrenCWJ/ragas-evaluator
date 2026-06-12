@@ -22,7 +22,7 @@ from app.services.skill_trials import (
     run_skill_trial,
     skill_trial_runs,
 )
-from evaluation.skills.parser import parse_skill
+from evaluation.skills.parser import extract_stages, parse_skill
 from logging_utils import clean
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,11 @@ def _format_skill(row, include_content: bool = False, conn=None) -> dict:
     parsed = json.loads(row["parsed_directives_json"]) if row["parsed_directives_json"] else None
     files = _skill_file_paths(conn, row["id"]) if conn is not None else []
     referenced = (parsed or {}).get("referenced_paths", [])
+    # Skills uploaded before stage support was added have no stored stage plan
+    # — derive it from the content on the fly.
+    stages = (parsed or {}).get("stages")
+    if stages is None:
+        stages = extract_stages(row["content"] or "")
     file_set = set(files)
     out = {
         "id": row["id"],
@@ -65,6 +70,8 @@ def _format_skill(row, include_content: bool = False, conn=None) -> dict:
         "directives": (parsed or {}).get("directives", []),
         "interaction_required": bool((parsed or {}).get("interaction_required", False)),
         "referenced_paths": referenced,
+        "stages": stages,
+        "stage_count": len(stages),
         "files": files,
         "missing_references": [
             p for p in referenced

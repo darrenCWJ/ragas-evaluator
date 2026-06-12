@@ -191,6 +191,42 @@ async def _query_model_agentic(
     }
 
 
+def _stage_metrics(stages: list[dict], files_read: list[str]) -> dict | None:
+    """Score how well an agentic run walked a staged skill's file plan.
+
+    stage_coverage — fraction of stage-plan files the model actually read.
+    stage_order    — fraction of consecutive stage-file reads in plan order.
+    """
+    plan_files: list[str] = []
+    seen: set[str] = set()
+    for stage in stages:
+        for path in stage.get("files", []):
+            if path not in seen:
+                seen.add(path)
+                plan_files.append(path)
+    if not plan_files:
+        return None
+
+    def _first_read_index(path: str) -> int | None:
+        for i, read in enumerate(files_read):
+            if read == path or read.endswith("/" + path) or path.endswith("/" + read):
+                return i
+        return None
+
+    read_indices = [idx for idx in (_first_read_index(p) for p in plan_files) if idx is not None]
+    coverage = len(read_indices) / len(plan_files)
+    if len(read_indices) >= 2:
+        in_order = sum(1 for a, b in zip(read_indices, read_indices[1:]) if a <= b)
+        order = in_order / (len(read_indices) - 1)
+    else:
+        order = 1.0 if read_indices else 0.0
+    return {
+        "stage_coverage": round(coverage, 4),
+        "stage_order": round(order, 4),
+        "stage_files_total": len(plan_files),
+    }
+
+
 async def _run_cell(
     trial_id: int,
     skill: dict | None,
@@ -202,6 +238,7 @@ async def _run_cell(
     cancel_event: asyncio.Event,
     mode: str = "inline",
     skill_files: dict[str, str] | None = None,
+    stages: list[dict] | None = None,
 ) -> dict | None:
     """Run one matrix cell. Returns a result-row dict or None when cancelled."""
     label = model_spec_label(spec)
@@ -273,6 +310,10 @@ async def _run_cell(
             if agentic:
                 scores["files_read_count"] = len(reply.get("files_read", []))
                 scores["user_exchanges"] = reply.get("user_exchanges", 0)
+                if skill and stages:
+                    stage_scores = _stage_metrics(stages, reply.get("files_read", []))
+                    if stage_scores:
+                        scores.update(stage_scores)
             row["scores_json"] = json.dumps(scores)
             row["directive_results_json"] = json.dumps(results)
         except Exception as exc:
@@ -304,6 +345,7 @@ async def run_skill_trial(trial_id: int) -> None:
 
         skill = None
         directives: list[dict] = []
+        stages: list[dict] = []
         if trial["skill_id"]:
             skill_row = conn.execute(
                 "SELECT * FROM skills WHERE id = ?", (trial["skill_id"],)
@@ -313,6 +355,10 @@ async def run_skill_trial(trial_id: int) -> None:
             skill = dict(skill_row)
             parsed = json.loads(skill["parsed_directives_json"] or "{}")
             directives = parsed.get("directives", [])
+            stages = parsed.get("stages")
+            if stages is None:
+                from evaluation.skills.parser import extract_stages
+                stages = extract_stages(skill["content"] or "")
         if not directives:
             raise ValueError("Trial skill has no parsed directives — re-upload the skill")
 
@@ -364,7 +410,7 @@ async def run_skill_trial(trial_id: int) -> None:
         tasks = [
             asyncio.create_task(_run_cell(
                 trial_id, variant, directives, spec, q, judge_model, semaphore, cancel_event,
-                mode=mode, skill_files=skill_files,
+                mode=mode, skill_files=skill_files, stages=stages,
             ))
             for variant, spec, q in cells
         ]
@@ -441,6 +487,7 @@ def aggregate_trial_matrix(conn, trial_id: int) -> dict:
             "model": r["model"], "variant": variant,
             "adherence_sum": 0.0, "adherence_n": 0,
             "format_sum": 0.0, "format_n": 0,
+            "stage_cov_sum": 0.0, "stage_order_sum": 0.0, "stage_n": 0,
             "tokens_in": 0, "tokens_out": 0,
             "latency_sum": 0, "latency_n": 0,
             "errors": 0, "count": 0,
@@ -461,6 +508,10 @@ def aggregate_trial_matrix(conn, trial_id: int) -> dict:
         if scores.get("format_compliance") is not None:
             cell["format_sum"] += scores["format_compliance"]
             cell["format_n"] += 1
+        if scores.get("stage_coverage") is not None:
+            cell["stage_cov_sum"] += scores["stage_coverage"]
+            cell["stage_order_sum"] += scores.get("stage_order") or 0.0
+            cell["stage_n"] += 1
 
     out = []
     by_model: dict[str, dict] = {}
@@ -471,6 +522,8 @@ def aggregate_trial_matrix(conn, trial_id: int) -> dict:
             "variant": variant,
             "adherence": adherence,
             "format_compliance": round(c["format_sum"] / c["format_n"], 4) if c["format_n"] else None,
+            "stage_coverage": round(c["stage_cov_sum"] / c["stage_n"], 4) if c["stage_n"] else None,
+            "stage_order": round(c["stage_order_sum"] / c["stage_n"], 4) if c["stage_n"] else None,
             "avg_latency_ms": int(c["latency_sum"] / c["latency_n"]) if c["latency_n"] else None,
             "tokens_in": c["tokens_in"],
             "tokens_out": c["tokens_out"],

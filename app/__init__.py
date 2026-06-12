@@ -196,7 +196,9 @@ class _AuthMiddleware(BaseHTTPMiddleware):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Tribunal — RAG Evaluator", version="0.4.1-alpha", lifespan=lifespan)
+    from config import APP_VERSION
+
+    application = FastAPI(title="Tribunal — RAG Evaluator", version=APP_VERSION, lifespan=lifespan)
 
     # Middleware execution order is the reverse of registration: RequestID is
     # registered last so it runs OUTERMOST — even auth-rejected and CORS

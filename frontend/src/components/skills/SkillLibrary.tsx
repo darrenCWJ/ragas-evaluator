@@ -68,6 +68,21 @@ export default function SkillLibrary({
                   <span className="ml-2 text-xs text-text-muted">
                     {skill.directive_count} directive{skill.directive_count !== 1 ? 's' : ''}
                   </span>
+                  {(skill.stage_count ?? 0) > 0 && (
+                    <span
+                      className="ml-2 rounded-full bg-accent/10 px-1.5 py-0.5 text-2xs text-accent"
+                      title={(skill.stages ?? [])
+                        .map((s) => s.title + (s.files.length ? ` (${s.files.join(', ')})` : ''))
+                        .join('\n')}
+                    >
+                      {skill.stage_count} stages
+                    </span>
+                  )}
+                  {(skill.files?.length ?? 0) > 0 && (
+                    <span className="ml-2 text-2xs text-text-muted">
+                      {skill.files?.length} files
+                    </span>
+                  )}
                 </p>
                 {skill.summary && (
                   <p className="mt-1 truncate text-xs text-text-secondary" title={skill.summary}>

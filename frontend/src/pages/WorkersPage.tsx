@@ -45,6 +45,9 @@ function taskLabel(task: WorkerTask): string {
   if (task.type === 'testgen') {
     return 'Test Generation';
   }
+  if (task.type === 'skill_trial') {
+    return `Skill Trial${task.trial_name ? ` — ${task.trial_name}` : ''}`;
+  }
   return `Persona Generation (${task.num_personas ?? '?'} personas)`;
 }
 
@@ -68,7 +71,22 @@ function taskStatus(task: WorkerTask): string {
     const stage = task.stage ?? 'generating';
     return qs > 0 ? `${stage} — ${qs} generated` : stage;
   }
+  if (task.type === 'skill_trial') {
+    const phase = task.phase ?? 'running';
+    if (task.total && task.total > 0) {
+      return `${phase} — ${task.current ?? 0}/${task.total} cells`;
+    }
+    return phase;
+  }
   return '';
+}
+
+/** "What is being processed" — project name first, id as fallback. */
+function taskSubject(task: WorkerTask): string {
+  if (task.type === 'experiment' && !task.project_name) {
+    return `Exp #${task.experiment_id}`;
+  }
+  return task.project_name ?? `#${task.project_id}`;
 }
 
 function CapacityCell({
@@ -286,10 +304,17 @@ export default function WorkersPage() {
                 const key = `${task.type}-${task.project_id ?? task.experiment_id}`;
                 return (
                   <tr key={key} className="border-b border-border/50 last:border-0">
-                    <td className="px-4 py-2.5 text-text-primary font-mono text-xs">
-                      {task.type === 'experiment'
-                        ? `Exp #${task.experiment_id}`
-                        : `#${task.project_id}`}
+                    <td className="px-4 py-2.5 text-xs text-text-primary">
+                      <span className="block max-w-[160px] truncate" title={taskSubject(task)}>
+                        {taskSubject(task)}
+                      </span>
+                      {task.project_name && (
+                        <span className="font-mono text-2xs text-text-muted">
+                          {task.type === 'experiment'
+                            ? `exp #${task.experiment_id}`
+                            : `project #${task.project_id}`}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       <span
@@ -300,7 +325,9 @@ export default function WorkersPage() {
                               ? 'bg-emerald-400/10 text-emerald-400'
                               : task.type === 'testgen'
                                 ? 'bg-amber-400/10 text-amber-400'
-                                : 'bg-purple-400/10 text-purple-400'
+                                : task.type === 'skill_trial'
+                                  ? 'bg-sky-400/10 text-sky-400'
+                                  : 'bg-purple-400/10 text-purple-400'
                         }`}
                       >
                         {taskLabel(task)}

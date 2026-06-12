@@ -116,6 +116,7 @@ export default function SkillsPage() {
           judgeModels={modelsFetch.data?.judgeModels ?? []}
           botConfigs={modelsFetch.data?.botConfigs ?? []}
           onCreated={trialsFetch.reload}
+          onModelsChanged={modelsFetch.reload}
         />
       </section>
 

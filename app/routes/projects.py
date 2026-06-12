@@ -9,6 +9,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 import db.init
 from app.models import (
     ApiConfigCreate,
+    JudgeModelCreate,
+    JudgeModelUpdate,
     ProjectCreate,
     ProjectUpdate,
 )
@@ -134,14 +136,42 @@ async def update_project(project_id: int, req: ProjectUpdate):
 @router.get("/judge-models")
 async def list_judge_models():
     """Return judge-eligible models plus env-var defaults for the UI."""
+    from app.services import judge_models
     from config import MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS, MULTI_LLM_JUDGE_TEMP_MAX, MULTI_LLM_JUDGE_TEMP_MIN
-    from pipeline.llm import get_available_judge_models
     return {
-        "models": await get_available_judge_models(),
+        "models": await judge_models.list_models(),
         "default_model_assignments": MULTI_LLM_JUDGE_MODEL_ASSIGNMENTS,
         "temp_min": MULTI_LLM_JUDGE_TEMP_MIN,
         "temp_max": MULTI_LLM_JUDGE_TEMP_MAX,
     }
+
+
+@router.post("/judge-models", status_code=201)
+async def add_judge_model(req: JudgeModelCreate):
+    """Register a custom judge model in the editable registry."""
+    from app.services import judge_models
+    try:
+        return await judge_models.add_custom_model(req.id, req.name or req.id, req.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.patch("/judge-models/{model_id:path}")
+async def update_judge_model(model_id: str, req: JudgeModelUpdate):
+    """Enable or disable a judge model (built-in or custom)."""
+    from app.services import judge_models
+    if not await judge_models.set_model_enabled(model_id, req.enabled):
+        raise HTTPException(status_code=404, detail="Model not found")
+    return {"id": model_id, "enabled": req.enabled}
+
+
+@router.delete("/judge-models/{model_id:path}")
+async def delete_judge_model(model_id: str):
+    """Remove a custom judge model (or reset a built-in override)."""
+    from app.services import judge_models
+    if not judge_models.remove_custom_model(model_id):
+        raise HTTPException(status_code=404, detail="Model not found")
+    return {"detail": "Model removed"}
 
 
 @router.delete("/projects/{project_id}")

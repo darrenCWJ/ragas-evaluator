@@ -927,6 +927,27 @@ class SkillTrialCreate(BaseModel):
         return specs
 
 
+class JudgeModelCreate(BaseModel):
+    """Register a custom judge model in the editable model registry."""
+
+    id: str = Field(min_length=1, max_length=128)
+    name: str | None = Field(default=None, max_length=128)
+    provider: str = Field(min_length=1, max_length=32)
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError("invalid model id")
+        return v
+
+
+class JudgeModelUpdate(BaseModel):
+    """Enable or disable a judge model (built-in or custom)."""
+
+    enabled: bool
+
+
 class ApplyModelRequest(BaseModel):
     """Set a trial-winning model as the project's preferred model."""
 

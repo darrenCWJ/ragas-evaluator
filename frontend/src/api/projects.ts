@@ -3,6 +3,7 @@
 import { request, formRequest } from './client';
 import type {
   Project,
+  JudgeModel,
   JudgeModelsResponse,
   ConfigDefaults,
   ExternalBaseline,
@@ -48,6 +49,32 @@ export async function createProject(payload: CreateProjectPayload): Promise<Proj
 
 export async function fetchJudgeModels(): Promise<JudgeModelsResponse> {
   return request<JudgeModelsResponse>('/api/judge-models');
+}
+
+// --- Judge model registry (custom models + enable/disable) ---
+
+export async function addJudgeModel(payload: {
+  id: string;
+  name?: string;
+  provider: string;
+}): Promise<JudgeModel> {
+  return request<JudgeModel>('/api/judge-models', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function setJudgeModelEnabled(modelId: string, enabled: boolean): Promise<void> {
+  await request<{ id: string; enabled: boolean }>(
+    `/api/judge-models/${encodeURIComponent(modelId)}`,
+    { method: 'PATCH', body: JSON.stringify({ enabled }) },
+  );
+}
+
+export async function deleteJudgeModel(modelId: string): Promise<void> {
+  await request<{ detail: string }>(`/api/judge-models/${encodeURIComponent(modelId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function deleteProject(projectId: number): Promise<void> {

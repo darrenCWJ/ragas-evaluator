@@ -19,11 +19,25 @@ logger = logging.getLogger(__name__)
 # Directive kinds the extractor classifies into.
 DIRECTIVE_KINDS = {"behavior", "format", "prohibition", "tone"}
 
-# Relative file references inside a skill: markdown links and bare mentions of
-# files in conventional subdirectories (references/, scripts/, assets/...).
+# Relative file references inside a skill: markdown links, bare mentions of
+# files in conventional subdirectories (references/, scripts/, tiers/...), and
+# backtick-quoted relative paths ("Load `tiers/bronze.md`").
 _MD_LINK_RE = re.compile(r"\[[^\]\n]{0,200}\]\(([^)\s]{1,300})\)")
 _BARE_REF_RE = re.compile(
-    r"\b((?:references|reference|scripts|assets|examples|docs)/[\w./-]{1,200})", re.IGNORECASE
+    r"\b((?:references|reference|scripts|assets|examples|docs|tiers|phases|stages|templates)"
+    r"/[\w./-]{1,200})",
+    re.IGNORECASE,
+)
+_BACKTICK_REF_RE = re.compile(
+    r"`([\w-][\w./-]{0,200}\.(?:md|markdown|txt|py|json|yaml|yml|sh|csv))`", re.IGNORECASE
+)
+
+# Stage/phase plan headings — markdown headings (`## Phase 2 — Scaffold`) or
+# bold markers (`**Phase 3 — Bronze:** Load tiers/bronze.md`). Staged skills
+# (e.g. app builders with Bronze/Silver/Gold tiers) structure work this way.
+_STAGE_MARKER_RE = re.compile(
+    r"^(?:#{1,3}\s*|\*\*)((?:Phase|Stage|Tier|Level)s?\s+[\w.–-]+[^\n*]{0,120}?)(?:\*\*[^\n]*)?$",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # Phrases that mark a skill as needing user interaction mid-flow.
@@ -38,7 +52,13 @@ def referenced_paths(content: str) -> list[str]:
     """Relative file paths the skill references (progressive disclosure)."""
     paths: list[str] = []
     seen: set[str] = set()
-    for match in list(_MD_LINK_RE.finditer(content)) + list(_BARE_REF_RE.finditer(content)):
+    matches = sorted(
+        list(_MD_LINK_RE.finditer(content))
+        + list(_BARE_REF_RE.finditer(content))
+        + list(_BACKTICK_REF_RE.finditer(content)),
+        key=lambda m: m.start(),
+    )
+    for match in matches:
         # Trailing sentence punctuation is part of the prose, not the path.
         raw = match.group(1).strip().lstrip("./").rstrip(".,;:)")
         if not raw or raw in seen:
@@ -49,6 +69,37 @@ def referenced_paths(content: str) -> list[str]:
         seen.add(raw)
         paths.append(raw)
     return paths
+
+
+_MAX_STAGES = 30
+
+
+def extract_stages(content: str) -> list[dict]:
+    """Ordered stage/phase plan parsed from headings and bold stage markers.
+
+    Staged skills (e.g. an app-builder with Bronze/Silver/Gold tiers) declare
+    a progression like "Phase 0 — Discovery" … "Phase 9 — Pre-CI". Each stage
+    keeps the reference files mentioned in its section so trials can check
+    that a model loads stage files in order.
+
+    Returns [{"id", "title", "files": [...]}] — empty list for unstaged skills.
+    """
+    markers = list(_STAGE_MARKER_RE.finditer(content))[:_MAX_STAGES]
+    stages: list[dict] = []
+    for i, marker in enumerate(markers):
+        # Slice from the end of the *title* group, not the full match — bold
+        # markers ("**Phase 3:** Load `tiers/bronze.md`") keep their stage
+        # files on the marker line itself.
+        section_start = marker.end(1)
+        section_end = markers[i + 1].start() if i + 1 < len(markers) else len(content)
+        stages.append(
+            {
+                "id": f"stage-{i + 1}",
+                "title": marker.group(1).strip().rstrip(":*").strip(),
+                "files": referenced_paths(content[section_start:section_end]),
+            }
+        )
+    return stages
 
 
 def detect_interaction(content: str) -> bool:
@@ -169,4 +220,5 @@ async def parse_skill(content: str, model: str | None = None) -> dict:
         "directives": directives,
         "referenced_paths": referenced_paths(content),
         "interaction_required": detect_interaction(content),
+        "stages": extract_stages(content),
     }

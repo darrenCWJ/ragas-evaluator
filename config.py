@@ -8,6 +8,9 @@ production via ``.env`` or container environment.
 import os
 from pathlib import Path
 
+# Application version — keep in sync with frontend/package.json.
+APP_VERSION = "0.7.0"
+
 # ---------------------------------------------------------------------------
 # Storage paths
 # ---------------------------------------------------------------------------

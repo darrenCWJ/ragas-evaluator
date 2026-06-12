@@ -65,6 +65,22 @@ function ResultRow({ result }: { result: SkillTrialResult }) {
             <span className="flex items-center gap-2 text-2xs text-text-muted">
               format <ScoreBar value={result.scores.format_compliance ?? null} />
             </span>
+            {result.scores.stage_coverage != null && (
+              <span
+                className="flex items-center gap-2 text-2xs text-text-muted"
+                title="Fraction of the skill's stage-plan files the model read"
+              >
+                stages <ScoreBar value={result.scores.stage_coverage} />
+              </span>
+            )}
+            {result.scores.stage_order != null && (
+              <span
+                className="flex items-center gap-2 text-2xs text-text-muted"
+                title="Fraction of stage-file reads that followed the plan order"
+              >
+                order <ScoreBar value={result.scores.stage_order} />
+              </span>
+            )}
           </div>
 
           {result.directive_results.length > 0 && (

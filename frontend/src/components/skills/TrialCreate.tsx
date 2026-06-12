@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { createSkillTrial } from '../../api';
 import type { BotConfig, JudgeModel, Skill, SkillTrialModelSpec, TestSet } from '../../api';
 import { Button, Card, ErrorAlert, FormField, Select, TextInput } from '../ui';
+import ManageModels from './ManageModels';
 
 interface TrialCreateProps {
   projectId: number;
@@ -10,6 +11,7 @@ interface TrialCreateProps {
   judgeModels: JudgeModel[];
   botConfigs: BotConfig[];
   onCreated: () => void;
+  onModelsChanged: () => void;
 }
 
 interface ModelOption {
@@ -41,6 +43,7 @@ export default function TrialCreate({
   judgeModels,
   botConfigs,
   onCreated,
+  onModelsChanged,
 }: TrialCreateProps) {
   const [name, setName] = useState('');
   const [skillId, setSkillId] = useState<number | ''>('');
@@ -48,6 +51,7 @@ export default function TrialCreate({
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [includeBaseline, setIncludeBaseline] = useState(true);
   const [agenticMode, setAgenticMode] = useState(false);
+  const [managingModels, setManagingModels] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,12 +65,14 @@ export default function TrialCreate({
 
   const options: ModelOption[] = useMemo(
     () => [
-      ...judgeModels.map((m) => ({
-        key: `llm:${m.id}`,
-        label: m.name,
-        detail: m.available ? m.provider : `${m.provider} — no API key`,
-        disabled: !m.available,
-      })),
+      ...judgeModels
+        .filter((m) => m.enabled !== false)
+        .map((m) => ({
+          key: `llm:${m.id}`,
+          label: m.name,
+          detail: m.available ? m.provider : `${m.provider} — no API key`,
+          disabled: !m.available,
+        })),
       ...eligibleBots.map((b) => ({
         key: `bot:${b.id}`,
         label: b.name,
@@ -154,6 +160,20 @@ export default function TrialCreate({
           </Select>
         </FormField>
       </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-text-muted">
+          Model list outdated or missing a model? Manage the registry without a code change.
+        </span>
+        <button
+          type="button"
+          className="text-xs text-accent hover:underline"
+          onClick={() => setManagingModels((prev) => !prev)}
+        >
+          {managingModels ? 'Close model manager' : 'Manage models'}
+        </button>
+      </div>
+      {managingModels && <ManageModels judgeModels={judgeModels} onChanged={onModelsChanged} />}
 
       <FormField label="Models" hint="Each selected model runs every question per variant">
         {options.length === 0 ? (
