@@ -37,13 +37,22 @@
 | 11 — Multi-turn conversation testing + CI quality gate endpoint | ✅ Done | `135eef03`, `9d9a7687`, `25ca083b` |
 | 12 — Auth: multi-user logins, admin role (sees all projects), project isolation, machine token | ✅ Done | `466da7a6` |
 
-### Remaining work (verified NOT implemented as of 2026-06-13, priority order)
+### Remaining work (updated 2026-06-12 session, priority order)
 
 **Engineering debt**
-1. **Frontend unit tests** — zero exist. Set up Vitest + React Testing Library; start with api/client error paths, usePolling/useFetch hooks, and one render test per page.
-2. **Extract `app/services/experiment_runner.py`** — `app/routes/experiments.py` is still ~2.3k lines; move `_run_background` + aggregation helpers behind unchanged route signatures.
-3. **Request-ID logging middleware** for per-request log correlation.
-4. Check whether eslint `react-hooks/set-state-in-effect`/`react-hooks/refs` can now ratchet from 'warn' back to 'error' (god splits landed; remaining warners are legacy pages).
+1. ~~**Frontend unit tests**~~ ✅ Done — Vitest + RTL wired into vite.config.ts; 46 tests:
+   api/client error paths, useFetch/usePolling hooks, 22 page smoke tests (all 11 pages
+   × no-project + project-with-API-down). `npm test` added to CI frontend job.
+2. ~~**Extract `app/services/experiment_runner.py`**~~ ✅ Done — `_run_background` (~700 LOC)
+   moved to `run_experiment_background()` plus public helpers (`sanitize_nan`,
+   `parse_experiment_row`, `compute_aggregates`, `aggregate_rows`, `compute_token_usage`,
+   `retrieval_diagnostics`, `build_virtual_rag_config_row`). Routes file 2,480 → ~1,640 LOC.
+   analyze/annotations/reports now import from the service; test patch targets updated.
+3. ~~**Request-ID logging middleware**~~ ✅ Done — `app/services/request_context.py`
+   (ContextVar + RequestIDMiddleware outermost + RequestIDFilter); log format carries
+   `[request_id]`; X-Request-ID honored/echoed; background tasks inherit the id via
+   contextvars. 8 unit tests.
+4. Check whether eslint `react-hooks/set-state-in-effect`/`react-hooks/refs` can now ratchet from 'warn' back to 'error' (god splits landed; remaining warners are legacy pages — 71 warnings as of this session).
 
 **Retrieval upgrades (designed in Part 2/§A below — none built)**
 5. **Small-to-big retrieval** — `parent_child` chunking exists and chunks table has `parent_chunk_id`, but retrieval never expands child→parent. Highest-impact retrieval fix (~30 lines in `pipeline/rag.py` retrieval functions + dedupe).
@@ -59,6 +68,14 @@
 13. Real-user log import → test questions; hard-case mining (auto-generate variants of failed questions).
 
 **Known quirks to be aware of**
+- `tests/integration/test_glean_experiment.py::test_glean_all_metrics` (slow marker) fails
+  in any env without ANTHROPIC_API_KEY + GOOGLE_API_KEY: it runs ALL 26 metrics incl.
+  multi_llm_judge, whose pre-run judge validation requires all three provider keys.
+  Pre-existing (fails identically on the pre-refactor baseline); not run in CI.
+- Slow integration tests need the real OPENAI_API_KEY from `.env` — do NOT export
+  OPENAI_API_KEY=sk-dummy when running them (that's for `tests/unit` only).
+- Windows: `core.autocrlf=true` checkouts are CRLF; prettier is configured with
+  `endOfLine: "auto"` so format:check passes locally and in CI.
 - Worker delegation for experiments/testgen posts to `/run-experiment`/`/run-testgen` endpoints the worker does NOT implement — silently falls back to local execution (documented in CODEMAPS/worker.md limitations).
 - `resource` module usage in worker /status is Unix-only (fine in Docker, N/A on Windows dev).
 - Coverage report legitimately shows "doesn't apply" for corpus-less projects (external agent + uploaded test set).
