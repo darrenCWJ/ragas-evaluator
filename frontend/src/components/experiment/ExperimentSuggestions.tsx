@@ -7,10 +7,18 @@ import {
   fetchEmbeddingConfigs,
   ApiError,
 } from '../../lib/api';
-import type { Suggestion, BatchApplyResult, ChunkConfig, EmbeddingConfig } from '../../lib/api';
+import type {
+  Suggestion,
+  SuggestionOutcome,
+  SuggestionOutcomeMetric,
+  BatchApplyResult,
+  ChunkConfig,
+  EmbeddingConfig,
+} from '../../lib/api';
 import PromptDoctorPanel from './PromptDoctorPanel';
 import CopyButton from '../ui/CopyButton';
 import TextArea from '../ui/TextArea';
+import { humanizeMetric } from './scoreUtils';
 
 interface Props {
   projectId: number;
@@ -488,18 +496,21 @@ function SuggestionCard({
           {/* Status / config info */}
           <div className="mt-2">
             {s.implemented ? (
-              <span className="flex items-center gap-1 text-xs font-medium text-emerald-400">
-                <svg
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2.5}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                </svg>
-                Applied
-              </span>
+              <div className="space-y-2">
+                <span className="flex items-center gap-1 text-xs font-medium text-emerald-400">
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2.5}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
+                  Applied
+                </span>
+                {s.outcome && <SuggestionOutcomeBadge outcome={s.outcome} />}
+              </div>
             ) : s.config_field ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-3 text-xs">
@@ -565,6 +576,137 @@ function SuggestionCard({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Outcome badge (verification result for an applied suggestion) ── */
+
+const CHIP_BASE = 'inline-flex items-center rounded-full px-2 py-0.5 text-2xs font-medium';
+
+const VERDICT_TEXT: Record<SuggestionOutcomeMetric['verdict'], string> = {
+  improved: 'text-score-high',
+  regressed: 'text-score-low',
+  inconclusive: 'text-text-muted',
+};
+
+const VERDICT_LABEL: Record<SuggestionOutcomeMetric['verdict'], string> = {
+  improved: 'Improved',
+  regressed: 'Regressed',
+  inconclusive: 'Inconclusive',
+};
+
+function formatDelta(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}`;
+}
+
+interface OutcomeChipSpec {
+  label: string;
+  className: string;
+}
+
+function buildOutcomeChip(
+  outcome: SuggestionOutcome,
+  metricEntries: [string, SuggestionOutcomeMetric][],
+): OutcomeChipSpec | null {
+  if (outcome.status === 'pending') {
+    return {
+      label: '⏳ Verifying — iteration running',
+      className: 'bg-elevated text-text-muted',
+    };
+  }
+  if (outcome.status === 'incomparable') {
+    return { label: '~ Not comparable', className: 'bg-elevated text-text-muted' };
+  }
+  switch (outcome.overall) {
+    case 'improved': {
+      const best = metricEntries
+        .filter(([, m]) => m.verdict === 'improved')
+        .sort((a, b) => b[1].delta - a[1].delta)[0];
+      const suffix = best ? ` · ${humanizeMetric(best[0])} ${formatDelta(best[1].delta)}` : '';
+      return {
+        label: `✓ Fix verified${suffix}`,
+        className: 'bg-emerald-500/15 text-emerald-400',
+      };
+    }
+    case 'regressed': {
+      const worst = metricEntries
+        .filter(([, m]) => m.verdict === 'regressed')
+        .sort((a, b) => a[1].delta - b[1].delta)[0];
+      const suffix = worst ? ` · ${humanizeMetric(worst[0])} ${formatDelta(worst[1].delta)}` : '';
+      return {
+        label: `✗ Made things worse${suffix}`,
+        className: 'bg-red-500/15 text-red-400',
+      };
+    }
+    case 'mixed':
+      return { label: '± Mixed results', className: 'bg-amber-500/15 text-amber-400' };
+    case 'inconclusive': {
+      const n =
+        typeof outcome.compared_questions === 'number' ? ` (n=${outcome.compared_questions})` : '';
+      return {
+        label: `~ No significant change${n}`,
+        className: 'bg-elevated text-text-muted',
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function SuggestionOutcomeBadge({ outcome }: { outcome: SuggestionOutcome }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const metricEntries = Object.entries(outcome.metrics ?? {});
+  const chip = buildOutcomeChip(outcome, metricEntries);
+  if (!chip) return null;
+
+  const hasDetail = outcome.status === 'evaluated' && metricEntries.length > 0;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`${CHIP_BASE} ${chip.className}`}>{chip.label}</span>
+        {hasDetail && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="text-2xs font-medium text-text-secondary transition hover:text-text-primary"
+          >
+            {expanded ? 'Hide details' : 'Details'}
+          </button>
+        )}
+      </div>
+      {hasDetail && expanded && (
+        <div className="rounded-lg border border-border bg-base px-3 py-2">
+          <ul className="space-y-1">
+            {metricEntries.map(([name, m]) => (
+              <li key={name} className="flex items-center gap-2 text-2xs">
+                <span className="w-32 shrink-0 truncate text-text-secondary">
+                  {humanizeMetric(name)}
+                </span>
+                <span className={`font-mono font-semibold ${VERDICT_TEXT[m.verdict]}`}>
+                  {formatDelta(m.delta)}
+                </span>
+                {m.lo !== null && m.hi !== null && (
+                  <span className="text-text-muted" title="95% bootstrap confidence interval">
+                    CI {formatDelta(m.lo)} to {formatDelta(m.hi)}
+                  </span>
+                )}
+                <span className={`ml-auto ${VERDICT_TEXT[m.verdict]}`}>
+                  {VERDICT_LABEL[m.verdict]}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {typeof outcome.compared_questions === 'number' && (
+            <p className="mt-1.5 text-2xs text-text-muted">
+              Compared on {outcome.compared_questions} question
+              {outcome.compared_questions !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -561,6 +561,16 @@ export interface EvaluatorAccuracyResult {
 // Experiments
 // ---------------------------------------------------------------------------
 
+/** 95% bootstrap confidence interval for one aggregate metric. `lo`/`hi` are null when n < 3. */
+export interface AggregateCIEntry {
+  mean: number;
+  lo: number | null;
+  hi: number | null;
+  n: number;
+}
+
+export type AggregateCI = Record<string, AggregateCIEntry | null>;
+
 export interface Experiment {
   id: number;
   project_id: number;
@@ -589,6 +599,7 @@ export interface Experiment {
   approved_question_count?: number;
   result_count?: number;
   aggregate_metrics?: Record<string, number | null> | null;
+  aggregate_ci?: AggregateCI | null;
 }
 
 export interface ExperimentCreate {
@@ -685,6 +696,28 @@ export interface ExperimentSSEHandle {
 
 // --- Suggestions ---
 
+export type SuggestionOutcomeStatus = 'pending' | 'incomparable' | 'evaluated';
+
+export type SuggestionOutcomeOverall = 'improved' | 'regressed' | 'mixed' | 'inconclusive';
+
+export type SuggestionMetricVerdict = 'improved' | 'regressed' | 'inconclusive';
+
+export interface SuggestionOutcomeMetric {
+  delta: number;
+  lo: number | null;
+  hi: number | null;
+  verdict: SuggestionMetricVerdict;
+}
+
+/** Verification outcome for an applied suggestion, comparing the iteration experiment against its baseline. */
+export interface SuggestionOutcome {
+  status: SuggestionOutcomeStatus;
+  applied_experiment_id: number;
+  overall?: SuggestionOutcomeOverall;
+  metrics?: Record<string, SuggestionOutcomeMetric>;
+  compared_questions?: number;
+}
+
 export interface Suggestion {
   id: number;
   experiment_id: number;
@@ -696,6 +729,7 @@ export interface Suggestion {
   suggested_value: string | null;
   implemented: boolean;
   created_at: string;
+  outcome: SuggestionOutcome | null;
 }
 
 export interface BatchApplyResult {

@@ -1,10 +1,15 @@
 /** Shared score display utilities for experiment components */
 
-/** Humanize snake_case metric name → Title Case */
+/** Acronym words that should stay fully uppercase when humanizing metric names */
+const METRIC_WORD_OVERRIDES: Record<string, string> = {
+  mrr: 'MRR',
+};
+
+/** Humanize snake_case metric name → Title Case (acronyms like MRR kept uppercase) */
 export function humanizeMetric(name: string): string {
   return name
     .split('_')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .map((w) => METRIC_WORD_OVERRIDES[w] ?? w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 }
 

@@ -135,6 +135,15 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
     }
   }
 
+  /* 95% bootstrap CI bounds for a metric — null when absent or n < 3 (lo/hi null) */
+  const aggCi = experiment.aggregate_ci ?? null;
+  const ciFor = (name: string): { lo: number; hi: number } | null => {
+    const entry = aggCi?.[name];
+    if (!entry || entry.lo === null || entry.hi === null) return null;
+    return { lo: entry.lo, hi: entry.hi };
+  };
+  const hasAnyCi = metricEntries.some(([name]) => ciFor(name) !== null);
+
   return (
     <div className="space-y-6">
       {/* ── Header ── */}
@@ -256,24 +265,35 @@ export default function ExperimentResults({ projectId, experimentId }: Props) {
           <div className="space-y-3">
             {metricEntries
               .sort((a, b) => b[1] - a[1])
-              .map(([name, value]) => (
-                <div key={name} className="flex items-center gap-3">
-                  <span className="w-36 shrink-0 truncate text-xs font-medium text-text-secondary">
-                    {humanizeMetric(name)}
-                  </span>
-                  <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-elevated">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${scoreBarColor(value)}`}
-                      style={{ width: `${Math.max(value * 100, 1)}%` }}
-                    />
+              .map(([name, value]) => {
+                const ci = ciFor(name);
+                return (
+                  <div key={name} className="flex items-center gap-3">
+                    <span className="w-36 shrink-0 truncate text-xs font-medium text-text-secondary">
+                      {humanizeMetric(name)}
+                    </span>
+                    <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-elevated">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${scoreBarColor(value)}`}
+                        style={{ width: `${Math.max(value * 100, 1)}%` }}
+                      />
+                    </div>
+                    <span
+                      className={`w-10 text-right font-mono text-xs font-semibold ${scoreTextColor(value)}`}
+                    >
+                      {(value * 100).toFixed(0)}%
+                    </span>
+                    {hasAnyCi && (
+                      <span
+                        className="w-20 shrink-0 font-mono text-2xs text-text-muted"
+                        title={ci ? '95% bootstrap confidence interval' : undefined}
+                      >
+                        {ci ? `(${(ci.lo * 100).toFixed(0)}–${(ci.hi * 100).toFixed(0)}%)` : ''}
+                      </span>
+                    )}
                   </div>
-                  <span
-                    className={`w-10 text-right font-mono text-xs font-semibold ${scoreTextColor(value)}`}
-                  >
-                    {(value * 100).toFixed(0)}%
-                  </span>
-                </div>
-              ))}
+                );
+              })}
           </div>
         </div>
       )}
