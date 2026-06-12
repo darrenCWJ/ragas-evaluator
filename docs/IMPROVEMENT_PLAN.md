@@ -95,11 +95,14 @@
     results into a provenance-preserving test set. Backend only — no UI yet.
 
 **New follow-up work (from this session)**
-- Frontend panels for sweeps (create + leaderboard), schedules (CRUD + alerts),
-  judge calibration (report + apply), log import, and hard-case mining — the
-  backends are complete and tested; only the RAG-config Retrieval Quality UI landed.
+- ~~Frontend panels~~ ✅ Done — SweepPanel (grid builder + polling + leaderboard)
+  and SchedulePanel (CRUD + alerts + ack) on the Experiment page;
+  JudgeCalibrationPanel + HardCaseMiningPanel on Analyze; LogImportPanel on Test.
+  New api/ modules: sweeps.ts, schedules.ts, mining.ts (+ calibration in annotations.ts).
 - Sweep/schedule runs execute in the API process; a server restart leaves a
   'running' sweep until cancelled (documented in service docstrings).
+- Docs refresh pending: README/FEATURES/CODEMAPS don't yet describe the new
+  retrieval options, sweeps, schedules, calibration, or mining endpoints.
 
 **Known quirks to be aware of**
 - `tests/integration/test_glean_experiment.py::test_glean_all_metrics` (slow marker) fails
