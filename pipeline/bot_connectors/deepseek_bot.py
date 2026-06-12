@@ -36,7 +36,13 @@ class DeepSeekBotConnector:
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources
 
-    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse:
         system = f"{system_context}\n\n{self._system_prompt}" if system_context else self._system_prompt
         if self._prompt_for_sources:
             system += SOURCE_PROMPT_SUFFIX
@@ -44,6 +50,7 @@ class DeepSeekBotConnector:
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
+        messages.extend(history or [])
         messages.append({"role": "user", "content": question})
 
         response = await self._client.chat.completions.create(

@@ -34,7 +34,13 @@ class GeminiBotConnector:
         self._system_prompt = system_prompt
         self._prompt_for_sources = prompt_for_sources
 
-    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse:
         system = f"{system_context}\n\n{self._system_prompt}" if system_context else self._system_prompt
         if self._prompt_for_sources:
             system += SOURCE_PROMPT_SUFFIX
@@ -43,9 +49,22 @@ class GeminiBotConnector:
             system_instruction=system if system else None,
         )
 
+        # Gemini uses role "model" for assistant turns
+        if history:
+            contents: list[types.Content] = [
+                types.Content(
+                    role="model" if turn.get("role") == "assistant" else "user",
+                    parts=[types.Part(text=turn.get("content", ""))],
+                )
+                for turn in history
+            ]
+            contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
+        else:
+            contents = question  # type: ignore[assignment]
+
         response = await self._client.aio.models.generate_content(
             model=self._model,
-            contents=question,
+            contents=contents,
             config=config,
         )
 

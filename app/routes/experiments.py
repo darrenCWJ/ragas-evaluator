@@ -922,13 +922,16 @@ async def run_experiment(
     if cursor.rowcount != 1:
         raise HTTPException(status_code=409, detail="Experiment already claimed by another request")
 
-    # Clean up partial results from a prior failed run (if any)
+    # Clean up partial results from a prior failed run (if any).
+    # ALWAYS commit: even a zero-row DELETE opens a write transaction on this
+    # shared connection, and leaving it open blocks the background task's
+    # connection ("database is locked") until something else commits.
     deleted = conn.execute(
         "DELETE FROM experiment_results WHERE experiment_id = ?",
         (experiment_id,),
     )
+    conn.commit()
     if deleted.rowcount > 0:
-        conn.commit()
         logger.info(
             "Experiment %d re-run: deleted %d partial results from prior attempt",
             experiment_id,
@@ -1196,9 +1199,22 @@ async def run_experiment(
             progress_queue: asyncio.Queue = asyncio.Queue()
 
             async def _process_question(idx: int, q_row):
-                """Process a single question under the semaphore."""
+                """Process a single question under the semaphore.
+
+                Questions whose metadata carries ``turns`` (a list of prior
+                user messages) run as a CONVERSATION: each setup turn is sent
+                with accumulated history, then the final question is asked and
+                its answer evaluated. The transcript is stored with the result.
+                """
                 question_text = q_row["question"]
                 qid = q_row["id"]
+                conversation_turns = []
+                try:
+                    _q_meta_early = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else {}
+                    raw_turns = _q_meta_early.get("turns") or []
+                    conversation_turns = [str(t) for t in raw_turns if str(t).strip()]
+                except (TypeError, ValueError):
+                    conversation_turns = []
 
                 async with semaphore:
                     if cancel_event.is_set():
@@ -1246,8 +1262,19 @@ async def run_experiment(
                             ]
                             usage_info = {"source": "csv_preloaded"}
                         elif use_bot:
+                            # Multi-turn: play the setup turns first, carrying history
+                            chat_history: list[dict] = []
+                            for turn_text in conversation_turns:
+                                prior = await asyncio.wait_for(
+                                    connector.query(turn_text, history=chat_history or None),
+                                    timeout=BOT_QUERY_TIMEOUT,
+                                )
+                                chat_history.append({"role": "user", "content": turn_text})
+                                chat_history.append({"role": "assistant", "content": prior.answer})
+
                             bot_response = await asyncio.wait_for(
-                                connector.query(question_text), timeout=BOT_QUERY_TIMEOUT
+                                connector.query(question_text, history=chat_history or None),
+                                timeout=BOT_QUERY_TIMEOUT,
                             )
                             generated_answer = bot_response.answer
                             citations_data = [asdict(c) for c in bot_response.citations]
@@ -1272,6 +1299,8 @@ async def run_experiment(
                                 "citations": citations_data,
                                 "raw_response": bot_response.raw_response,
                             }
+                            if conversation_turns:
+                                usage_info["transcript"] = chat_history
                             # Use the bot's actual retrieved contexts for
                             # scoring — these are what RAGAS metrics should
                             # evaluate (retrieval quality, faithfulness, etc.).
@@ -1304,6 +1333,11 @@ async def run_experiment(
                             else q_row["reference_answer"]
                         )
                         q_metadata = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else None
+                        # Make the runtime transcript available to conversation
+                        # metrics (conversation_retention). Internal RAG runs
+                        # don't simulate turns — only bot runs build history.
+                        if conversation_turns and use_bot and not is_csv:
+                            q_metadata = {**(q_metadata or {}), "_transcript": chat_history}
 
                         def _on_metric_start(metric_name):
                             def _apply(prog: dict) -> None:

@@ -39,13 +39,27 @@ class GleanBotConnector:
         self._agent_id = agent_id
         self._timeout = timeout
 
-    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse:
         if system_context:
             from pipeline.bot_connectors.base import SystemContextUnsupported
             raise SystemContextUnsupported("glean")
+        # Glean's chat API does accept prior messages — pass them through.
+        prior = [
+            {"fragments": [{"text": turn.get("content", "")}], "author": (
+                "USER" if turn.get("role") == "user" else "GLEAN_AI"
+            )}
+            for turn in (history or [])
+        ]
         body: dict[str, Any] = {
             "messages": [
-                {"fragments": [{"text": question}]}
+                *prior,
+                {"fragments": [{"text": question}]},
             ],
         }
         if self._agent_id:

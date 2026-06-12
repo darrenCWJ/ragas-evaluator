@@ -26,6 +26,7 @@ from evaluation.metrics import (
     context_precision,
     context_recall,
     context_relevance,
+    conversation_retention,
     custom_metric,
     datacompy_score,
     exact_match,
@@ -71,6 +72,7 @@ ALL_METRICS = [
     "instance_rubrics",
     "response_groundedness",
     "refusal_accuracy",
+    "conversation_retention",
     "sql_semantic_equivalence",
     "datacompy_score",
     # multi_llm_judge is listed here for UI discovery but executed separately
@@ -102,6 +104,7 @@ _METRIC_MODULES = {
     "instance_rubrics": instance_rubrics,
     "response_groundedness": response_groundedness,
     "refusal_accuracy": refusal_accuracy,
+    "conversation_retention": conversation_retention,
     "sql_semantic_equivalence": sql_semantic_equivalence,
     "datacompy_score": datacompy_score,
 }
@@ -112,7 +115,7 @@ _LLM_ONLY = {
     "context_entities_recall", "noise_sensitivity", "factual_correctness",
     "summarization_score", "aspect_critic", "rubrics_score", "instance_rubrics",
     "answer_accuracy", "context_relevance", "response_groundedness",
-    "sql_semantic_equivalence", "refusal_accuracy",
+    "sql_semantic_equivalence", "refusal_accuracy", "conversation_retention",
 }
 # Metrics that need LLM + embeddings
 _LLM_AND_EMBED = {"answer_relevancy"}
@@ -212,7 +215,7 @@ _SCORE_SIGNATURES = {
     "metadata_sql": {"sql_semantic_equivalence"},
     "metadata_data": {"datacompy_score"},
     # (scorer, question, answer, metadata) — scores only refusal-tagged questions
-    "metadata_refusal": {"refusal_accuracy"},
+    "metadata_refusal": {"refusal_accuracy", "conversation_retention"},
 }
 
 # Metrics that require non-empty contexts to run

@@ -526,6 +526,7 @@ async def upload_test_set(
     answer_column: str = Form(...),
     contexts_column: str | None = Form(None),
     category_column: str | None = Form(None),
+    turns_column: str | None = Form(None),
     reference_sql_column: str | None = Form(None),
     schema_contexts_column: str | None = Form(None),
     reference_data_column: str | None = Form(None),
@@ -542,6 +543,11 @@ async def upload_test_set(
         "out_of_knowledge_base" / "refusal" / "unanswerable" additionally tag
         the question as expecting a refusal, enabling the refusal_accuracy
         metric and per-category breakdowns for external test sets.
+      - turns_column: (optional) prior conversation turns before the question,
+        as a JSON array of user messages or a ``|||``-separated string.
+        Makes the question a multi-turn conversation test: the runner plays
+        each turn against the agent (carrying history) before asking the
+        final question, and conversation_retention can score the result.
       - name: (optional) test set name
     """
     conn = db.init.get_db()
@@ -588,6 +594,7 @@ async def upload_test_set(
         )
     for col_name, col_label in [
         (category_column, "category_column"),
+        (turns_column, "turns_column"),
         (reference_sql_column, "reference_sql_column"),
         (schema_contexts_column, "schema_contexts_column"),
         (reference_data_column, "reference_data_column"),
@@ -709,6 +716,26 @@ async def upload_test_set(
             category = str(row.get(category_column) or "").strip()
             if category.lower().replace(" ", "_") in _REFUSAL_CATEGORY_VALUES:
                 metadata["expected_behavior"] = "refusal"
+
+        # Conversation turns — JSON array or |||-separated user messages
+        if turns_column:
+            raw_turns = row.get(turns_column)
+            turns: list[str] = []
+            if isinstance(raw_turns, list):
+                turns = [str(t).strip() for t in raw_turns if str(t).strip()]
+            elif isinstance(raw_turns, str) and raw_turns.strip():
+                stripped = raw_turns.strip()
+                if stripped.startswith("["):
+                    try:
+                        parsed_turns = json.loads(stripped)
+                        if isinstance(parsed_turns, list):
+                            turns = [str(t).strip() for t in parsed_turns if str(t).strip()]
+                    except json.JSONDecodeError:
+                        turns = [stripped]
+                else:
+                    turns = [t.strip() for t in stripped.split("|||") if t.strip()]
+            if turns:
+                metadata["turns"] = turns
 
         metadata_json_val = json.dumps(metadata) if metadata else None
 

@@ -106,9 +106,22 @@ class CustomBotConnector:
         )
         self._timeout = timeout
 
-    async def query(self, question: str, *, system_context: str | None = None) -> BotResponse:
-        # Custom HTTP bots have no system channel — prepend the context to the
-        # question so skill trials still work against arbitrary endpoints.
+    async def query(
+        self,
+        question: str,
+        *,
+        system_context: str | None = None,
+        history: list[dict] | None = None,
+    ) -> BotResponse:
+        # Custom HTTP bots have no system/history channel — prepend both to the
+        # question so skill trials and conversation tests still work against
+        # arbitrary endpoints.
+        if history:
+            from pipeline.bot_connectors.base import history_as_transcript
+
+            question = (
+                f"Conversation so far:\n{history_as_transcript(history)}\n\nUser: {question}"
+            )
         if system_context:
             question = f"{system_context}\n\n---\n\n{question}"
         body_str = _PLACEHOLDER_RE.sub(_escape_json_value(question), self._body_template)
