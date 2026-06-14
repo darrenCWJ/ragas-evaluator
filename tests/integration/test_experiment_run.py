@@ -7,6 +7,7 @@ Hits a real OpenAI API — marked @pytest.mark.slow.  Run with:
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import sqlite3
@@ -55,7 +56,14 @@ _DOC_TEXT = (
 
 
 def _start_server(tmp_dir, port):
-    """Start a uvicorn server and return (proc, db_path, base_url)."""
+    """Start a uvicorn server and return (proc, db_path, base_url).
+
+    The server's stdout pipe MUST be drained continuously: a 16-metric run
+    logs enough (one httpx line per API call) to fill the OS pipe buffer,
+    and a full buffer blocks the server's log writes — the experiment then
+    hangs at status=running with zero results until the test times out.
+    A daemon thread drains the pipe into a ring buffer kept for diagnostics.
+    """
     db_path = str(tmp_dir / "test.db")
     env = {
         **os.environ,
@@ -68,6 +76,14 @@ def _start_server(tmp_dir, port):
          "--host", "127.0.0.1", "--port", str(port)],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
+    log_tail = collections.deque(maxlen=200)
+
+    def _drain():
+        for raw in proc.stdout:
+            log_tail.append(raw.decode(errors="replace").rstrip())
+
+    threading.Thread(target=_drain, daemon=True).start()
+    proc.log_tail = log_tail  # for failure diagnostics
     base_url = f"http://127.0.0.1:{port}"
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -77,9 +93,8 @@ def _start_server(tmp_dir, port):
         except requests.ConnectionError:
             pass
         time.sleep(0.5)
-    out = proc.stdout.read().decode() if proc.stdout else ""
     proc.kill()
-    pytest.fail(f"Server on port {port} did not start.\n{out}")
+    pytest.fail(f"Server on port {port} did not start.\n" + "\n".join(log_tail))
 
 
 def _stop_server(proc):
