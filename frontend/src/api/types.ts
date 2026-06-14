@@ -18,6 +18,14 @@ export interface JudgeModel {
   name: string;
   provider: 'openai' | 'anthropic' | 'gemini' | 'gateway';
   available: boolean;
+  /** True for user-added models from the editable registry. */
+  custom?: boolean;
+  /** False when the model has been hidden via the registry; defaults to true. */
+  enabled?: boolean;
+  /** USD per 1M input tokens — drives cost estimates; editable per model. */
+  price_in_per_mtok?: number | null;
+  /** USD per 1M output tokens. */
+  price_out_per_mtok?: number | null;
 }
 
 export interface JudgeModelsResponse {
@@ -1080,8 +1088,10 @@ export interface KGStreamCallbacks {
 
 export interface WorkerTask {
   project_id: number;
+  /** Human-readable project name resolved by the main app. */
+  project_name?: string;
   experiment_id?: number;
-  type: 'kg_build' | 'persona_generation' | 'experiment' | 'testgen';
+  type: 'kg_build' | 'persona_generation' | 'experiment' | 'testgen' | 'skill_trial';
   kg_source?: string;
   started_at?: number;
   num_personas?: number;
@@ -1096,6 +1106,8 @@ export interface WorkerTask {
   total?: number;
   test_set_id?: number;
   questions_generated?: number;
+  trial_id?: number;
+  trial_name?: string;
 }
 
 export interface WorkerInfo {
@@ -1110,6 +1122,7 @@ export interface WorkerInfo {
   active_persona_builds?: number;
   active_experiments?: number;
   active_testgens?: number;
+  active_skill_trials?: number;
   max_concurrent_kg?: number;
   max_concurrent_personas?: number;
   max_concurrent_experiments?: number;
@@ -1117,9 +1130,20 @@ export interface WorkerInfo {
   error?: string;
 }
 
+export interface QueuedJob {
+  kind: string;
+  project_id: number;
+  project_name: string;
+  kg_source?: string;
+  attempts: number;
+  created_at: string;
+}
+
 export interface WorkersStatusResponse {
   workers: WorkerInfo[];
   total_configured: number;
+  /** Jobs waiting for a worker slot — retried automatically every ~20s. */
+  queued_jobs?: QueuedJob[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,6 +1159,13 @@ export interface SkillDirective {
   machine_checkable: boolean;
 }
 
+export interface SkillStage {
+  id: string;
+  title: string;
+  /** Reference files this stage tells the model to load. */
+  files: string[];
+}
+
 export interface Skill {
   id: number;
   project_id: number;
@@ -1147,6 +1178,9 @@ export interface Skill {
   interaction_required?: boolean;
   /** Relative paths the SKILL.md references (progressive disclosure). */
   referenced_paths?: string[];
+  /** Ordered stage/phase plan parsed from headings (staged skills). */
+  stages?: SkillStage[];
+  stage_count?: number;
   /** Reference files stored with the skill (zip uploads). */
   files?: string[];
   /** Referenced paths with no matching stored file. */
@@ -1156,6 +1190,47 @@ export interface Skill {
   created_at: string;
   /** Present on POST/GET-by-id responses; absent from list responses. */
   content?: string;
+}
+
+export interface AgentTurnStep {
+  tool: string;
+  arguments: Record<string, unknown>;
+  result: string;
+  error?: string | null;
+  /** ask_user steps: the result came from the (real or scripted) user. */
+  from_user?: boolean;
+  /** ask_user steps: an AI answered from the user-details brief. */
+  simulated?: boolean;
+}
+
+export interface AgentTurn {
+  /** The model's narrated reasoning for this round. */
+  thought: string;
+  tool_calls: string[];
+  latency_ms?: number | null;
+  steps: AgentTurnStep[];
+}
+
+export interface SkillDryRunResult {
+  /** Set for interactive runs — needed to continue a paused run. */
+  run_id?: string | null;
+  status?: 'completed' | 'awaiting_input';
+  /** The question the model paused on (interactive runs only). */
+  question?: string | null;
+  answer: string;
+  turns: AgentTurn[];
+  files_read: string[];
+  user_exchanges: number;
+  stage_scores: {
+    stage_coverage: number;
+    stage_order: number;
+    stage_files_total: number;
+  } | null;
+  tokens_in: number;
+  tokens_out: number;
+  latency_ms: number;
+  /** Estimated $ cost from the model registry's per-token prices. */
+  cost_usd?: number | null;
 }
 
 export type SkillTrialModelSpec =
@@ -1186,6 +1261,12 @@ export interface SkillTrialCell {
   variant: SkillTrialVariant;
   adherence: number | null;
   format_compliance: number | null;
+  /** Avg fraction of stage-plan files read (agentic trials on staged skills). */
+  stage_coverage?: number | null;
+  /** Avg fraction of stage-file reads that followed the plan order. */
+  stage_order?: number | null;
+  /** Estimated $ cost from the model registry's per-token prices. */
+  cost_usd?: number | null;
   avg_latency_ms: number | null;
   tokens_in: number;
   tokens_out: number;
@@ -1241,6 +1322,12 @@ export interface TraceSpan {
   duration_ms: number;
   status: 'ok' | 'error';
   error?: string;
+  /** thinking:* spans — the model's narrated reasoning for that round. */
+  text?: string;
+  llm_ms?: number;
+  /** tool:* spans — call arguments and result excerpts. */
+  arguments?: string;
+  result?: string;
 }
 
 export interface SkillTrialResult {
@@ -1253,6 +1340,14 @@ export interface SkillTrialResult {
   scores: {
     skill_adherence?: number | null;
     format_compliance?: number | null;
+    /** Agentic trials: count of reference files the model read. */
+    files_read_count?: number;
+    user_exchanges?: number;
+    /** Staged skills: fraction of stage-plan files read. */
+    stage_coverage?: number | null;
+    /** Staged skills: fraction of stage-file reads in plan order. */
+    stage_order?: number | null;
+    stage_files_total?: number;
   };
   directive_results: DirectiveResult[];
   trace: TraceSpan[];
@@ -1273,8 +1368,14 @@ export interface ApplyModelResponse {
 
 export type UserRole = 'admin' | 'user';
 
+export type LoginEnforcement = 'auto' | 'on' | 'off';
+
 export interface AuthStatus {
+  /** Whether sign-in is currently REQUIRED (enforcement mode × users exist). */
   auth_enabled: boolean;
+  /** The configured enforcement mode — toggleable at runtime by an admin. */
+  login_enforcement?: LoginEnforcement;
+  users_exist?: boolean;
   registration_open: boolean;
 }
 

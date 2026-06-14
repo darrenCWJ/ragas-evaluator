@@ -9,7 +9,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
+  primary:
+    'bg-accent text-deep font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
   secondary:
     'border border-border text-text-primary hover:bg-input disabled:cursor-not-allowed disabled:opacity-50',
   danger:

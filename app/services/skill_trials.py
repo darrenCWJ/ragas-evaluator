@@ -90,16 +90,34 @@ async def _query_model(
 _MAX_USER_EXCHANGES = 3
 
 
-async def _simulate_user_reply(original_question: str, assistant_question: str) -> str:
-    """LLM plays the user when a skill asks a clarifying question mid-flow."""
+async def _simulate_user_reply(
+    original_question: str,
+    assistant_question: str,
+    brief: str | None = None,
+) -> str:
+    """LLM plays the user when a skill asks a clarifying question mid-flow.
+
+    With a *brief* (full project/task details supplied by the human), the
+    simulator answers each question FROM those details — so any model can ask
+    anything, in any order, and still get the right answer.
+    """
     from config import DEFAULT_EVAL_MODEL
 
+    brief_block = (
+        "Here is everything you know about your project/task — answer from "
+        f"these details whenever they cover the question:\n{brief}\n\n"
+        if brief else ""
+    )
     prompt = (
         "You are simulating the USER in a conversation with an AI assistant. "
         f"Your original request was:\n{original_question}\n\n"
-        f"The assistant asked you:\n{assistant_question}\n\n"
+        + brief_block
+        + f"The assistant asked you:\n{assistant_question}\n\n"
         "Reply briefly (1-2 sentences), staying consistent with your original "
-        "request. Output the user reply only."
+        "request"
+        + (" and the details above" if brief else "")
+        + ". If the details don't cover the question, give a short sensible "
+        "answer consistent with them. Output the user reply only."
     )
     response = await chat_completion(
         DEFAULT_EVAL_MODEL,
@@ -114,6 +132,7 @@ async def _query_model_agentic(
     q_row: dict,
     system_context: str | None,
     skill_files: dict[str, str],
+    user_brief: str | None = None,
 ) -> dict:
     """Agentic cell: the model can read skill reference files on demand
     (progressive disclosure) and ask a simulated user clarifying questions.
@@ -121,6 +140,7 @@ async def _query_model_agentic(
     Scripted answers (question metadata ``user_inputs``) take priority over
     the LLM user simulator and are consumed in order.
     """
+    from app.services.scripted_replies import ScriptedReplies
     from pipeline.agent_loop import run_agent
 
     question = q_row["question"]
@@ -128,7 +148,9 @@ async def _query_model_agentic(
         q_meta = json.loads(q_row["metadata_json"]) if q_row.get("metadata_json") else {}
     except (TypeError, ValueError):
         q_meta = {}
-    scripted: list[str] = [str(s) for s in (q_meta.get("user_inputs") or []) if str(s).strip()]
+    scripted = ScriptedReplies(
+        [str(s) for s in (q_meta.get("user_inputs") or []) if str(s).strip()]
+    )
     exchanges = {"n": 0}
 
     tools: list[dict] = [{
@@ -163,11 +185,13 @@ async def _query_model_agentic(
             return f"File '{path}' not found. Available: {', '.join(sorted(skill_files)) or '(none)'}"
         if name == "ask_user":
             exchanges["n"] += 1
-            if scripted:
-                return scripted.pop(0)
+            asked = str(args.get("question", ""))
+            reply = scripted.take(asked)
+            if reply is not None:
+                return reply
             if exchanges["n"] > _MAX_USER_EXCHANGES:
                 return "No further input — proceed with your best judgment."
-            return await _simulate_user_reply(question, str(args.get("question", "")))
+            return await _simulate_user_reply(question, asked, brief=user_brief)
         return f"Error: unknown tool '{name}'"
 
     messages: list[dict] = []
@@ -175,8 +199,10 @@ async def _query_model_agentic(
         messages.append({"role": "system", "content": system_context})
     messages.append({"role": "user", "content": question})
 
+    # Process-flow skills walk many stages (read tier file → ask → act), so
+    # give the loop more round-trips than the general default.
     result = await run_agent(
-        spec["model"], messages, tools, executor, params={"max_tokens": 4096}
+        spec["model"], messages, tools, executor, params={"max_tokens": 4096}, max_steps=16
     )
     files_read = [
         str(s["arguments"].get("path", "")) for s in result["steps"] if s["tool"] == "read_file"
@@ -186,8 +212,47 @@ async def _query_model_agentic(
         "tokens_in": result["usage"]["prompt_tokens"],
         "tokens_out": result["usage"]["completion_tokens"],
         "agent_steps": result["steps"],
+        "agent_turns": result.get("turns", []),
         "files_read": files_read,
         "user_exchanges": exchanges["n"],
+    }
+
+
+def _stage_metrics(stages: list[dict], files_read: list[str]) -> dict | None:
+    """Score how well an agentic run walked a staged skill's file plan.
+
+    stage_coverage — fraction of stage-plan files the model actually read.
+    stage_order    — fraction of consecutive stage-file reads in plan order.
+    """
+    plan_files: list[str] = []
+    seen: set[str] = set()
+    for stage in stages:
+        for path in stage.get("files", []):
+            if path not in seen:
+                seen.add(path)
+                plan_files.append(path)
+    if not plan_files:
+        return None
+
+    def _first_read_index(path: str) -> int | None:
+        for i, read in enumerate(files_read):
+            if read == path or read.endswith("/" + path) or path.endswith("/" + read):
+                return i
+        return None
+
+    read_indices = [idx for idx in (_first_read_index(p) for p in plan_files) if idx is not None]
+    coverage = len(read_indices) / len(plan_files)
+    if len(read_indices) >= 2:
+        in_order = sum(
+            1 for a, b in zip(read_indices, read_indices[1:], strict=False) if a <= b
+        )
+        order = in_order / (len(read_indices) - 1)
+    else:
+        order = 1.0 if read_indices else 0.0
+    return {
+        "stage_coverage": round(coverage, 4),
+        "stage_order": round(order, 4),
+        "stage_files_total": len(plan_files),
     }
 
 
@@ -202,6 +267,7 @@ async def _run_cell(
     cancel_event: asyncio.Event,
     mode: str = "inline",
     skill_files: dict[str, str] | None = None,
+    stages: list[dict] | None = None,
 ) -> dict | None:
     """Run one matrix cell. Returns a result-row dict or None when cancelled."""
     label = model_spec_label(spec)
@@ -247,14 +313,36 @@ async def _run_cell(
             row["response"] = reply["answer"]
             row["tokens_in"] = int(reply["tokens_in"] or 0)
             row["tokens_out"] = int(reply["tokens_out"] or 0)
-            for step in reply.get("agent_steps", []):
-                with trace.span(
-                    f"tool:{step['tool']}",
-                    arguments=json.dumps(step["arguments"])[:500],
-                    result=str(step["result"])[:500],
-                    error=step.get("error"),
-                ):
-                    pass
+            # The model's visible process: per LLM round, the narrated thought
+            # plus the tool calls it made — interleaved so the drilldown reads
+            # like a transcript of how the model worked through the skill.
+            turns = reply.get("agent_turns") or []
+            if turns:
+                for i, turn in enumerate(turns, 1):
+                    if turn.get("thought"):
+                        with trace.span(
+                            f"thinking:{i}",
+                            text=turn["thought"][:2000],
+                            llm_ms=turn.get("latency_ms"),
+                        ):
+                            pass
+                    for step in turn.get("steps", []):
+                        with trace.span(
+                            f"tool:{step['tool']}",
+                            arguments=json.dumps(step["arguments"])[:500],
+                            result=str(step["result"])[:500],
+                            error=step.get("error"),
+                        ):
+                            pass
+            else:
+                for step in reply.get("agent_steps", []):
+                    with trace.span(
+                        f"tool:{step['tool']}",
+                        arguments=json.dumps(step["arguments"])[:500],
+                        result=str(step["result"])[:500],
+                        error=step.get("error"),
+                    ):
+                        pass
 
             with trace.span("judge", directives=len(directives)):
                 verdicts = await judge_adherence(
@@ -273,6 +361,10 @@ async def _run_cell(
             if agentic:
                 scores["files_read_count"] = len(reply.get("files_read", []))
                 scores["user_exchanges"] = reply.get("user_exchanges", 0)
+                if skill and stages:
+                    stage_scores = _stage_metrics(stages, reply.get("files_read", []))
+                    if stage_scores:
+                        scores.update(stage_scores)
             row["scores_json"] = json.dumps(scores)
             row["directive_results_json"] = json.dumps(results)
         except Exception as exc:
@@ -304,6 +396,7 @@ async def run_skill_trial(trial_id: int) -> None:
 
         skill = None
         directives: list[dict] = []
+        stages: list[dict] = []
         if trial["skill_id"]:
             skill_row = conn.execute(
                 "SELECT * FROM skills WHERE id = ?", (trial["skill_id"],)
@@ -313,6 +406,10 @@ async def run_skill_trial(trial_id: int) -> None:
             skill = dict(skill_row)
             parsed = json.loads(skill["parsed_directives_json"] or "{}")
             directives = parsed.get("directives", [])
+            stages = parsed.get("stages")
+            if stages is None:
+                from evaluation.skills.parser import extract_stages
+                stages = extract_stages(skill["content"] or "")
         if not directives:
             raise ValueError("Trial skill has no parsed directives — re-upload the skill")
 
@@ -364,7 +461,7 @@ async def run_skill_trial(trial_id: int) -> None:
         tasks = [
             asyncio.create_task(_run_cell(
                 trial_id, variant, directives, spec, q, judge_model, semaphore, cancel_event,
-                mode=mode, skill_files=skill_files,
+                mode=mode, skill_files=skill_files, stages=stages,
             ))
             for variant, spec, q in cells
         ]
@@ -441,6 +538,7 @@ def aggregate_trial_matrix(conn, trial_id: int) -> dict:
             "model": r["model"], "variant": variant,
             "adherence_sum": 0.0, "adherence_n": 0,
             "format_sum": 0.0, "format_n": 0,
+            "stage_cov_sum": 0.0, "stage_order_sum": 0.0, "stage_n": 0,
             "tokens_in": 0, "tokens_out": 0,
             "latency_sum": 0, "latency_n": 0,
             "errors": 0, "count": 0,
@@ -461,6 +559,10 @@ def aggregate_trial_matrix(conn, trial_id: int) -> dict:
         if scores.get("format_compliance") is not None:
             cell["format_sum"] += scores["format_compliance"]
             cell["format_n"] += 1
+        if scores.get("stage_coverage") is not None:
+            cell["stage_cov_sum"] += scores["stage_coverage"]
+            cell["stage_order_sum"] += scores.get("stage_order") or 0.0
+            cell["stage_n"] += 1
 
     out = []
     by_model: dict[str, dict] = {}
@@ -471,6 +573,8 @@ def aggregate_trial_matrix(conn, trial_id: int) -> dict:
             "variant": variant,
             "adherence": adherence,
             "format_compliance": round(c["format_sum"] / c["format_n"], 4) if c["format_n"] else None,
+            "stage_coverage": round(c["stage_cov_sum"] / c["stage_n"], 4) if c["stage_n"] else None,
+            "stage_order": round(c["stage_order_sum"] / c["stage_n"], 4) if c["stage_n"] else None,
             "avg_latency_ms": int(c["latency_sum"] / c["latency_n"]) if c["latency_n"] else None,
             "tokens_in": c["tokens_in"],
             "tokens_out": c["tokens_out"],

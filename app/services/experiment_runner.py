@@ -81,6 +81,18 @@ def build_virtual_rag_config_row(experiment_row, project_id: int) -> dict:
 
 
 
+def _question_with_history(question: str, history: list[dict]) -> str:
+    """Prepend the conversation so far to a query for stateless RAG pipelines.
+
+    Both retrieval and generation see the established context, mirroring how
+    a chat UI would carry the conversation.
+    """
+    if not history:
+        return question
+    lines = [f"{m['role'].capitalize()}: {m['content']}" for m in history]
+    return "Conversation so far:\n" + "\n".join(lines) + f"\n\nCurrent question: {question}"
+
+
 def sanitize_nan(obj):
     """Replace NaN/Inf floats with None so JSON serialization produces valid output."""
     if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
@@ -603,18 +615,34 @@ async def run_experiment_background(
                         context_strings = citation_contexts
                     else:
                         response_mode = virtual_config["response_mode"]
-                        if response_mode == "multi_step":
-                            query_result = await multi_step_query(
-                                question_text, virtual_config, run_conn
+
+                        async def _rag_query(text: str) -> dict:
+                            if response_mode == "multi_step":
+                                return await multi_step_query(text, virtual_config, run_conn)
+                            return await single_shot_query(text, virtual_config, run_conn)
+
+                        # Multi-turn for internal RAG: the pipeline itself is
+                        # stateless, so each setup turn runs as a full RAG
+                        # round and the accumulated conversation is prepended
+                        # to subsequent queries (retrieval + generation both
+                        # see the history).
+                        rag_history: list[dict] = []
+                        for turn_text in conversation_turns:
+                            prior = await _rag_query(
+                                _question_with_history(turn_text, rag_history)
                             )
-                        else:
-                            query_result = await single_shot_query(
-                                question_text, virtual_config, run_conn
-                            )
+                            rag_history.append({"role": "user", "content": turn_text})
+                            rag_history.append({"role": "assistant", "content": prior["answer"]})
+
+                        query_result = await _rag_query(
+                            _question_with_history(question_text, rag_history)
+                        )
                         generated_answer = query_result["answer"]
                         full_context_dicts = query_result["contexts"]
                         usage_info = query_result.get("usage", {})
                         context_strings = [c["content"] for c in full_context_dicts]
+                        if rag_history:
+                            usage_info["transcript"] = rag_history
 
                     # Update phase to scoring
                     def _mark_scoring(prog: dict) -> None:
@@ -630,9 +658,9 @@ async def run_experiment_background(
                     )
                     q_metadata = json.loads(q_row["metadata_json"]) if q_row["metadata_json"] else None
                     # Make the runtime transcript available to conversation
-                    # metrics (conversation_retention). Internal RAG runs
-                    # don't simulate turns — only bot runs build history.
-                    if conversation_turns and use_bot and not is_csv:
+                    # metrics (conversation_retention). Bot, agent, AND
+                    # internal RAG runs all simulate turns and record one.
+                    if conversation_turns and not is_csv:
                         _transcript = usage_info.get("transcript")
                         if _transcript:
                             q_metadata = {**(q_metadata or {}), "_transcript": _transcript}
@@ -692,7 +720,7 @@ async def run_experiment_background(
                         if retrieval_metrics:
                             metrics_result.update(retrieval_metrics)
 
-                    # Deterministic agent-trace metric: compare the tool calls
+                    # Deterministic agent-trace metrics: compare the tool calls
                     # the agent made against the question's reference calls.
                     if "tool_call_f1" in selected_metrics and "agent_trace" in usage_info:
                         from evaluation.metrics.agent_trace import tool_call_f1_score
@@ -701,6 +729,43 @@ async def run_experiment_background(
                         metrics_result["tool_call_f1"] = tool_call_f1_score(
                             usage_info["agent_trace"], ref_calls
                         )
+                    if "tool_call_accuracy" in selected_metrics and "agent_trace" in usage_info:
+                        from evaluation.metrics.agent_trace import tool_call_accuracy_score
+
+                        ref_calls = (q_metadata or {}).get("reference_tool_calls") or []
+                        metrics_result["tool_call_accuracy"] = tool_call_accuracy_score(
+                            usage_info["agent_trace"], ref_calls
+                        )
+
+                    # Judge-based agent metric: did the agent achieve the goal?
+                    if "agent_goal_accuracy" in selected_metrics and "agent_trace" in usage_info:
+                        from evaluation.metrics.agent_goal_accuracy import agent_goal_accuracy_score
+
+                        try:
+                            metrics_result["agent_goal_accuracy"] = await agent_goal_accuracy_score(
+                                question_text, generated_answer, ref_answer,
+                                usage_info["agent_trace"],
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "agent_goal_accuracy failed for question %d: %s", qid, clean(exc)
+                            )
+
+                    # Judge-based topic adherence: needs the question's
+                    # allowed-topics list (metadata "topics").
+                    if "topic_adherence" in selected_metrics:
+                        topics = (q_metadata or {}).get("topics") or []
+                        if topics:
+                            from evaluation.metrics.topic_adherence import topic_adherence_score
+
+                            try:
+                                metrics_result["topic_adherence"] = await topic_adherence_score(
+                                    question_text, generated_answer, topics
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "topic_adherence failed for question %d: %s", qid, clean(exc)
+                                )
 
                     await progress_queue.put({
                         "idx": idx, "qid": qid, "question_text": question_text,

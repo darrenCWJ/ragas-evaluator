@@ -19,6 +19,15 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
   return request<AuthStatus>('/api/auth/status');
 }
 
+export async function updateLoginEnforcement(
+  mode: 'auto' | 'on' | 'off',
+): Promise<{ login_enforcement: string; auth_enabled: boolean; users_exist: boolean }> {
+  return request<{ login_enforcement: string; auth_enabled: boolean; users_exist: boolean }>(
+    '/api/auth/settings',
+    { method: 'PUT', body: JSON.stringify({ login_enforcement: mode }) },
+  );
+}
+
 export async function registerUser(payload: RegisterPayload): Promise<AuthUser> {
   return request<AuthUser>('/api/auth/register', {
     method: 'POST',

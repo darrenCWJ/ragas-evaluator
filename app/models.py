@@ -84,6 +84,23 @@ class TestSetCreate(BaseModel):
         return v
 
 
+class DocumentReprocessRequest(BaseModel):
+    """Re-extract a document's text from its stored original with new options."""
+
+    extract_tables: bool = True
+    describe_images: bool = False
+
+
+class QuestionMetadataUpdate(BaseModel):
+    """Merge keys into a question's metadata without touching its status.
+
+    Used by the conversation builder (``turns``) and other metadata editors.
+    A key set to None is removed.
+    """
+
+    metadata: dict
+
+
 class QuestionAnnotation(BaseModel):
     status: str
     user_edited_answer: str | None = None
@@ -889,6 +906,42 @@ class SkillCreate(BaseModel):
         return v
 
 
+class SkillDryRunRequest(BaseModel):
+    """Run a skill once against a single prompt to watch the model's process.
+
+    No test set, no judging, nothing persisted — purely for observing how a
+    model walks a (process-flow) skill. Always agentic.
+    """
+
+    prompt: str = Field(min_length=3, max_length=4000)
+    model: str = Field(min_length=1, max_length=128)
+    # Scripted replies for the model's ask_user calls. "keyword => answer"
+    # lines match by question content (models ask in different orders);
+    # plain lines are consumed positionally. When nothing fits: interactive
+    # runs pause for the human, one-shot runs fall back to the simulator.
+    user_inputs: list[str] = Field(default_factory=list, max_length=20)
+    # Interactive: instead of the simulator, PAUSE when the model asks a
+    # question and wait for the human's answer via the /continue endpoint.
+    interactive: bool = False
+    # Full project/task details. When set, an AI reads each question the
+    # model asks and answers FROM these details — works in any order, for
+    # any model, without pausing. Scripted replies still take priority.
+    user_brief: str | None = Field(default=None, max_length=8000)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError("invalid model id")
+        return v
+
+
+class SkillDryRunContinue(BaseModel):
+    """The human's reply to the question an interactive dry-run paused on."""
+
+    answer: str = Field(min_length=1, max_length=4000)
+
+
 class SkillTrialCreate(BaseModel):
     """Run a skill across selected AI models against an approved test set."""
 
@@ -925,6 +978,29 @@ class SkillTrialCreate(BaseModel):
             else:
                 raise ValueError("each model entry needs kind 'llm' or 'bot'")
         return specs
+
+
+class JudgeModelCreate(BaseModel):
+    """Register a custom judge model in the editable model registry."""
+
+    id: str = Field(min_length=1, max_length=128)
+    name: str | None = Field(default=None, max_length=128)
+    provider: str = Field(min_length=1, max_length=32)
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, v: str) -> str:
+        if not _LLM_MODEL_RE.match(v):
+            raise ValueError("invalid model id")
+        return v
+
+
+class JudgeModelUpdate(BaseModel):
+    """Update a judge model: enabled flag and/or price overrides ($ / 1M tokens)."""
+
+    enabled: bool | None = None
+    price_in_per_mtok: float | None = Field(default=None, ge=0, le=10_000)
+    price_out_per_mtok: float | None = Field(default=None, ge=0, le=10_000)
 
 
 class ApplyModelRequest(BaseModel):

@@ -12,6 +12,8 @@ const SPAN_COLORS: Record<string, string> = {
 
 function spanColor(span: TraceSpan): string {
   if (span.status === 'error') return 'bg-score-low/80';
+  if (span.name.startsWith('thinking:')) return 'bg-sky-400/60';
+  if (span.name.startsWith('tool:')) return 'bg-amber-400/60';
   return SPAN_COLORS[span.name] ?? 'bg-elevated';
 }
 

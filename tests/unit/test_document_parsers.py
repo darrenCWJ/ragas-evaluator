@@ -78,6 +78,86 @@ class TestOfficeFormats:
         assert "alice | 0.9" in out
 
 
+def _make_docx_with_table() -> bytes:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("Quarterly results below.")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Quarter"
+    table.cell(0, 1).text = "Revenue"
+    table.cell(1, 0).text = "Q1"
+    table.cell(1, 1).text = "1.2M"
+    doc.add_paragraph("End of report.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _make_pptx_with_table() -> bytes:
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = "Metrics"
+    shape = slide.shapes.add_table(2, 2, Inches(1), Inches(2), Inches(4), Inches(1))
+    shape.table.cell(0, 0).text = "Metric"
+    shape.table.cell(0, 1).text = "Value"
+    shape.table.cell(1, 0).text = "Recall"
+    shape.table.cell(1, 1).text = "0.93"
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+class TestTableExtraction:
+    def test_docx_tables_extracted_in_order(self):
+        out = parse_document("report.docx", ".docx", _make_docx_with_table())
+        assert "Quarterly results below." in out
+        assert "| Quarter | Revenue |" in out
+        assert "| Q1 | 1.2M |" in out
+        # Document order preserved: intro before table before outro
+        assert out.index("Quarterly") < out.index("| Q1 |") < out.index("End of report.")
+
+    def test_docx_tables_can_be_disabled(self):
+        out = parse_document(
+            "report.docx", ".docx", _make_docx_with_table(), extract_tables=False
+        )
+        assert "Quarterly results below." in out
+        assert "| Q1 |" not in out
+
+    def test_pptx_slide_tables_extracted(self):
+        out = parse_document("deck.pptx", ".pptx", _make_pptx_with_table())
+        assert "[Slide 1]" in out
+        assert "| Metric | Value |" in out
+        assert "| Recall | 0.93 |" in out
+
+    def test_pptx_tables_can_be_disabled(self):
+        out = parse_document(
+            "deck.pptx", ".pptx", _make_pptx_with_table(), extract_tables=False
+        )
+        assert "Metrics" in out  # title text still there
+        assert "| Recall |" not in out
+
+
+class TestEmbeddedImages:
+    def test_unsupported_format_returns_empty(self):
+        from pipeline.document_parsers import extract_embedded_images
+
+        assert extract_embedded_images(".txt", b"hello") == []
+
+    def test_docx_without_images_returns_empty(self):
+        from pipeline.document_parsers import extract_embedded_images
+
+        assert extract_embedded_images(".docx", _make_docx_with_table()) == []
+
+    def test_corrupt_input_never_raises(self):
+        from pipeline.document_parsers import extract_embedded_images
+
+        assert extract_embedded_images(".pdf", b"not a real pdf") == []
+
+
 class TestErrors:
     def test_unsupported_extension(self):
         with pytest.raises(DocumentParseError, match="Unsupported"):

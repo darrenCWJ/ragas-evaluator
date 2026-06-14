@@ -127,8 +127,9 @@ export default function LoginPage() {
           ) : (
             /* Open mode: first account bootstraps auth */
             <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2.5 text-xs text-text-secondary">
-              No accounts exist yet — the first account to register becomes the admin and activates
-              login for everyone.
+              No accounts exist yet — the first account to register becomes the admin. Whether
+              sign-in is then required for everyone is up to you: toggle it anytime under Workers
+              &rarr; Access control.
             </div>
           )}
 

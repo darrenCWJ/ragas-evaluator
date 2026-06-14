@@ -24,18 +24,84 @@ def _parse_text(data: bytes) -> str:
     return _decode(data)
 
 
-def _parse_pdf(data: bytes) -> str:
+def _parse_pdf(data: bytes, extract_tables: bool = True) -> str:
+    """PDF text, with structured tables when pdfplumber is available.
+
+    pdfplumber reconstructs row/column structure (rendered as markdown after
+    each page's text); plain pypdf text extraction is the fallback.
+    """
+    if extract_tables:
+        try:
+            return _parse_pdf_with_tables(data)
+        except ImportError:
+            pass  # pdfplumber not installed — plain text below
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "pdfplumber parse failed — falling back to pypdf", exc_info=True
+            )
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
-def _parse_docx(data: bytes) -> str:
+def _parse_pdf_with_tables(data: bytes) -> str:
+    import pdfplumber
+
+    parts: list[str] = []
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            if text.strip():
+                parts.append(text)
+            for table in page.extract_tables():
+                rows = [["" if c is None else str(c) for c in row] for row in table]
+                md = _table_rows_to_markdown(rows)
+                if md:
+                    parts.append("\n" + md + "\n")
+    return "\n".join(parts)
+
+
+def _table_rows_to_markdown(rows: list[list[str]]) -> str:
+    """Render rows as a GitHub-style markdown table (first row = header)."""
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    padded = [r + [""] * (width - len(r)) for r in rows]
+    clean = [[" ".join(str(c).split()) for c in r] for r in padded]
+    header, *body = clean
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in range(width)) + " |",
+    ]
+    lines.extend("| " + " | ".join(r) + " |" for r in body)
+    return "\n".join(lines)
+
+
+def _parse_docx(data: bytes, extract_tables: bool = True) -> str:
+    """Paragraphs AND tables, in document order (tables become markdown)."""
     from docx import Document
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     doc = Document(io.BytesIO(data))
-    return "\n".join(para.text for para in doc.paragraphs)
+    parts: list[str] = []
+    for child in doc.element.body.iterchildren():
+        if isinstance(child, CT_P):
+            parts.append(Paragraph(child, doc).text)
+        elif isinstance(child, CT_Tbl) and extract_tables:
+            rows = [
+                [cell.text for cell in row.cells]
+                for row in Table(child, doc).rows
+            ]
+            md = _table_rows_to_markdown(rows)
+            if md:
+                parts.append("\n" + md + "\n")
+    return "\n".join(parts)
 
 
 def _parse_html(data: bytes) -> str:
@@ -47,17 +113,25 @@ def _parse_html(data: bytes) -> str:
     return soup.get_text(separator="\n", strip=True)
 
 
-def _parse_pptx(data: bytes) -> str:
+def _parse_pptx(data: bytes, extract_tables: bool = True) -> str:
+    """Slide text frames AND slide tables (tables become markdown)."""
     from pptx import Presentation
 
     prs = Presentation(io.BytesIO(data))
     parts: list[str] = []
     for i, slide in enumerate(prs.slides, start=1):
-        texts = [
-            shape.text_frame.text
-            for shape in slide.shapes
-            if shape.has_text_frame and shape.text_frame.text.strip()
-        ]
+        texts: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                texts.append(shape.text_frame.text)
+            elif getattr(shape, "has_table", False) and extract_tables:
+                rows = [
+                    [cell.text for cell in row.cells]
+                    for row in shape.table.rows
+                ]
+                md = _table_rows_to_markdown(rows)
+                if md:
+                    texts.append(md)
         if texts:
             parts.append(f"[Slide {i}]\n" + "\n".join(texts))
     return "\n\n".join(parts)
@@ -125,13 +199,105 @@ _PARSERS = {
 SUPPORTED_TEXT_EXTENSIONS = frozenset(_PARSERS)
 
 
-def parse_document(filename: str, ext: str, data: bytes) -> str:
-    """Extract text from an uploaded document. Raises DocumentParseError."""
+# --- Embedded images (optional vision description) --------------------------
+
+_IMAGE_MIME_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+MAX_EMBEDDED_IMAGES = 10
+_MIN_EMBEDDED_IMAGE_BYTES = 4 * 1024  # skip icons/bullets/decorations
+
+
+def _image_mime(name: str) -> str | None:
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    return _IMAGE_MIME_BY_EXT.get(ext)
+
+
+def extract_embedded_images(ext: str, data: bytes) -> list[dict]:
+    """Embedded images from PPTX/DOCX/PDF for optional vision description.
+
+    Returns up to MAX_EMBEDDED_IMAGES entries of
+    ``{"label": str, "mime": str, "data": bytes}``; unsupported formats and
+    extraction failures return an empty list (callers treat images as
+    best-effort enrichment, never a parse blocker).
+    """
+    images: list[dict] = []
+    try:
+        if ext == ".pptx":
+            from pptx import Presentation
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+            prs = Presentation(io.BytesIO(data))
+            for i, slide in enumerate(prs.slides, start=1):
+                for shape in slide.shapes:
+                    if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                        continue
+                    blob = shape.image.blob
+                    mime = shape.image.content_type
+                    if len(blob) < _MIN_EMBEDDED_IMAGE_BYTES or not mime.startswith("image/"):
+                        continue
+                    images.append({"label": f"Slide {i}", "mime": mime, "data": blob})
+                    if len(images) >= MAX_EMBEDDED_IMAGES:
+                        return images
+        elif ext == ".docx":
+            from docx import Document
+
+            doc = Document(io.BytesIO(data))
+            for rel in doc.part.rels.values():
+                if "image" not in rel.reltype or rel.is_external:
+                    continue
+                blob = rel.target_part.blob
+                mime = getattr(rel.target_part, "content_type", "") or (
+                    _image_mime(rel.target_part.partname or "") or ""
+                )
+                if len(blob) < _MIN_EMBEDDED_IMAGE_BYTES or not mime.startswith("image/"):
+                    continue
+                images.append({"label": "Document image", "mime": mime, "data": blob})
+                if len(images) >= MAX_EMBEDDED_IMAGES:
+                    return images
+        elif ext == ".pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(data))
+            for page_no, page in enumerate(reader.pages, start=1):
+                for img in page.images:
+                    mime = _image_mime(img.name or "")
+                    if mime is None or len(img.data) < _MIN_EMBEDDED_IMAGE_BYTES:
+                        continue
+                    images.append({"label": f"Page {page_no}", "mime": mime, "data": img.data})
+                    if len(images) >= MAX_EMBEDDED_IMAGES:
+                        return images
+    except Exception:  # noqa: BLE001 — enrichment only, never block the upload
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Embedded-image extraction failed for %s", ext, exc_info=True
+        )
+    return images
+
+
+def parse_document(filename: str, ext: str, data: bytes, *, extract_tables: bool = True) -> str:
+    """Extract text from an uploaded document. Raises DocumentParseError.
+
+    ``extract_tables`` (DOCX/PPTX) renders embedded tables as markdown rows
+    inside the text; XLSX/CSV are inherently tabular and always extracted.
+    """
     parser = _PARSERS.get(ext)
     if parser is None:
         raise DocumentParseError(f"Unsupported file type: {ext}")
     try:
-        text = parser(data)
+        if ext == ".docx":
+            text = _parse_docx(data, extract_tables)
+        elif ext == ".pptx":
+            text = _parse_pptx(data, extract_tables)
+        elif ext == ".pdf":
+            text = _parse_pdf(data, extract_tables)
+        else:
+            text = parser(data)
     except DocumentParseError:
         raise
     except Exception as e:

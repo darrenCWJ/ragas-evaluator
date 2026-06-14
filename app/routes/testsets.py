@@ -18,6 +18,7 @@ from app.models import (
     VALID_QUESTION_STATUSES,
     BulkAnnotation,
     QuestionAnnotation,
+    QuestionMetadataUpdate,
     TestGenRequest,
     TestSetCreate,
 )
@@ -1161,6 +1162,51 @@ async def annotate_question(
     return _parse_test_question_row(updated)
 
 
+@router.patch(
+    "/projects/{project_id}/test-sets/{test_set_id}/questions/{question_id}/metadata"
+)
+async def update_question_metadata(
+    project_id: int,
+    test_set_id: int,
+    question_id: int,
+    req: QuestionMetadataUpdate,
+):
+    """Merge keys into a question's metadata (status untouched).
+
+    Powers the conversation builder: ``{"metadata": {"turns": [...]}}`` sets
+    the multi-turn setup; ``{"metadata": {"turns": null}}`` removes it.
+    """
+    conn = db.init.get_db()
+    question = conn.execute(
+        """SELECT tq.id, tq.metadata_json FROM test_questions tq
+           JOIN test_sets ts ON ts.id = tq.test_set_id
+           WHERE tq.id = ? AND tq.test_set_id = ? AND ts.project_id = ?""",
+        (question_id, test_set_id, project_id),
+    ).fetchone()
+    if question is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    try:
+        existing = json.loads(question["metadata_json"]) if question["metadata_json"] else {}
+    except (TypeError, ValueError):
+        existing = {}
+    for key, value in req.metadata.items():
+        if value is None:
+            existing.pop(key, None)
+        else:
+            existing[key] = value
+
+    conn.execute(
+        "UPDATE test_questions SET metadata_json = ? WHERE id = ?",
+        (json.dumps(existing) if existing else None, question_id),
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM test_questions WHERE id = ?", (question_id,)
+    ).fetchone()
+    return _parse_test_question_row(updated)
+
+
 @router.post(
     "/projects/{project_id}/test-sets/{test_set_id}/questions/bulk"
 )
@@ -1455,41 +1501,16 @@ def _run_kg_in_thread(
     overlap_max_nodes: int | None,
     fast_mode: bool,
 ) -> None:
-    """Run KG build directly in a thread sharing the main process's imports.
+    """Thread-mode KG build (shared implementation in app.services.kg_builder)."""
+    from app.services.kg_builder import run_kg_build_in_thread
 
-    Unlike the subprocess approach, this reuses the already-imported ragas
-    library so the container's memory is not doubled by a fresh Python process.
-    """
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        logger.info("KG thread build starting: project=%d source=%s", project_id, kg_source)
-        from evaluation.metrics.testgen import clear_progress, set_progress
-
-        set_progress(project_id, {"stage": "building_knowledge_graph", "kg_building": True}, kg_source=kg_source)
-
-        if kg_source == "documents":
-            from evaluation.metrics.testgen import build_kg_standalone_from_documents
-            build_kg_standalone_from_documents(project_id=project_id, overlap_max_nodes=overlap_max_nodes)
-        else:
-            from evaluation.metrics.testgen import build_kg_standalone
-            build_kg_standalone(
-                chunk_config_id=chunk_config_id,
-                project_id=project_id,
-                overlap_max_nodes=overlap_max_nodes,
-                fast_mode=fast_mode,
-            )
-        logger.info("KG thread build completed: project=%d source=%s", project_id, kg_source)
-    except Exception as exc:
-        logger.exception("KG thread build failed: project=%d: %s", project_id, exc)
-    finally:
-        from evaluation.metrics.testgen import clear_progress
-        clear_progress(project_id, kg_source=kg_source)
-        loop.close()
+    def _release() -> None:
         with _kg_lock:
             _active_kg_builds.pop((project_id, kg_source), None)
+
+    run_kg_build_in_thread(
+        project_id, kg_source, chunk_config_id, overlap_max_nodes, fast_mode, _release
+    )
 
 
 def _limit_subprocess_memory() -> None:
@@ -1690,7 +1711,17 @@ async def build_knowledge_graph_endpoint(project_id: int, req: BuildKGRequest):
                     raise
                 except Exception as e:
                     logger.warning("Worker %s unreachable: %s", worker_url, e)
-        raise HTTPException(status_code=503, detail="All KG workers busy or unreachable — try again shortly")
+        # All workers busy/unreachable — queue the build for background retry
+        # instead of bouncing the user with a 503.
+        from app.services.job_queue import enqueue_kg_build
+
+        conn = db.init.get_db()
+        enqueue_kg_build(conn, project_id, req.kg_source, payload)
+        logger.info(
+            "KG build queued (all workers busy): project=%d source=%s",
+            project_id, req.kg_source,
+        )
+        return {"status": "queued", "project_id": project_id, "kg_source": req.kg_source}
 
     conn = db.init.get_db()
     project = conn.execute(
@@ -1780,6 +1811,12 @@ async def kg_build_progress(project_id: int, kg_source: str = "chunks"):
                         continue
         except Exception:
             logger.warning("KG progress: all workers unreachable, falling back to local DB", exc_info=True)
+
+    # Queued for a worker but not yet dispatched?
+    from app.services.job_queue import is_queued
+
+    if is_queued(db.init.get_db(), project_id, kg_source):
+        return {"active": True, "stage": "queued", "queued": True}
 
     # Check if a build thread is actively running
     with _kg_lock:

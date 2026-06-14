@@ -127,7 +127,8 @@ export default function ExperimentRunner({ projectId, experiment, onComplete }: 
       ),
       fetchProject(projectId).catch(() => null),
     ]).then(([judgeData, proj]) => {
-      setAvailableModels(judgeData.models.length > 0 ? judgeData.models : FALLBACK_MODELS);
+      const enabledModels = judgeData.models.filter((m) => m.enabled !== false);
+      setAvailableModels(enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS);
 
       // Priority: project saved > env-var defaults > hardcoded fallback
       const savedAssignments = proj?.judge_model_assignments;

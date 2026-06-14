@@ -78,9 +78,14 @@ ALL_METRICS = [
     # multi_llm_judge is listed here for UI discovery but executed separately
     # in experiments.py — it is NOT wired into _METRIC_MODULES or setup_scorers.
     "multi_llm_judge",
-    # tool_call_f1 is computed deterministically from the agent trace by the
-    # experiment runner (no scorer) — listed here for selection/validation.
+    # tool_call_f1 / tool_call_accuracy are computed deterministically from
+    # the agent trace by the experiment runner (no scorer); agent_goal_accuracy
+    # and topic_adherence are runner-side LLM judges. Listed here for
+    # selection/validation.
     "tool_call_f1",
+    "tool_call_accuracy",
+    "agent_goal_accuracy",
+    "topic_adherence",
 ]
 
 # Maps metric name → module for dynamic dispatch
@@ -395,32 +400,42 @@ async def evaluate_experiment_row(
 ) -> dict:
     """Evaluate a generated answer against reference using selected metrics.
 
-    All metrics are scored concurrently for maximum throughput.
+    Metrics score concurrently, capped at METRIC_SCORING_CONCURRENCY per
+    question — firing 15+ provider-backed scorers simultaneously was observed
+    to stall (rate-limit/connection burst), while bounded batches complete.
 
     Optional callbacks:
       on_metric_start(metric_name) — called when a metric begins scoring
       on_metric_done(metric_name)  — called when a metric finishes
     """
+    from config import METRIC_SCORING_CONCURRENCY
+
+    semaphore = asyncio.Semaphore(max(1, METRIC_SCORING_CONCURRENCY))
+
+    async def _bounded(coro):
+        async with semaphore:
+            return await coro
+
     tasks = []
 
     for name, scorer in scorers.items():
-        tasks.append(
+        tasks.append(_bounded(
             _score_builtin(
                 name, scorer, question, generated_answer, reference_answer, contexts,
                 on_start=on_metric_start, on_done=on_metric_done,
                 rubrics=rubrics,
                 metadata=metadata,
             )
-        )
+        ))
 
     for name, (cfg, scorer) in (custom_scorers or {}).items():
-        tasks.append(
+        tasks.append(_bounded(
             _score_custom(
                 name, cfg, scorer, llm, question, generated_answer, reference_answer, contexts,
                 on_start=on_metric_start, on_done=on_metric_done,
                 metadata=metadata,
             )
-        )
+        ))
 
     scored = await asyncio.gather(*tasks)
     return dict(scored)

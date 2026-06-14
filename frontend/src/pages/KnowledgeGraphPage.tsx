@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchAllKnowledgeGraphs, streamKnowledgeGraphData } from '../lib/api';
 import type { KGListItem, KGGraphData, KGGraphNode, KGGraphEdge } from '../lib/api';
+import KGBuildLauncher from '../components/kg/KGBuildLauncher';
 import KGCard from '../components/kg/KGCard';
 import KGGraphView from '../components/kg/KGGraphView';
 import Card from '../components/ui/Card';
@@ -181,13 +182,15 @@ export default function KnowledgeGraphPage() {
             />
           </svg>
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold text-text-primary">Knowledge Graphs</h1>
           <p className="text-sm text-text-secondary">
-            Browse and explore saved knowledge graphs across projects.
+            Browse, explore, and build knowledge graphs across projects.
           </p>
         </div>
       </div>
+
+      <KGBuildLauncher onStarted={loadKgs} />
 
       {/* Error */}
       {error && (
@@ -222,7 +225,7 @@ export default function KnowledgeGraphPage() {
           </div>
           <h3 className="text-sm font-medium text-text-primary mb-1">No knowledge graphs yet</h3>
           <p className="text-micro text-text-muted max-w-xs mx-auto">
-            Build a knowledge graph from the Test page to see it here.
+            Use &ldquo;Build knowledge graph&rdquo; above, or build one from the Test page.
           </p>
         </Card>
       ) : (

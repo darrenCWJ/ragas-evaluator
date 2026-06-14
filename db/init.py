@@ -515,6 +515,32 @@ CREATE TABLE IF NOT EXISTS tool_definitions (
     created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
     UNIQUE(project_id, name)
 );
+
+CREATE TABLE IF NOT EXISTS pending_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    project_id INTEGER NOT NULL,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    payload_json TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    name TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS judge_model_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    is_custom INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 # ---------------------------------------------------------------------------
@@ -639,6 +665,8 @@ def init_db() -> sqlite3.Connection | _PgConnection:
     _add_column_if_missing(conn, "ALTER TABLE multi_llm_evaluations ADD COLUMN model TEXT")
     _add_column_if_missing(conn, "ALTER TABLE experiments ADD COLUMN tools_json TEXT")
     _add_column_if_missing(conn, "ALTER TABLE skill_trials ADD COLUMN mode TEXT NOT NULL DEFAULT 'inline'")
+    _add_column_if_missing(conn, "ALTER TABLE judge_model_overrides ADD COLUMN price_in_per_mtok REAL")
+    _add_column_if_missing(conn, "ALTER TABLE judge_model_overrides ADD COLUMN price_out_per_mtok REAL")
 
     # Migrate UNIQUE constraint from (project_id, chunks_hash) to (project_id, kg_source)
     if _USE_PG:

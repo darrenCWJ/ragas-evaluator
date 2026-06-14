@@ -32,6 +32,8 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [extractTables, setExtractTables] = useState(true);
+  const [describeImages, setDescribeImages] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function validate(file: File): string | null {
@@ -70,7 +72,7 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
     for (let i = 0; i < fileArray.length; i++) {
       setProgress({ current: i + 1, total: fileArray.length });
       try {
-        await uploadDocument(projectId, fileArray[i]!);
+        await uploadDocument(projectId, fileArray[i]!, { extractTables, describeImages });
       } catch (err) {
         errors.push(`${fileArray[i]!.name}: ${err instanceof Error ? err.message : 'failed'}`);
       }
@@ -171,6 +173,37 @@ export default function DocumentUpload({ projectId, onUploaded }: Props) {
             </p>
           </div>
         )}
+      </div>
+
+      {/* Processing options — how uploads become retrievable text */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+        <label
+          className="flex cursor-pointer items-center gap-2 text-xs text-text-secondary"
+          title="DOCX/PPTX tables are rendered as markdown rows inside the extracted text, so chunking and retrieval can see them"
+        >
+          <input
+            type="checkbox"
+            className="accent-accent"
+            checked={extractTables}
+            onChange={(e) => setExtractTables(e.target.checked)}
+          />
+          Extract tables (DOCX/PPTX)
+        </label>
+        <label
+          className="flex cursor-pointer items-center gap-2 text-xs text-text-secondary"
+          title="Embedded images in PPTX/DOCX/PDF (charts, diagrams, screenshots) are described by the vision model and appended to the text. Costs LLM calls — up to 10 images per file."
+        >
+          <input
+            type="checkbox"
+            className="accent-accent"
+            checked={describeImages}
+            onChange={(e) => setDescribeImages(e.target.checked)}
+          />
+          Describe embedded images with AI vision
+          <span className="rounded-full bg-elevated px-1.5 py-0.5 text-2xs text-text-muted">
+            uses LLM
+          </span>
+        </label>
       </div>
 
       {error && (

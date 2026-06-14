@@ -2,7 +2,11 @@
 
 import pytest
 
-from evaluation.metrics.agent_trace import tool_call_f1_score, trace_stats
+from evaluation.metrics.agent_trace import (
+    tool_call_accuracy_score,
+    tool_call_f1_score,
+    trace_stats,
+)
 from pipeline.tools import _mock_response, build_tool_specs, calculator
 
 CALC_SPEC = {
@@ -72,6 +76,44 @@ class TestAgentLoop:
         assert result["stop_reason"] == "max_steps"
         assert result["answer"] == "Forced answer."
         assert len(result["steps"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_turns_capture_narrated_thinking(self, monkeypatch):
+        responses = iter([
+            {
+                "content": "I should check the bronze tier first.",
+                "tool_calls": [{"id": "c1", "name": "read_file", "arguments": {"path": "tiers/bronze.md"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+            {
+                "content": "Bronze done — moving to silver.",
+                "tool_calls": [{"id": "c2", "name": "read_file", "arguments": {"path": "tiers/silver.md"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+            {"content": "All tiers designed.", "tool_calls": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ])
+
+        async def fake_completion(model, messages, params=None, tools=None):
+            return next(responses)
+
+        monkeypatch.setattr("pipeline.agent_loop.chat_completion", fake_completion)
+        from pipeline.agent_loop import run_agent
+
+        async def executor(name, args):
+            return "file contents"
+
+        result = await run_agent("m", [{"role": "user", "content": "build it"}], [CALC_SPEC], executor)
+
+        assert result["answer"] == "All tiers designed."
+        # One turn per tool-calling round, with the model's narrated reasoning
+        assert [t["thought"] for t in result["turns"]] == [
+            "I should check the bronze tier first.",
+            "Bronze done — moving to silver.",
+        ]
+        assert result["turns"][0]["tool_calls"] == ["read_file"]
+        # Steps stay flat for tool_call_f1 but link back to their turn
+        assert [s["turn"] for s in result["steps"]] == [1, 2]
+        assert result["turns"][1]["steps"][0]["arguments"]["path"] == "tiers/silver.md"
 
     @pytest.mark.asyncio
     async def test_tool_error_is_fed_back_not_raised(self, monkeypatch):
@@ -194,3 +236,81 @@ class TestToolCallF1:
         ]
         stats = trace_stats(steps)
         assert stats == {"agent_steps": 2, "tool_errors": 1, "tool_error_rate": 0.5}
+
+
+class TestToolCallAccuracy:
+    TRACE = [
+        {"tool": "search", "arguments": {"query": "refund policy"}, "result": "...", "error": None},
+        {"tool": "calc", "arguments": {"expression": "2+2"}, "result": "4", "error": None},
+    ]
+
+    def test_perfect_ordered_match(self):
+        refs = [{"name": "search", "arguments": {"query": "refund policy"}}, {"name": "calc"}]
+        assert tool_call_accuracy_score(self.TRACE, refs) == 1.0
+
+    def test_order_matters_unlike_f1(self):
+        # Same calls, reversed reference order: f1 forgives, accuracy doesn't.
+        refs = [{"name": "calc"}, {"name": "search", "arguments": {"query": "refund policy"}}]
+        assert tool_call_f1_score(self.TRACE, refs) == 1.0
+        assert tool_call_accuracy_score(self.TRACE, refs) == 0.0
+
+    def test_extra_calls_penalized(self):
+        refs = [{"name": "search", "arguments": {"query": "refund policy"}}]
+        # 1 aligned match / max(1 ref, 2 calls)
+        assert tool_call_accuracy_score(self.TRACE, refs) == 0.5
+
+    def test_no_refs_no_calls_is_perfect(self):
+        assert tool_call_accuracy_score([], []) == 1.0
+
+    def test_calls_when_none_expected_is_zero(self):
+        assert tool_call_accuracy_score(self.TRACE, []) == 0.0
+
+
+class TestJudgeAgentMetrics:
+    @pytest.mark.asyncio
+    async def test_agent_goal_accuracy_parses_verdict(self, monkeypatch):
+        async def fake_completion(model, messages, params=None, tools=None):
+            return {"content": '{"achieved": true, "reasoning": "outcome matches"}', "usage": {}}
+
+        monkeypatch.setattr(
+            "evaluation.metrics.agent_goal_accuracy.chat_completion", fake_completion
+        )
+        from evaluation.metrics.agent_goal_accuracy import agent_goal_accuracy_score
+
+        score = await agent_goal_accuracy_score(
+            "Book a table for two", "Booked at 7pm.", "A reservation is made.",
+            [{"tool": "book_table", "arguments": {"people": 2}, "error": None}],
+        )
+        assert score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_agent_goal_accuracy_not_achieved(self, monkeypatch):
+        async def fake_completion(model, messages, params=None, tools=None):
+            return {"content": '{"achieved": false, "reasoning": "no booking made"}', "usage": {}}
+
+        monkeypatch.setattr(
+            "evaluation.metrics.agent_goal_accuracy.chat_completion", fake_completion
+        )
+        from evaluation.metrics.agent_goal_accuracy import agent_goal_accuracy_score
+
+        assert await agent_goal_accuracy_score("goal", "answer", "ref", []) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_topic_adherence_scores_verdicts(self, monkeypatch):
+        replies = iter([
+            '{"verdict": "adherent", "reasoning": "on topic"}',
+            '{"verdict": "partial", "reasoning": "some drift"}',
+            '{"verdict": "off_topic", "reasoning": "wrong domain"}',
+        ])
+
+        async def fake_completion(model, messages, params=None, tools=None):
+            return {"content": next(replies), "usage": {}}
+
+        monkeypatch.setattr(
+            "evaluation.metrics.topic_adherence.chat_completion", fake_completion
+        )
+        from evaluation.metrics.topic_adherence import topic_adherence_score
+
+        assert await topic_adherence_score("q", "a", ["billing"]) == 1.0
+        assert await topic_adherence_score("q", "a", ["billing"]) == 0.5
+        assert await topic_adherence_score("q", "a", ["billing"]) == 0.0

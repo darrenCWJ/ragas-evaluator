@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { fetchSkillTrialResults } from '../../api';
-import type { DirectiveResult, SkillTrialResult, SkillTrialVariant } from '../../api';
+import type { DirectiveResult, SkillTrialResult, SkillTrialVariant, TraceSpan } from '../../api';
 import { useFetch } from '../../hooks/useFetch';
 import { Card, EmptyState, ErrorAlert, ScoreBar, Spinner } from '../ui';
 import TraceTimeline from './TraceTimeline';
@@ -37,8 +37,61 @@ function VerdictChip({ result }: { result: DirectiveResult }) {
   );
 }
 
+/**
+ * Transcript of how the model worked through the skill (agentic trials):
+ * narrated thinking per round, interleaved with the tool calls it made.
+ */
+function ModelProcess({ trace }: { trace: TraceSpan[] }) {
+  const steps = trace.filter((s) => s.name.startsWith('thinking:') || s.name.startsWith('tool:'));
+  if (steps.length === 0) return null;
+
+  return (
+    <div className="space-y-1.5 rounded-lg bg-input p-3">
+      {steps.map((span, i) =>
+        span.name.startsWith('thinking:') ? (
+          <div key={`${span.name}-${i}`} className="flex gap-2">
+            <span className="shrink-0 text-2xs text-text-muted" title="Model reasoning this round">
+              💭
+            </span>
+            <p className="min-w-0 whitespace-pre-wrap text-xs italic text-text-secondary">
+              {span.text}
+            </p>
+          </div>
+        ) : (
+          <div key={`${span.name}-${i}`} className="flex gap-2">
+            <span className="shrink-0 text-2xs text-text-muted" title="Tool call">
+              🔧
+            </span>
+            <div className="min-w-0 text-xs">
+              <span className={`font-mono ${span.error ? 'text-score-low' : 'text-accent'}`}>
+                {span.name.slice('tool:'.length)}
+              </span>
+              {span.arguments && span.arguments !== '{}' && (
+                <span className="ml-1.5 break-all font-mono text-2xs text-text-muted">
+                  {span.arguments}
+                </span>
+              )}
+              {span.error ? (
+                <p className="text-2xs text-score-low">{span.error}</p>
+              ) : (
+                span.result && (
+                  <p className="line-clamp-2 break-all text-2xs text-text-muted">{span.result}</p>
+                )
+              )}
+            </div>
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
 function ResultRow({ result }: { result: SkillTrialResult }) {
   const [showResponse, setShowResponse] = useState(false);
+  const [showProcess, setShowProcess] = useState(false);
+  const hasProcess = result.trace.some(
+    (s) => s.name.startsWith('thinking:') || s.name.startsWith('tool:'),
+  );
 
   return (
     <Card variant="muted" padding="md" className="space-y-2">
@@ -65,6 +118,22 @@ function ResultRow({ result }: { result: SkillTrialResult }) {
             <span className="flex items-center gap-2 text-2xs text-text-muted">
               format <ScoreBar value={result.scores.format_compliance ?? null} />
             </span>
+            {result.scores.stage_coverage != null && (
+              <span
+                className="flex items-center gap-2 text-2xs text-text-muted"
+                title="Fraction of the skill's stage-plan files the model read"
+              >
+                stages <ScoreBar value={result.scores.stage_coverage} />
+              </span>
+            )}
+            {result.scores.stage_order != null && (
+              <span
+                className="flex items-center gap-2 text-2xs text-text-muted"
+                title="Fraction of stage-file reads that followed the plan order"
+              >
+                order <ScoreBar value={result.scores.stage_order} />
+              </span>
+            )}
           </div>
 
           {result.directive_results.length > 0 && (
@@ -75,17 +144,29 @@ function ResultRow({ result }: { result: SkillTrialResult }) {
             </div>
           )}
 
-          <button
-            onClick={() => setShowResponse((v) => !v)}
-            className="text-xs text-accent hover:underline"
-          >
-            {showResponse ? 'Hide response' : 'Show response'}
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowResponse((v) => !v)}
+              className="text-xs text-accent hover:underline"
+            >
+              {showResponse ? 'Hide response' : 'Show response'}
+            </button>
+            {hasProcess && (
+              <button
+                onClick={() => setShowProcess((v) => !v)}
+                className="text-xs text-accent hover:underline"
+                title="Round-by-round transcript: the model's narrated thinking and the tools it called"
+              >
+                {showProcess ? 'Hide model process' : 'Show model process'}
+              </button>
+            )}
+          </div>
           {showResponse && (
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-input p-3 text-xs text-text-secondary">
               {result.response ?? '(empty response)'}
             </pre>
           )}
+          {showProcess && <ModelProcess trace={result.trace} />}
         </>
       )}
 

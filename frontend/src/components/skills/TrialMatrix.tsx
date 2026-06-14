@@ -52,10 +52,21 @@ function CellButton({
       <ScoreBar value={cell.adherence} />
       <div className="mt-1.5 space-y-0.5 text-2xs text-text-muted">
         <div>fmt {cell.format_compliance != null ? cell.format_compliance.toFixed(2) : '—'}</div>
+        {cell.stage_coverage != null && (
+          <div title="Stage plan: fraction of stage files read · fraction read in order">
+            stages {cell.stage_coverage.toFixed(2)}
+            {cell.stage_order != null ? ` · order ${cell.stage_order.toFixed(2)}` : ''}
+          </div>
+        )}
         <div>
           {cell.avg_latency_ms != null ? `${(cell.avg_latency_ms / 1000).toFixed(1)}s avg` : '—'}
           {' · '}
           {cell.tokens_in + cell.tokens_out} tok
+          {cell.cost_usd != null && (
+            <span title="Estimated cost from the model registry's per-token prices">
+              {' · '}${cell.cost_usd.toFixed(4)}
+            </span>
+          )}
         </div>
         <div className={cell.errors > 0 ? 'text-score-low' : ''}>
           {cell.count} runs{cell.errors > 0 ? ` · ${cell.errors} errors` : ''}

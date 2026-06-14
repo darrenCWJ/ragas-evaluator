@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from config import (
+    APP_VERSION,
     CONNECTOR_DEFAULT_MODELS,
     DEFAULT_EVAL_EMBEDDING,
     DEFAULT_EVAL_MODEL,
@@ -25,13 +26,13 @@ async def health_check():
 
         conn = db.init.get_db()
         conn.execute("SELECT 1")
-        return {"status": "ok", "version": "0.4.1-alpha", "database": "connected"}
+        return {"status": "ok", "version": APP_VERSION, "database": "connected"}
     except Exception:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "degraded",
-                "version": "0.4.1-alpha",
+                "version": APP_VERSION,
                 "database": "disconnected",
             },
         )
@@ -57,14 +58,35 @@ def _local_worker_entry() -> dict:
     from datetime import datetime
 
     import db.init
-    from app.routes.testsets import _active_generations, _gen_lock
+    from app.routes.testsets import _active_generations, _active_kg_builds, _gen_lock, _kg_lock
     from app.services.progress import experiment_runs
-    from config import MAX_CONCURRENT_EXPERIMENTS, MAX_CONCURRENT_TESTGENS
+    from app.services.skill_trials import skill_trial_runs
+    from config import (
+        MAX_CONCURRENT_EXPERIMENTS,
+        MAX_CONCURRENT_KG_BUILDS,
+        MAX_CONCURRENT_TESTGENS,
+    )
     from evaluation.metrics.testgen import get_progress as _testgen_progress
     from system_stats import memory_stats
 
     tasks: list[dict] = []
     conn = db.init.get_db()
+
+    # In-process KG builds (no workers configured, or all were busy)
+    with _kg_lock:
+        kg_builds = sorted(_active_kg_builds.keys())
+    for pid, source in kg_builds:
+        prog = _testgen_progress(pid, kg_source=source) or {}
+        tasks.append({
+            "project_id": pid,
+            "kg_source": source,
+            "type": "kg_build",
+            "stage": prog.get("stage") or "building_knowledge_graph",
+            "completed_steps": prog.get("completed_steps"),
+            "total_steps": prog.get("total_steps"),
+            "batch_current": prog.get("batch_current"),
+            "batch_total": prog.get("batch_total"),
+        })
 
     for eid, prog in sorted(experiment_runs.active_runs().items()):
         meta = conn.execute(
@@ -102,17 +124,61 @@ def _local_worker_entry() -> dict:
             "questions_generated": prog.get("questions_generated"),
         })
 
+    # In-process skill trials (always run on the main app)
+    for trial_id, prog in sorted(skill_trial_runs.active_runs().items()):
+        meta = conn.execute(
+            "SELECT project_id, name FROM skill_trials WHERE id = ?", (trial_id,)
+        ).fetchone()
+        tasks.append({
+            "trial_id": trial_id,
+            "project_id": meta["project_id"] if meta else None,
+            "trial_name": meta["name"] if meta else None,
+            "type": "skill_trial",
+            "phase": prog.get("phase"),
+            "current": prog.get("current"),
+            "total": prog.get("total"),
+        })
+
     return {
         "url": "local",
         "is_local": True,
         "reachable": True,
         **memory_stats(),
         "tasks": tasks,
+        "active_kg_builds": sum(1 for t in tasks if t["type"] == "kg_build"),
         "active_experiments": sum(1 for t in tasks if t["type"] == "experiment"),
         "active_testgens": sum(1 for t in tasks if t["type"] == "testgen"),
+        "active_skill_trials": sum(1 for t in tasks if t["type"] == "skill_trial"),
+        "max_concurrent_kg": MAX_CONCURRENT_KG_BUILDS,
         "max_concurrent_experiments": MAX_CONCURRENT_EXPERIMENTS,
         "max_concurrent_testgens": MAX_CONCURRENT_TESTGENS,
     }
+
+
+def _attach_project_names(results: list[dict]) -> None:
+    """Annotate every task with its project name so the UI can say *what*
+    is being processed, not just a numeric project id."""
+    import db.init
+
+    ids = {
+        task.get("project_id")
+        for worker in results
+        for task in worker.get("tasks", [])
+        if task.get("project_id")
+    }
+    if not ids:
+        return
+    conn = db.init.get_db()
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT id, name FROM projects WHERE id IN ({placeholders})", tuple(ids)
+    ).fetchall()
+    names = {r["id"]: r["name"] for r in rows}
+    for worker in results:
+        for task in worker.get("tasks", []):
+            name = names.get(task.get("project_id"))
+            if name:
+                task["project_name"] = name
 
 
 @router.get("/workers/status")
@@ -142,7 +208,39 @@ async def workers_status():
                     logger.debug("Worker %s unreachable: %s", url, e)
                     results.append({"url": url, "reachable": False, "error": "unreachable"})
 
-    return {"workers": results, "total_configured": len(KG_WORKER_URLS) + 1}
+    try:
+        _attach_project_names(results)
+    except Exception:
+        logger.exception("Failed to attach project names to worker tasks")
+
+    queued_jobs: list[dict] = []
+    try:
+        import db.init
+        from app.services.job_queue import list_queued
+
+        conn = db.init.get_db()
+        names: dict[int, str] = {}
+        for job in list_queued(conn):
+            pid = job["project_id"]
+            if pid not in names:
+                row = conn.execute("SELECT name FROM projects WHERE id = ?", (pid,)).fetchone()
+                names[pid] = row["name"] if row else f"#{pid}"
+            queued_jobs.append({
+                "kind": job["kind"],
+                "project_id": pid,
+                "project_name": names[pid],
+                "kg_source": job["payload"].get("kg_source", "chunks"),
+                "attempts": job["attempts"],
+                "created_at": job["created_at"],
+            })
+    except Exception:
+        logger.exception("Failed to list queued jobs")
+
+    return {
+        "workers": results,
+        "total_configured": len(KG_WORKER_URLS) + 1,
+        "queued_jobs": queued_jobs,
+    }
 
 
 @router.post("/workers/clear-personas/{project_id}")
