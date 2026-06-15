@@ -9,4 +9,4 @@ psycopg2-binary>=2.9.0
 langchain-text-splitters>=0.3.0
 chromadb>=1.5.9
 anthropic>=0.109.1
-rapidfuzz>=3.0.0
+rapidfuzz>=3.14.5
